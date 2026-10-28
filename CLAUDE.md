@@ -13,7 +13,8 @@ Ticket-draw marketplace for Lagos. React 19 + TypeScript + Tailwind v4 + Vite, R
 - When adding an API method: add it to `src/api/types.ts`, implement it in `mock.ts`, cover it in `mock.test.ts`, then add a hook.
 - Wallet balances are derived from the append-only ledger; never store a balance.
 - Draw seeds are secret until the draw runs. Never include `seed` in a listing response before `status === 'drawn'`.
-- Design tokens are in `src/index.css` (`@theme`): use `bg-brand`, `text-muted`, `bg-ticket` etc., not raw hex values.
+- Design tokens are in `src/index.css` (`@theme`): use `bg-brand`, `text-muted`, `bg-ticket` etc., not raw hex values. Dark mode overrides the same tokens under `.dark`, so don't add `dark:` colour variants; use `text-on-brand` / `text-on-ticket` / `text-on-hero` for text on those fills.
+- Reuse the UI kit before writing new markup: `components/ui.tsx` (Button/`buttonClass`, Card, Badge, Notice, Segmented, StatTile, EmptyState, Field/`inputCls`), `Sheet` for modals, `Countdown`, `TicketStub`.
 - Touch targets ≥ 44px (`min-h-11`), real `<button>`/`<a>`/`<label>`, `aria-label` on icon-only buttons.
 - Test mode (`api.testMode`) shows demo controls and the test banner. Never let demo helpers run against a real backend.
 

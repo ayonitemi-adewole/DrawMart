@@ -36,6 +36,8 @@ export interface Listing {
   title: string
   description: string
   category: Category
+  /** Photo URLs, first is the cover. Empty until escrow photographs the item. */
+  images: string[]
   priceKobo: Kobo // what the merchant asked for the item
   ticketPriceKobo: Kobo // base ticket price before any buyer-side fee
   buyerTicketPriceKobo: Kobo // what a buyer actually pays per ticket

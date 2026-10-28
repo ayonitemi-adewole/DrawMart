@@ -20,3 +20,29 @@ export function dateTime(isoDate: string): string {
 }
 
 export const ticketNo = (n: number) => '#' + String(n).padStart(4, '0')
+
+/** Milliseconds left until `closesAt`, never negative. */
+export function msLeft(closesAt: string, now = Date.now()): number {
+  return Math.max(0, new Date(closesAt).getTime() - now)
+}
+
+/** "04:12:09" for the last day of a countdown. */
+export function clock(ms: number): string {
+  const s = Math.floor(ms / 1000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`
+}
+
+/** "Today", "Yesterday" or "12 Oct", for grouping activity. */
+export function dayLabel(isoDate: string, now = new Date()): string {
+  const d = new Date(isoDate)
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const diff = Math.round((startOf(now) - startOf(d)) / 86_400_000)
+  if (diff === 0) return 'Today'
+  if (diff === 1) return 'Yesterday'
+  return shortDate(isoDate)
+}
+
+export function timeOfDay(isoDate: string): string {
+  return new Date(isoDate).toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' })
+}

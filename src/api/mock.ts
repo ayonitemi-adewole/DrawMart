@@ -29,7 +29,7 @@ import {
   type WalletView,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v1'
+const STORAGE_KEY = 'drawmart:mock-db:v2' // bump when seed data or the Db shape changes
 const ME = 'u-me'
 const MY_MERCHANT = 'm-ikeja'
 const CROWD = 'u-crowd'
@@ -76,19 +76,83 @@ interface SeedListing {
   title: string
   description: string
   category: Category
+  images?: string[]
   price: number
   ticket: number
   sold: number
   closesInHours: number
+  status?: 'live' | 'pending_review'
 }
 
+const img = (...files: string[]) => files.map((f) => `/assets/${f}`)
+
 const SEED_LISTINGS: SeedListing[] = [
-  { merchantId: MY_MERCHANT, title: 'Smartphone, 256GB', description: 'Brand new, sealed, one-year store warranty.', category: 'Phones', price: 1_000_000, ticket: 5_000, sold: 187, closesInHours: 28 },
-  { merchantId: 'm-lekki', title: '55-inch 4K smart TV', description: 'Brand new with wall bracket. Delivery and mounting in Lagos included.', category: 'Electronics', price: 650_000, ticket: 2_500, sold: 241, closesInHours: 9 },
-  { merchantId: 'm-surulere', title: 'Rice, 50kg bag', description: 'Premium parboiled long grain. Delivered to your door in Lagos.', category: 'Food', price: 85_000, ticket: 500, sold: 96, closesInHours: 48 },
-  { merchantId: 'm-yaba', title: '5kVA inverter + battery', description: 'Inverter with two batteries, installed by the store.', category: 'Home', price: 1_800_000, ticket: 6_000, sold: 122, closesInHours: 96 },
-  { merchantId: MY_MERCHANT, title: 'Laptop, 16GB RAM', description: '16GB RAM, 512GB SSD, brand new with warranty.', category: 'Electronics', price: 1_200_000, ticket: 5_000, sold: 40, closesInHours: 144 },
-  { merchantId: 'm-vi', title: 'Saloon car, 2018', description: 'Foreign-used, inspected, papers complete. Registration in the winner’s name.', category: 'Cars', price: 9_000_000, ticket: 10_000, sold: 312, closesInHours: 288 },
+  {
+    merchantId: MY_MERCHANT, title: 'iPhone 18 Pro Max, 256GB', category: 'Phones', images: img('iphone18pmBurgundy.jpg', 'iphone18pmBlack.jpg', 'iphone18pmGlacier.jpg'),
+    description: 'Brand new and sealed, with a one-year store warranty. The winner picks Burgundy, Black or Glacier.',
+    price: 2_600_000, ticket: 5_000, sold: 448, closesInHours: 28,
+  },
+  {
+    merchantId: 'm-lekki', title: 'Samsung Galaxy S26 Ultra, 512GB', category: 'Phones', images: img('samsungS26Ultra.jpg', 'samsungS26UltraBlack.jpg'),
+    description: 'Brand new and sealed, with S Pen and local warranty.',
+    price: 2_100_000, ticket: 5_000, sold: 230, closesInHours: 60,
+  },
+  {
+    merchantId: 'm-lekki', title: 'LG 55-inch 4K UHD TV + soundbar', category: 'Electronics', images: img('LG55inchSmartTv.jpg'),
+    description: 'Smart TV with matching soundbar. Delivery and wall mounting anywhere in Lagos included.',
+    price: 650_000, ticket: 2_500, sold: 241, closesInHours: 9,
+  },
+  {
+    merchantId: 'm-surulere', title: 'Samsung 65-inch 4K smart TV', category: 'Electronics', images: img('samsung65inch4KTV.jpg'),
+    description: 'Crystal UHD smart TV with remote and wall bracket.',
+    price: 950_000, ticket: 2_500, sold: 190, closesInHours: 48,
+  },
+  {
+    merchantId: MY_MERCHANT, title: 'MacBook Pro 14-inch, M5', category: 'Electronics', images: img('macbookProM5.jpg', 'macbookProM5-2.jpg'),
+    description: '16GB unified memory, 512GB SSD. Brand new with manufacturer warranty.',
+    price: 3_200_000, ticket: 5_000, sold: 85, closesInHours: 144,
+  },
+  {
+    merchantId: 'm-yaba', title: 'LG 75-inch smart TV', category: 'Electronics', images: img('LG75inchSmartTv.jpg'),
+    description: 'Big-screen 4K smart TV. Delivery and installation included.',
+    price: 1_450_000, ticket: 5_000, sold: 122, closesInHours: 96,
+  },
+  {
+    merchantId: 'm-vi', title: 'Toyota Camry 2025', category: 'Cars', images: img('toyotaCamry2025.jpg'),
+    description: 'Brand new with dealer warranty. Registration and plates in the winner’s name.',
+    price: 48_000_000, ticket: 20_000, sold: 760, closesInHours: 288,
+  },
+  {
+    merchantId: 'm-vi', title: 'Mercedes-AMG GLE 63 S Coupé 2025', category: 'Cars', images: img('mercedesBenzGle63s2025.jpg'),
+    description: 'Foreign-used, inspected, papers complete. Registration in the winner’s name.',
+    price: 210_000_000, ticket: 50_000, sold: 1_130, closesInHours: 480,
+  },
+  {
+    merchantId: 'm-vi', title: 'Mercedes-AMG G 63 2025', category: 'Cars', images: img('mercedesBenzG632025.jpg'),
+    description: 'Brand new with full dealer history. Registration in the winner’s name.',
+    price: 330_000_000, ticket: 50_000, sold: 540, closesInHours: 600,
+  },
+  {
+    merchantId: 'm-surulere', title: 'Rice, 50kg bag', category: 'Food',
+    description: 'Premium parboiled long grain. Delivered to your door in Lagos.',
+    price: 85_000, ticket: 500, sold: 96, closesInHours: 48,
+  },
+  {
+    merchantId: 'm-yaba', title: '5kVA inverter + battery', category: 'Home',
+    description: 'Inverter with two batteries, installed by the store.',
+    price: 1_800_000, ticket: 6_000, sold: 122, closesInHours: 96,
+  },
+  // Waiting in the admin queue.
+  {
+    merchantId: MY_MERCHANT, title: 'MacBook Pro 14-inch, M1 Pro', category: 'Electronics', images: img('macbookProM1Pro.jpg'),
+    description: 'UK-used, excellent condition, battery health 92%. Charger included.',
+    price: 1_100_000, ticket: 2_500, sold: 0, closesInHours: 168, status: 'pending_review',
+  },
+  {
+    merchantId: 'm-vi', title: 'Mercedes-Benz S-Class 2025', category: 'Cars', images: img('mercedesBenzSClass2025.jpg'),
+    description: 'Brand new S 580. Registration in the winner’s name.',
+    price: 280_000_000, ticket: 50_000, sold: 0, closesInHours: 720, status: 'pending_review',
+  },
 ]
 
 async function makeListing(s: SeedListing, now: number, seeds: Record<string, string>): Promise<Listing> {
@@ -102,6 +166,7 @@ async function makeListing(s: SeedListing, now: number, seeds: Record<string, st
     title: s.title,
     description: s.description,
     category: s.category,
+    images: s.images ?? [],
     priceKobo: nairaToKobo(s.price),
     ticketPriceKobo: nairaToKobo(s.ticket),
     buyerTicketPriceKobo: econ.buyerTicketKobo,
@@ -112,7 +177,7 @@ async function makeListing(s: SeedListing, now: number, seeds: Record<string, st
     unsoldPolicy: 'refund',
     durationDays: Math.ceil(s.closesInHours / 24),
     extended: false,
-    status: 'live',
+    status: s.status ?? 'live',
     commitment: await commitmentFor(seed),
     createdAt: iso(now - 2 * DAY),
     closesAt: iso(now + s.closesInHours * 60 * 60 * 1000),
@@ -145,14 +210,15 @@ async function freshDb(): Promise<Db> {
   }
   for (const s of SEED_LISTINGS) {
     const l = await makeListing(s, now, db.seeds)
-    crowdBuys(db, l, s.sold, iso(now - DAY))
+    if (s.sold) crowdBuys(db, l, s.sold, iso(now - DAY))
     db.listings.push(l)
   }
   // Two finished draws so the results page isn't empty.
-  for (const [i, s] of [
-    { merchantId: 'm-yaba', title: 'Generator, 3.5kVA', description: 'Petrol generator, key start.', category: 'Home' as const, price: 450_000, ticket: 2_500, sold: 0, closesInHours: 1 },
-    { merchantId: 'm-lekki', title: 'Smartwatch', description: 'Fitness smartwatch with GPS.', category: 'Electronics' as const, price: 180_000, ticket: 1_500, sold: 0, closesInHours: 1 },
-  ].entries()) {
+  for (const [i, s] of ([
+    { merchantId: MY_MERCHANT, title: 'MacBook Pro 13-inch, M1', description: 'UK-used, 8GB RAM, 256GB SSD.', category: 'Electronics', images: img('macbookProM1.jpg'), price: 900_000, ticket: 2_500, sold: 0, closesInHours: 1 },
+    { merchantId: 'm-lekki', title: 'Samsung 50-inch smart TV', description: 'Crystal UHD smart TV with wall bracket.', category: 'Electronics', images: img('samsung50inchTV.jpg'), price: 420_000, ticket: 1_500, sold: 0, closesInHours: 1 },
+    { merchantId: 'm-vi', title: 'Toyota Camry 2018', description: 'Foreign-used, inspected, papers complete.', category: 'Cars', images: img('toyotaCamry2018.jpg'), price: 14_000_000, ticket: 10_000, sold: 0, closesInHours: 1 },
+  ] satisfies SeedListing[]).entries()) {
     const l = await makeListing(s, now - (2 + i * 2) * DAY, db.seeds)
     const at = iso(now - (2 + i * 2) * DAY)
     const ref = crowdBuys(db, l, l.ticketCount, at)
@@ -225,7 +291,7 @@ function resultView(db: Db, r: DrawResult): DrawResultView {
   const l = db.listings.find((x) => x.id === r.listingId)!
   const myNumbers = db.tickets.filter((t) => t.listingId === l.id && t.userId === ME).map((t) => t.number)
   const myCreditKobo = db.ledger.filter((e) => e.userId === ME && e.kind === 'store_credit' && e.listingId === l.id).reduce((s, e) => s + e.creditKobo, 0)
-  return { ...r, listingTitle: l.title, ticketCount: l.ticketCount, iWon: r.winnerUserId === ME, myNumbers, myCreditKobo }
+  return { ...r, listingTitle: l.title, listingImage: l.images[0] ?? null, ticketCount: l.ticketCount, iWon: r.winnerUserId === ME, myNumbers, myCreditKobo }
 }
 
 function listingView(db: Db, l: Listing): ListingView {
@@ -410,7 +476,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         db.seeds[id] = seed
         const at = now()
         const listing: Listing = {
-          id, merchantId: MY_MERCHANT, title: input.title.trim(), description: input.description.trim(), category: input.category,
+          id, merchantId: MY_MERCHANT, title: input.title.trim(), description: input.description.trim(), category: input.category, images: input.images ?? [],
           priceKobo: input.priceKobo, ticketPriceKobo: input.ticketPriceKobo, buyerTicketPriceKobo: econ.buyerTicketKobo,
           ticketCount: econ.ticketCount, ticketsSold: 0, feeMode: input.feeMode, feeBps: input.feeBps,
           unsoldPolicy: input.unsoldPolicy, durationDays: input.durationDays, extended: false, status: 'pending_review',

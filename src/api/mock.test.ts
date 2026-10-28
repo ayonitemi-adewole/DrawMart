@@ -10,11 +10,37 @@ describe('mock api', () => {
   it('seeds live listings without leaking draw seeds', async () => {
     const api = make()
     const listings = await api.listListings()
-    expect(listings.length).toBe(6)
+    expect(listings.length).toBe(11)
     for (const l of listings) {
+      expect(l.status).toBe('live')
       expect(l.commitment).toMatch(/^[0-9a-f]{64}$/)
       expect(JSON.stringify(l)).not.toMatch(/"seed"/)
     }
+  })
+
+  it('returns listing photos, cover first, and none for new merchant listings', async () => {
+    const api = make()
+    const [phone] = await api.listListings({ category: 'Phones' })
+    expect(phone.images[0]).toMatch(/^\/assets\/.+\.jpg$/)
+    const [rice] = await api.listListings({ category: 'Food' })
+    expect(rice.images).toEqual([])
+    const created = await api.createListing({
+      title: 'Fan', description: '', category: 'Home', priceKobo: k(40_000), ticketPriceKobo: k(500),
+      feeMode: 'seller', feeBps: 1000, durationDays: 7, unsoldPolicy: 'refund',
+    })
+    expect(created.images).toEqual([])
+  })
+
+  it('includes the cover photo in draw results', async () => {
+    const results = await make().listResults()
+    expect(results.length).toBeGreaterThan(0)
+    for (const r of results) expect(r.listingImage).toMatch(/^\/assets\//)
+  })
+
+  it('seeds an admin queue', async () => {
+    const pending = await make().listPendingListings()
+    expect(pending.length).toBeGreaterThan(0)
+    expect(pending.every((l) => l.status === 'pending_review')).toBe(true)
   })
 
   it('sells tickets, charges the wallet and records numbers', async () => {
@@ -52,7 +78,7 @@ describe('mock api', () => {
 
   it('refunds buyers when a draw expires unsold', async () => {
     const api = make()
-    const [laptop] = (await api.listListings({ category: 'Electronics' })).filter((l) => l.title.startsWith('Laptop'))
+    const [laptop] = (await api.listListings({ category: 'Electronics' })).filter((l) => l.title.startsWith('MacBook'))
     await api.buyTickets(laptop.id, 2)
     await api.demoExpire(laptop.id)
     expect((await api.getListing(laptop.id)).status).toBe('refunded')

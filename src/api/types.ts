@@ -22,6 +22,8 @@ import type {
 
 export interface DrawResultView extends DrawResult {
   listingTitle: string
+  /** Cover photo of the listing, if it has one. */
+  listingImage: string | null
   ticketCount: number
   iWon: boolean
   myNumbers: number[]
@@ -55,6 +57,8 @@ export interface NewListingInput {
   title: string
   description: string
   category: Category
+  /** Optional photo URLs; escrow adds its own photos at check-in. */
+  images?: string[]
   priceKobo: Kobo
   ticketPriceKobo: Kobo
   feeMode: FeeMode

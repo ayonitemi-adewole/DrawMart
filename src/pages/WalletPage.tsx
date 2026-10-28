@@ -1,125 +1,236 @@
 import { useState, type FormEvent } from 'react'
 import { api } from '@/api'
 import { useDemoActions, useMe, useSetWeeklyLimit, useTopUp, useUpdateProfile, useWallet } from '@/api/hooks'
+import type { WalletView } from '@/api/types'
+import { resetIntro } from '@/components/HowItWorks'
+import { ArrowDownIcon, ArrowUpIcon, CoinIcon, GaugeIcon, GiftIcon, MapPinIcon, PlusIcon, RefreshIcon, SettingsIcon, TicketIcon, WalletIcon, type IconComponent } from '@/components/icons'
+import { Sheet } from '@/components/Sheet'
+import { ThemePicker } from '@/components/ThemeToggle'
 import { useToast } from '@/components/toast'
-import { Button, Card, ErrorState, PageTitle, ProgressBar, Skeleton, errorMessage } from '@/components/ui'
-import { formatNaira, parseNairaInput } from '@/domain/money'
+import { Button, Card, EmptyState, ErrorState, Field, Notice, PageTitle, ProgressBar, Segmented, Skeleton, cx, errorMessage, inputCls } from '@/components/ui'
+import { formatNaira, nairaToKobo, parseNairaInput } from '@/domain/money'
 import { RULES } from '@/domain/rules'
-import { dateTime } from '@/lib/time'
+import type { LedgerEntry, LedgerKind } from '@/domain/types'
+import { dateTime, dayLabel, timeOfDay } from '@/lib/time'
 
-const TOP_UPS = [5_000_00, 20_000_00, 50_000_00]
+const TOP_UPS = [nairaToKobo(5_000), nairaToKobo(20_000), nairaToKobo(50_000)]
+const LIMIT_PRESETS = [nairaToKobo(10_000), nairaToKobo(25_000), nairaToKobo(50_000), nairaToKobo(100_000)]
 const STATES = ['Lagos', 'Ogun', 'Oyo', 'FCT', 'Rivers', 'Kano']
 
 export function WalletPage() {
   const wallet = useWallet()
-  const topUp = useTopUp()
-  const toast = useToast()
 
-  if (wallet.isPending) return <Skeleton className="h-96" />
+  if (wallet.isPending)
+    return (
+      <div className="flex flex-col gap-4">
+        <Skeleton className="h-64" />
+        <Skeleton className="h-40" />
+        <Skeleton className="h-72" />
+      </div>
+    )
   if (wallet.isError) return <ErrorState error={wallet.error} onRetry={() => wallet.refetch()} />
   const w = wallet.data
 
   return (
-    <div className="flex flex-col gap-5">
-      <PageTitle>Wallet</PageTitle>
+    <div className="flex flex-col gap-6">
+      <PageTitle eyebrow="Wallet" sub="Top up once, then buy tickets in a tap. Store credit is always spent first.">
+        Your money
+      </PageTitle>
 
-      <div className="flex flex-col gap-4 rounded-3xl bg-brand-deep p-5 text-ground">
-        <div className="flex flex-col">
-          <span className="text-xs text-on-brand-muted">Cash balance</span>
-          <span className="font-display text-4xl font-extrabold">{formatNaira(w.balance.cashKobo)}</span>
+      <div className="grid gap-5 lg:grid-cols-[1fr_380px] lg:items-start">
+        <div className="flex min-w-0 flex-col gap-5">
+          <BalanceCard w={w} />
+          <Activity entries={w.entries} />
         </div>
-        <div className="flex justify-between border-t border-white/15 pt-3 text-sm">
-          <span>Store credit</span>
-          <strong className="text-ticket">{formatNaira(w.balance.creditKobo)}</strong>
+        <div className="flex flex-col gap-5 lg:sticky lg:top-24">
+          <LimitCard spent={w.spentThisWeekKobo} limit={w.weeklyLimitKobo} pending={w.pendingLimit} />
+          <AccountCard />
         </div>
-        <div className="grid grid-cols-3 gap-2">
-          {TOP_UPS.map((amt) => (
-            <Button
-              key={amt}
-              variant="ticket"
-              loading={topUp.isPending && topUp.variables === amt}
-              onClick={() => topUp.mutate(amt, { onSuccess: () => toast(`${formatNaira(amt)} added (test money).`), onError: (e) => toast(errorMessage(e), 'error') })}
-            >
-              + {formatNaira(amt)}
-            </Button>
-          ))}
-        </div>
-        <span className="text-[11px] text-on-brand-muted">
-          {api.testMode ? 'Test mode: no real money moves. The live version tops up by bank transfer or card.' : 'Top up by bank transfer or card.'}
-        </span>
       </div>
-
-      <LimitCard spent={w.spentThisWeekKobo} limit={w.weeklyLimitKobo} pending={w.pendingLimit} />
-
-      <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-extrabold">Activity</h2>
-        <Card className="divide-y divide-line">
-          {w.entries.map((e) => {
-            const amt = e.cashKobo + e.creditKobo
-            return (
-              <div key={e.id} className="flex justify-between gap-3 px-4 py-3 text-sm">
-                <div className="flex min-w-0 flex-col">
-                  <span className="font-semibold">{e.memo}</span>
-                  <span className="text-[11px] text-subtle">
-                    {dateTime(e.createdAt)}
-                    {e.creditKobo !== 0 && e.cashKobo !== 0 ? ` · ${formatNaira(Math.abs(e.creditKobo))} in credit` : e.creditKobo !== 0 ? ' · store credit' : ''}
-                  </span>
-                </div>
-                <strong className={amt > 0 ? 'shrink-0 text-brand' : 'shrink-0'}>{formatNaira(amt, { signed: true })}</strong>
-              </div>
-            )
-          })}
-        </Card>
-      </section>
-
-      <AccountCard />
     </div>
   )
 }
 
-function LimitCard({ spent, limit, pending }: { spent: number; limit: number; pending: { amountKobo: number; effectiveAt: string } | null }) {
+function BalanceCard({ w }: { w: WalletView }) {
+  const topUp = useTopUp()
+  const toast = useToast()
+  const [custom, setCustom] = useState(false)
+  const total = w.balance.cashKobo + w.balance.creditKobo
+
+  const add = (amt: number, done?: () => void) =>
+    topUp.mutate(amt, {
+      onSuccess: () => {
+        toast(`${formatNaira(amt)} added${api.testMode ? ' (test money)' : ''}.`)
+        done?.()
+      },
+      onError: (e) => toast(errorMessage(e), 'error'),
+    })
+
+  return (
+    <section className="relative isolate flex animate-fade-up flex-col gap-5 overflow-hidden rounded-4xl bg-linear-to-br from-hero via-hero to-hero-2 p-6 text-on-hero shadow-lift sm:p-7">
+      <div className="texture-dots absolute inset-0 -z-10" />
+      <div className="absolute -top-16 -right-16 -z-10 size-56 rounded-full bg-ticket/20 blur-3xl" />
+
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex flex-col">
+          <span className="text-xs font-semibold text-on-brand-muted">Available to spend</span>
+          <span key={total} className="animate-fade-in font-display text-5xl font-extrabold tracking-tight tabular-nums">
+            {formatNaira(total)}
+          </span>
+        </div>
+        <span className="flex size-12 items-center justify-center rounded-2xl bg-white/10 text-ticket ring-1 ring-white/15">
+          <WalletIcon size={24} />
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div className="flex flex-col rounded-2xl bg-white/8 p-3 ring-1 ring-white/10">
+          <span className="text-[11px] font-semibold text-on-brand-muted">Cash</span>
+          <span className="text-lg font-extrabold tabular-nums">{formatNaira(w.balance.cashKobo)}</span>
+        </div>
+        <div className="flex flex-col rounded-2xl bg-ticket/15 p-3 ring-1 ring-ticket/30">
+          <span className="flex items-center gap-1 text-[11px] font-semibold text-ticket">
+            <CoinIcon size={12} /> Store credit
+          </span>
+          <span className="text-lg font-extrabold text-ticket tabular-nums">{formatNaira(w.balance.creditKobo)}</span>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <span className="text-xs font-bold text-on-brand-muted">Quick top-up</span>
+        <div className="grid grid-cols-4 gap-2">
+          {TOP_UPS.map((amt) => (
+            <Button key={amt} variant="ticket" className="px-2" loading={topUp.isPending && topUp.variables === amt} onClick={() => add(amt)}>
+              +{formatNaira(amt).replace(',000', 'k')}
+            </Button>
+          ))}
+          <button
+            onClick={() => setCustom(true)}
+            className="flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white/10 text-sm font-bold ring-1 ring-white/20 transition hover:bg-white/20"
+          >
+            <PlusIcon size={16} /> Other
+          </button>
+        </div>
+      </div>
+      <span className="text-[11px] text-on-brand-muted">
+        {api.testMode ? 'Test mode: no real money moves. The live version tops up by bank transfer or card.' : 'Top up by bank transfer or card.'}
+      </span>
+
+      <CustomTopUp open={custom} onClose={() => setCustom(false)} onAdd={(amt) => add(amt, () => setCustom(false))} loading={topUp.isPending} />
+    </section>
+  )
+}
+
+function CustomTopUp({ open, onClose, onAdd, loading }: { open: boolean; onClose: () => void; onAdd: (amt: number) => void; loading: boolean }) {
+  const [value, setValue] = useState('')
+  const amount = parseNairaInput(value)
+  return (
+    <Sheet open={open} onClose={onClose} title="Top up wallet">
+      <form
+        className="flex flex-col gap-4"
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (amount > 0) onAdd(amount)
+        }}
+      >
+        <h2 className="pr-10 font-display text-2xl font-extrabold">Top up your wallet</h2>
+        <Field label="Amount (₦)" htmlFor="topup-amount" hint={api.testMode ? 'Test money only.' : undefined}>
+          <input
+            id="topup-amount"
+            inputMode="numeric"
+            autoFocus
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder="e.g. 15,000"
+            className={cx(inputCls, 'min-h-14 font-display text-2xl font-extrabold')}
+          />
+        </Field>
+        <div className="flex flex-wrap gap-2">
+          {[1_000, 2_500, 10_000, 100_000].map((n) => (
+            <button
+              key={n}
+              type="button"
+              onClick={() => setValue(n.toLocaleString('en-NG'))}
+              className="min-h-11 rounded-xl border border-line-strong px-3 text-sm font-bold hover:border-ink/40"
+            >
+              {formatNaira(nairaToKobo(n))}
+            </button>
+          ))}
+        </div>
+        <Button type="submit" size="lg" loading={loading} disabled={amount <= 0}>
+          {amount > 0 ? `Add ${formatNaira(amount)}` : 'Enter an amount'}
+        </Button>
+      </form>
+    </Sheet>
+  )
+}
+
+function LimitCard({ spent, limit, pending }: { spent: number; limit: number; pending: WalletView['pendingLimit'] }) {
   const setLimit = useSetWeeklyLimit()
   const toast = useToast()
   const [value, setValue] = useState('')
+  const pct = limit ? Math.min(100, Math.round((spent / limit) * 100)) : 0
 
-  function onSubmit(e: FormEvent) {
-    e.preventDefault()
-    const amount = parseNairaInput(value)
+  function submit(amount: number) {
     setLimit.mutate(amount, {
       onSuccess: () => {
         setValue('')
-        toast(amount <= limit ? 'Limit lowered.' : `Your new limit starts in ${RULES.limitIncreaseDelayHours} hours.`)
+        toast(amount <= limit ? 'Limit lowered. It applies right away.' : `Your new limit starts in ${RULES.limitIncreaseDelayHours} hours.`, amount <= limit ? 'success' : 'info')
       },
       onError: (err) => toast(errorMessage(err), 'error'),
     })
   }
 
+  function onSubmit(e: FormEvent) {
+    e.preventDefault()
+    submit(parseNairaInput(value))
+  }
+
   return (
-    <Card className="flex flex-col gap-3 p-4">
-      <div className="flex justify-between text-sm">
-        <strong>Weekly spending limit</strong>
-        <span className="text-subtle">
-          {formatNaira(spent)} of {formatNaira(limit)}
+    <Card className="flex flex-col gap-4 p-5">
+      <div className="flex items-center gap-3">
+        <span className="flex size-10 items-center justify-center rounded-xl bg-violet-soft text-violet">
+          <GaugeIcon size={20} />
         </span>
+        <div className="flex flex-col">
+          <strong>Weekly spending limit</strong>
+          <span className="text-xs text-subtle">Play responsibly. You’re in control.</span>
+        </div>
       </div>
-      <ProgressBar value={spent} max={limit} hot={spent / limit >= 0.8} label="Spent this week" />
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-baseline justify-between text-sm">
+          <span className="font-display text-2xl font-extrabold tabular-nums">{formatNaira(spent)}</span>
+          <span className="text-subtle">of {formatNaira(limit)}</span>
+        </div>
+        <ProgressBar value={spent} max={limit} hot={pct >= 80} label="Spent this week" />
+        <span className="text-xs text-subtle">{formatNaira(Math.max(0, limit - spent))} left this week</span>
+      </div>
       {pending ? (
-        <p className="text-xs text-brand-ink">
-          Rising to {formatNaira(pending.amountKobo)} on {dateTime(pending.effectiveAt)}.
-        </p>
+        <Notice tone="sky" icon={RefreshIcon}>
+          Rising to <strong>{formatNaira(pending.amountKobo)}</strong> on {dateTime(pending.effectiveAt)}.
+        </Notice>
       ) : null}
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Quick limits">
+        {LIMIT_PRESETS.map((amt) => (
+          <button
+            key={amt}
+            onClick={() => submit(amt)}
+            disabled={setLimit.isPending || amt === limit}
+            aria-pressed={amt === limit}
+            className={cx(
+              'min-h-11 flex-1 rounded-xl border px-2 text-xs font-bold transition disabled:cursor-default',
+              amt === limit ? 'border-brand bg-brand-soft text-brand-ink' : 'border-line-strong hover:border-ink/40',
+            )}
+          >
+            {formatNaira(amt).replace(',000', 'k')}
+          </button>
+        ))}
+      </div>
       <form onSubmit={onSubmit} className="flex gap-2">
         <label htmlFor="limit" className="sr-only">
           New weekly limit in naira
         </label>
-        <input
-          id="limit"
-          inputMode="numeric"
-          placeholder="New limit, e.g. 30,000"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          className="min-h-11 min-w-0 flex-1 rounded-xl border border-line-strong bg-ground px-3 text-sm"
-        />
+        <input id="limit" inputMode="numeric" placeholder="Custom limit, e.g. 30,000" value={value} onChange={(e) => setValue(e.target.value)} className={cx(inputCls, 'min-w-0 flex-1')} />
         <Button type="submit" variant="outline" loading={setLimit.isPending} disabled={!parseNairaInput(value)}>
           Set
         </Button>
@@ -129,34 +240,160 @@ function LimitCard({ spent, limit, pending }: { spent: number; limit: number; pe
   )
 }
 
+type ActivityFilter = 'all' | 'in' | 'out'
+
+const KIND: Record<LedgerKind, { icon: IconComponent; tone: string }> = {
+  topup: { icon: ArrowDownIcon, tone: 'bg-brand-soft text-brand-ink' },
+  ticket_purchase: { icon: TicketIcon, tone: 'bg-sunken text-muted' },
+  refund: { icon: RefreshIcon, tone: 'bg-sky-soft text-sky' },
+  store_credit: { icon: GiftIcon, tone: 'bg-ticket-soft text-ticket-ink' },
+  adjustment: { icon: ArrowUpIcon, tone: 'bg-violet-soft text-violet' },
+}
+
+function Activity({ entries }: { entries: LedgerEntry[] }) {
+  const [filter, setFilter] = useState<ActivityFilter>('all')
+  const amount = (e: LedgerEntry) => e.cashKobo + e.creditKobo
+  const shown = entries.filter((e) => (filter === 'in' ? amount(e) > 0 : filter === 'out' ? amount(e) < 0 : true))
+
+  // Group by day, keeping newest first.
+  const groups: { day: string; items: LedgerEntry[] }[] = []
+  for (const e of shown) {
+    const day = dayLabel(e.createdAt)
+    const last = groups[groups.length - 1]
+    if (last?.day === day) last.items.push(e)
+    else groups.push({ day, items: [e] })
+  }
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="font-display text-2xl font-extrabold">Activity</h2>
+        <Segmented<ActivityFilter>
+          label="Filter activity"
+          value={filter}
+          onChange={setFilter}
+          size="sm"
+          options={[
+            { value: 'all', label: 'All' },
+            { value: 'in', label: 'Money in' },
+            { value: 'out', label: 'Spent' },
+          ]}
+        />
+      </div>
+      {groups.length === 0 ? (
+        <EmptyState icon={WalletIcon} title="Nothing here yet" body="Top-ups, tickets, refunds and credit will show up here." />
+      ) : (
+        <Card className="overflow-hidden">
+          {groups.map((g) => (
+            <div key={g.day}>
+              <div className="sticky top-16 z-10 border-b border-line bg-sunken/80 px-5 py-2 text-xs font-extrabold tracking-wide text-subtle uppercase backdrop-blur">
+                {g.day}
+              </div>
+              <ul className="divide-y divide-line">
+                {g.items.map((e) => {
+                  const amt = amount(e)
+                  const k = KIND[e.kind]
+                  return (
+                    <li key={e.id} className="flex items-center gap-3 px-5 py-3.5 text-sm">
+                      <span className={cx('flex size-10 shrink-0 items-center justify-center rounded-xl', k.tone)}>
+                        <k.icon size={18} />
+                      </span>
+                      <div className="flex min-w-0 flex-1 flex-col">
+                        <span className="truncate font-semibold">{e.memo}</span>
+                        <span className="text-[11px] text-subtle">
+                          {timeOfDay(e.createdAt)}
+                          {e.creditKobo !== 0 && e.cashKobo !== 0 ? ` · ${formatNaira(Math.abs(e.creditKobo))} in credit` : e.creditKobo !== 0 ? ' · store credit' : ''}
+                        </span>
+                      </div>
+                      <strong className={cx('shrink-0 tabular-nums', amt > 0 ? 'text-brand' : 'text-ink')}>{formatNaira(amt, { signed: true })}</strong>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          ))}
+        </Card>
+      )}
+    </section>
+  )
+}
+
 function AccountCard() {
   const me = useMe()
   const update = useUpdateProfile()
   const demo = useDemoActions()
-  if (!me.data) return null
+  const toast = useToast()
+  const [confirmReset, setConfirmReset] = useState(false)
+  if (!me.data) return <Skeleton className="h-56" />
+  const licensed = RULES.licensedStates.includes(me.data.state)
+
   return (
-    <Card className="flex flex-col gap-3 p-4">
-      <strong className="text-sm">Account</strong>
-      <div className="flex items-center justify-between gap-3 text-sm">
-        <label htmlFor="state">State of residence</label>
+    <Card className="flex flex-col gap-4 p-5">
+      <div className="flex items-center gap-3">
+        <span className="flex size-10 items-center justify-center rounded-xl bg-sunken text-muted">
+          <SettingsIcon size={20} />
+        </span>
+        <strong>Account & settings</strong>
+      </div>
+
+      <Field
+        label={
+          <span className="flex items-center gap-1.5">
+            <MapPinIcon size={14} /> State of residence
+          </span>
+        }
+        htmlFor="state"
+        hint={`Tickets can only be bought in licensed states (${RULES.licensedStates.join(', ')}). In production this is checked with KYC, not a dropdown.`}
+      >
         <select
           id="state"
           value={me.data.state}
-          onChange={(e) => update.mutate({ state: e.target.value })}
-          className="min-h-11 rounded-xl border border-line-strong bg-ground px-3"
+          onChange={(e) => update.mutate({ state: e.target.value }, { onError: (err) => toast(errorMessage(err), 'error') })}
+          className={inputCls}
         >
           {STATES.map((s) => (
             <option key={s}>{s}</option>
           ))}
         </select>
+      </Field>
+      {!licensed ? <Notice tone="hot">DrawMart isn’t available in {me.data.state} yet, so ticket purchases are paused.</Notice> : null}
+
+      <div className="flex flex-col gap-1.5">
+        <span className="text-sm font-bold">Appearance</span>
+        <ThemePicker />
       </div>
-      <p className="text-xs text-subtle">
-        Tickets can only be bought in states where we hold a licence ({RULES.licensedStates.join(', ')}). In production this is checked with KYC, not a dropdown.
-      </p>
-      {api.testMode ? (
-        <Button variant="danger" size="sm" className="self-start" loading={demo.reset.isPending} onClick={() => demo.reset.mutate()}>
-          Reset demo data
+
+      <div className="flex flex-wrap gap-2 border-t border-line pt-4">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            resetIntro()
+            window.location.assign('/')
+          }}
+        >
+          Replay the intro
         </Button>
+        {api.testMode ? (
+          <Button variant="danger" size="sm" onClick={() => setConfirmReset(true)}>
+            Reset demo data
+          </Button>
+        ) : null}
+      </div>
+
+      {api.testMode ? (
+        <Sheet open={confirmReset} onClose={() => setConfirmReset(false)} title="Reset demo data">
+          <h2 className="pr-10 font-display text-2xl font-extrabold">Start over?</h2>
+          <p className="text-sm text-muted">This clears your test wallet, tickets and any listings you created, and reloads the sample draws.</p>
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1" onClick={() => setConfirmReset(false)}>
+              Cancel
+            </Button>
+            <Button variant="danger" className="flex-1" loading={demo.reset.isPending} onClick={() => demo.reset.mutate()}>
+              Reset everything
+            </Button>
+          </div>
+        </Sheet>
       ) : null}
     </Card>
   )

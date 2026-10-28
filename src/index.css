@@ -1,33 +1,150 @@
 @import 'tailwindcss';
 
-/* Design tokens, carried over from the prototype canvas. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Design tokens. Components only use these names (bg-brand, text-muted…);
+ * dark mode swaps the values below, so no component needs `dark:` variants
+ * for colour.
+ */
 @theme {
   --font-sans: 'Manrope', ui-sans-serif, system-ui, sans-serif;
   --font-display: 'Bricolage Grotesque', 'Manrope', ui-sans-serif, sans-serif;
 
-  --color-ground: #f6f4ee;
+  --color-ground: #f4f5f1;
   --color-surface: #ffffff;
-  --color-sunken: #ede8db;
-  --color-line: #e3ded2;
-  --color-line-strong: #cfc8b8;
+  --color-raised: #ffffff;
+  --color-sunken: #eaede6;
+  --color-line: #e2e5dd;
+  --color-line-strong: #c9cec3;
+  /* Tile behind product photos. Stays light in dark mode, as studio shots are shot on white. */
+  --color-photo: #f3f4f2;
 
-  --color-ink: #14201b;
-  --color-muted: #4f5a54;
-  --color-subtle: #5b6660;
+  --color-ink: #0e1914;
+  --color-muted: #47534d;
+  --color-subtle: #5c6862;
 
-  --color-brand: #0f5132;
-  --color-brand-deep: #0f3d2a;
-  --color-brand-soft: #e4efe8;
-  --color-brand-ink: #0b3b26;
-  --color-on-brand-muted: #c9d9cf;
+  --color-brand: #0a7a4a;
+  --color-brand-deep: #065c37;
+  --color-brand-soft: #def2e7;
+  --color-brand-ink: #054a2c;
+  --color-on-brand: #ffffff;
+  --color-on-brand-muted: #bfe3cf;
 
-  --color-ticket: #f5b700;
-  --color-ticket-soft: #fff6db;
-  --color-ticket-ink: #5c4300;
+  /* Deep panels (hero, wallet card, draw banners). */
+  --color-hero: #053b25;
+  --color-hero-2: #0a6a41;
+  --color-on-hero: #f1f8f4;
 
-  --color-hot: #d9480f;
-  --color-hot-soft: #fdebd8;
-  --color-hot-ink: #9a3412;
+  --color-ticket: #ffc21a;
+  --color-ticket-soft: #fff4d1;
+  --color-ticket-ink: #634700;
+  --color-on-ticket: #0e1914;
+
+  --color-hot: #ee5228;
+  --color-hot-soft: #ffe8df;
+  --color-hot-ink: #a12f0e;
+
+  --color-sky: #2f80ed;
+  --color-sky-soft: #e3eefd;
+  --color-violet: #7c4dff;
+  --color-violet-soft: #ede6ff;
+
+  --shadow-card: 0 1px 2px rgb(14 25 20 / 0.04), 0 4px 16px -4px rgb(14 25 20 / 0.08);
+  --shadow-lift: 0 2px 4px rgb(14 25 20 / 0.05), 0 18px 40px -12px rgb(14 25 20 / 0.22);
+  --shadow-glow: 0 10px 30px -10px rgb(10 122 74 / 0.6);
+
+  --animate-fade-up: fade-up 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-fade-in: fade-in 0.25s ease-out both;
+  --animate-pop: pop 0.35s cubic-bezier(0.3, 1.5, 0.5, 1) both;
+  --animate-sheet-up: sheet-up 0.35s cubic-bezier(0.2, 0.9, 0.2, 1) both;
+  --animate-toast-in: toast-in 0.35s cubic-bezier(0.2, 0.9, 0.2, 1) both;
+  --animate-shimmer: shimmer 1.4s linear infinite;
+  --animate-ping-slow: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+  --animate-float: float 5s ease-in-out infinite;
+  --animate-confetti: confetti 2.6s cubic-bezier(0.2, 0.6, 0.4, 1) forwards;
+  --animate-shine: shine 2.4s ease-in-out infinite;
+
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes pop {
+    0% { opacity: 0; transform: scale(0.85); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  @keyframes sheet-up {
+    from { opacity: 0; transform: translateY(40px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(-16px) scale(0.96); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes shimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -200% 0; }
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0) rotate(var(--r, 0deg)); }
+    50% { transform: translateY(-8px) rotate(var(--r, 0deg)); }
+  }
+  @keyframes confetti {
+    0% { opacity: 1; transform: translate3d(0, -10vh, 0) rotate(0); }
+    100% { opacity: 0; transform: translate3d(var(--dx, 0), 105vh, 0) rotate(var(--spin, 720deg)); }
+  }
+  @keyframes shine {
+    0% { transform: translateX(-100%); }
+    60%, 100% { transform: translateX(250%); }
+  }
+}
+
+.dark {
+  --color-ground: #0a110e;
+  --color-surface: #111a16;
+  --color-raised: #16211c;
+  --color-sunken: #1a2621;
+  --color-line: #22302a;
+  --color-line-strong: #34453d;
+  --color-photo: #e4e6e3;
+
+  --color-ink: #ecf3ef;
+  --color-muted: #aebcb5;
+  --color-subtle: #93a29b;
+
+  --color-brand: #2fbf7c;
+  --color-brand-deep: #25a067;
+  --color-brand-soft: #123327;
+  --color-brand-ink: #8fe3b9;
+  --color-on-brand: #03140b;
+  --color-on-brand-muted: #b7dcc9;
+
+  --color-hero: #0c2a1d;
+  --color-hero-2: #10452e;
+  --color-on-hero: #eef7f2;
+
+  --color-ticket: #ffc93a;
+  --color-ticket-soft: #2c2410;
+  --color-ticket-ink: #ffd96b;
+
+  --color-hot: #ff6b45;
+  --color-hot-soft: #3a1c13;
+  --color-hot-ink: #ffa184;
+
+  --color-sky: #5b9cf5;
+  --color-sky-soft: #142538;
+  --color-violet: #a283ff;
+  --color-violet-soft: #231b3d;
+
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.3), 0 6px 18px -6px rgb(0 0 0 / 0.5);
+  --shadow-lift: 0 2px 4px rgb(0 0 0 / 0.35), 0 20px 40px -12px rgb(0 0 0 / 0.7);
+  --shadow-glow: 0 10px 30px -10px rgb(47 191 124 / 0.5);
+
+  color-scheme: dark;
 }
 
 html,
@@ -41,9 +158,79 @@ body {
   color: var(--color-ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.2s ease;
+}
+
+a {
+  color: var(--color-brand);
+  font-weight: 700;
+  text-underline-offset: 3px;
 }
 
 :focus-visible {
   outline: 2px solid var(--color-brand);
   outline-offset: 2px;
+}
+
+::selection {
+  background: var(--color-ticket);
+  color: var(--color-on-ticket);
+}
+
+/* Dialogs: native <dialog> handles focus and Escape; we only style it. */
+dialog::backdrop {
+  background: rgb(5 15 10 / 0.55);
+  backdrop-filter: blur(4px);
+  animation: fade-in 0.2s ease-out;
+}
+
+/* Hide scrollbars on horizontal rails while keeping them scrollable. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Range inputs in brand colour with a chunky, touch-friendly thumb. */
+input[type='range'].range {
+  appearance: none;
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--color-brand) var(--fill, 0%), var(--color-sunken) var(--fill, 0%));
+  cursor: pointer;
+}
+input[type='range'].range::-webkit-slider-thumb {
+  appearance: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 3px solid var(--color-brand);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.2);
+}
+input[type='range'].range::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 3px solid var(--color-brand);
+}
+
+/* Subtle dotted texture for hero panels. */
+.texture-dots {
+  background-image: radial-gradient(rgb(255 255 255 / 0.09) 1px, transparent 1px);
+  background-size: 14px 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
