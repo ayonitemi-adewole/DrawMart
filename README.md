@@ -1,75 +1,80 @@
-# React + TypeScript + Vite
+# DrawMart
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A Lagos marketplace where verified stores list real items and buyers get tickets for a fraction of the price. When every ticket sells, a provably fair draw picks the winner. Losing buyers get part of their spend back as store credit.
 
-Currently, two official plugins are available:
+> **Status:** frontend MVP running against an in-browser mock backend. **Test mode only: no real money.** Do not take real payments until the LSLGA licence is in place.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Run it
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+npm install
+npm run dev        # http://localhost:5173
+npm test           # domain + mock API tests (Vitest)
+npm run typecheck
+npm run lint       # oxlint
+npm run build
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
+Routes:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+| Path | What |
+|---|---|
+| `/` | Live draws, category filter |
+| `/listings/:id` | Item page, ticket picker, demo controls |
+| `/tickets` | Your tickets, waiting and finished |
+| `/draws`, `/draws/:id` | Results, with in-browser verification |
+| `/wallet` | Balance, store credit, test top-ups, weekly limit, state of residence |
+| `/merchant` | Store dashboard: new listing with live fee breakdown |
+| `/admin` | Approve listings once the item is in escrow |
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+Demo data lives in `localStorage`; **Wallet → Reset demo data** starts over.
+
+## How it's built
 
 ```
+src/
+  domain/      Pure business logic, no React. Shared with the future backend.
+    types.ts     Listing, Ticket, LedgerEntry, DrawResult… (money is integer kobo)
+    money.ts     Formatting/parsing ₦, basis-point maths
+    fees.ts      Listing economics: ticket count, buyer price, payout, platform cut
+    draw.ts      Commit–reveal draw: SHA-256 commitment, winner calc, verifier
+    rules.ts     Purchase rules: licensed states, 18+, per-person cap, weekly limit…
+  api/
+    types.ts     DrawMartApi interface: the contract the backend must implement
+    mock.ts      localStorage implementation of that contract
+    hooks.ts     TanStack Query hooks used by pages
+    index.ts     Picks the implementation (swap mock → real here)
+  components/  UI kit, icons, toasts, listing card
+  layouts/     Buyer shell (mobile bottom nav) and back-office shell
+  pages/       Screens
+```
+
+The UI only talks to `DrawMartApi`. To add a real backend, implement that interface (Supabase, NestJS, …) and change one line in `src/api/index.ts`. `src/api/mock.test.ts` describes the behaviour the backend must match.
+
+## Key rules (src/domain/rules.ts)
+
+- Tickets sold only to users in licensed states (Lagos), 18+.
+- Max 20 tickets per person per draw.
+- Weekly spending limit; lowering is instant, raising waits 24 h.
+- Store credit is spent before cash.
+- Losing buyers get 20% of their spend back as store credit.
+- Unsold at deadline: refund to wallet, or extend once by 7 days (merchant's choice).
+- Merchant listings go live only after admin approval (item checked into escrow).
+
+## How draws stay fair
+
+1. When a listing is created, the server generates a secret seed and publishes only `SHA-256(seed)`.
+2. The purchase that sells the last ticket produces a reference nobody could predict.
+3. `winner = SHA-256(seed + ":" + reference) mod ticketCount + 1`
+4. The seed is revealed; anyone can check it matches the commitment and recompute the winner (the result page does this in the browser).
+
+**Production note:** seeds must be generated and stored server-side only and never sent to clients before the draw. The mock keeps them out of API responses to mimic this.
+
+## Before going live
+
+- Real backend implementing `DrawMartApi`, with the draw and wallet logic in transactions.
+- Payments (bank transfer / card) and payouts to merchants after delivery confirmation.
+- KYC (NIN/BVN) for age and state of residence.
+- Merchant onboarding with CAC verification, escrow check-in, product photo uploads.
+- Buy-now checkout.
+- LSLGA licence.
