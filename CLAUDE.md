@@ -17,7 +17,5 @@ Ticket-draw marketplace for Lagos. React 19 + TypeScript + Tailwind v4 + Vite, R
 - Touch targets ≥ 44px (`min-h-11`), real `<button>`/`<a>`/`<label>`, `aria-label` on icon-only buttons.
 - Test mode (`api.testMode`) shows demo controls and the test banner. Never let demo helpers run against a real backend.
 
-## Open product decisions
-- Final rule for unsold draws (currently merchant picks refund or extend-once).
-- Backend choice (Supabase vs. Node/NestJS).
-- Fee % per category.
+## Product decisions
+Read `docs/product-decisions.md` before changing business rules. It records what's decided, what's still open, and the legal context. Update it when a decision changes.
