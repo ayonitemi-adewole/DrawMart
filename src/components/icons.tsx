@@ -322,3 +322,14 @@ export const GridIcon = (p: IconProps) => (
     <rect x="14" y="14" width="7" height="7" rx="1.5" />
   </Icon>
 )
+export const MailIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <path d="M3 7l9 6 9-6" />
+  </Icon>
+)
+export const LogOutIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 17l-5-5 5-5M5 12h11" />
+  </Icon>
+)

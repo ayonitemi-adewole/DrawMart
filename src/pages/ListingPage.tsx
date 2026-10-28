@@ -5,6 +5,7 @@ import {
   useBuyTickets,
   useDemoActions,
   useListing,
+  useAccess,
   useMe,
   useWallet,
 } from "@/api/hooks";
@@ -547,6 +548,8 @@ function BuyPanel({
   const toast = useToast();
   const me = useMe();
   const wallet = useWallet();
+  const access = useAccess();
+  const signedOut = access.ready && !access.signedIn;
   const buy = useBuyTickets();
   const demo = useDemoActions();
   const held = l.myNumbers.length;
@@ -821,14 +824,24 @@ function BuyPanel({
 
             {blocker ? <BlockerNotice error={blocker} /> : null}
 
-            <Button
-              size="lg"
-              onClick={() => setConfirming(true)}
-              disabled={!!blocker || !wallet.data || !me.data}
-            >
-              <TicketIcon size={20} />
-              Get {q} {q === 1 ? "ticket" : "tickets"}
-            </Button>
+            {signedOut ? (
+              <Link
+                to={`/login?next=${encodeURIComponent(`/listings/${l.id}`)}`}
+                className={buttonClass("primary", "lg")}
+              >
+                <TicketIcon size={20} className="text-on-brand" />
+                <span className="text-on-brand">Sign in to get tickets</span>
+              </Link>
+            ) : (
+              <Button
+                size="lg"
+                onClick={() => setConfirming(true)}
+                disabled={!!blocker || !wallet.data || !me.data}
+              >
+                <TicketIcon size={20} />
+                Get {q} {q === 1 ? "ticket" : "tickets"}
+              </Button>
+            )}
           </>
         ) : (
           <Notice
@@ -864,7 +877,8 @@ function BuyPanel({
         Skip the draw: buy now for {formatNaira(l.priceKobo)}
       </Button>
 
-      {api.testMode ? (
+      {/* The database only lets admins use these on Supabase; anyone on the mock. */}
+      {api.testMode && access.isAdmin ? (
         <div className="flex flex-col gap-2 rounded-3xl border border-dashed border-ticket bg-ticket-soft/50 p-4">
           <span className="flex items-center gap-1.5 text-xs font-extrabold tracking-wider text-ticket-ink uppercase">
             <DiceIcon size={14} /> Demo controls

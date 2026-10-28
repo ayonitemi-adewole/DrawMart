@@ -35,6 +35,16 @@ describe('mock api', () => {
     expect((await api.createListing(newListing())).images).toEqual([])
   })
 
+  it('tops up within the per-top-up limits', async () => {
+    const api = make()
+    const before = (await api.getWallet()).balance.cashKobo
+    await api.topUp(k(5_000))
+    expect((await api.getWallet()).balance.cashKobo).toBe(before + k(5_000))
+    await expect(api.topUp(k(99))).rejects.toThrow('The smallest top-up is ₦100.')
+    await expect(api.topUp(k(500_001))).rejects.toThrow('The largest single top-up is ₦500,000.')
+    expect((await api.getWallet()).pendingDeposits).toEqual([])
+  })
+
   it('includes the cover photo in draw results', async () => {
     const results = await make().listResults()
     expect(results.length).toBeGreaterThan(0)

@@ -1,6 +1,7 @@
 import { Link, NavLink, Outlet, ScrollRestoration, useLocation } from 'react-router'
-import { useMerchant, usePendingListings } from '@/api/hooks'
-import { ArrowRightIcon, CheckIcon, ClipboardIcon, LayoutIcon } from '@/components/icons'
+import { api } from '@/api'
+import { useAccess, useMerchant, usePendingListings, useSignOut } from '@/api/hooks'
+import { ArrowRightIcon, CheckIcon, ClipboardIcon, LayoutIcon, LogOutIcon } from '@/components/icons'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { cx } from '@/components/ui'
 import { Logo, TestModeBanner } from './BuyerLayout'
@@ -12,10 +13,14 @@ export function BackOfficeLayout() {
   const pending = usePendingListings()
   const pendingCount = pending.data?.length ?? 0
 
+  const access = useAccess()
+  const signOut = useSignOut()
+
+  // Only show the areas this account can open (everything on the mock).
   const nav = [
-    { to: '/merchant', label: 'Store dashboard', icon: LayoutIcon, count: 0 },
-    { to: '/admin', label: 'Admin review', icon: ClipboardIcon, count: pendingCount },
-  ]
+    { to: '/merchant', label: 'Store dashboard', icon: LayoutIcon, count: 0, show: access.isStore },
+    { to: '/admin', label: 'Admin review', icon: ClipboardIcon, count: pendingCount, show: access.isAdmin },
+  ].filter((n) => n.show)
 
   return (
     <div className="flex min-h-dvh flex-col">
@@ -68,6 +73,15 @@ export function BackOfficeLayout() {
               <Link to="/" className="flex min-h-11 items-center justify-between rounded-xl px-3 text-sm font-bold text-muted no-underline hover:bg-sunken hover:text-ink">
                 Open buyer app <ArrowRightIcon size={16} />
               </Link>
+              {api.auth && access.signedIn ? (
+                <button
+                  onClick={() => signOut.mutate()}
+                  className="flex min-h-11 items-center justify-between gap-2 rounded-xl px-3 text-left text-sm font-bold text-muted hover:bg-sunken hover:text-ink"
+                >
+                  <span className="min-w-0 truncate">Sign out{access.email ? <span className="font-normal"> · {access.email}</span> : null}</span>
+                  <LogOutIcon size={16} className="shrink-0" />
+                </button>
+              ) : null}
             </div>
           </div>
         </aside>

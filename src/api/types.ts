@@ -47,7 +47,18 @@ export interface WalletView {
   spentThisWeekKobo: Kobo
   weeklyLimitKobo: Kobo
   pendingLimit: { amountKobo: Kobo; effectiveAt: string } | null
+  /** Paid top-ups the payment provider hasn't confirmed yet (e.g. a bank transfer on its way). */
+  pendingDeposits: PendingDeposit[]
 }
+
+export interface PendingDeposit {
+  txRef: string
+  amountKobo: Kobo
+  createdAt: string
+}
+
+/** Where a top-up ended up. 'cancelled': the buyer closed the checkout without paying. */
+export type DepositStatus = 'successful' | 'pending' | 'failed' | 'cancelled'
 
 export interface PurchaseReceipt {
   purchaseId: string
@@ -92,9 +103,46 @@ export class ApiError extends Error {
   }
 }
 
+export interface AuthSession {
+  userId: string
+  email: string | null
+  isAdmin: boolean
+  /** The store this account manages, if any. */
+  merchantId: string | null
+}
+
+/** Sign-in for backends that have real accounts. The mock has none. */
+export interface AuthAdapter {
+  getSession(): Promise<AuthSession | null>
+  /** Calls back on sign-in and sign-out. Returns an unsubscribe function. */
+  onChange(callback: (session: AuthSession | null) => void): () => void
+  /** Emails a one-time sign-in link that returns to `redirectTo`. Creates the account on first use. */
+  sendSignInLink(email: string, redirectTo: string): Promise<void>
+  /** For accounts that have a password, e.g. the local demo accounts. */
+  signInWithPassword(email: string, password: string): Promise<void>
+  signOut(): Promise<void>
+}
+
+/**
+ * Real top-ups through a payment provider. Absent when top-ups are instant
+ * test money (the mock, or no provider configured); use `topUp` then.
+ */
+export interface PaymentsAdapter {
+  /** Shown to buyers, e.g. "Flutterwave". */
+  readonly provider: string
+  /** Opens the provider's checkout and resolves once the buyer finishes or leaves. */
+  deposit(amountKobo: Kobo): Promise<DepositStatus>
+  /** Asks the provider again about a pending deposit. */
+  checkDeposit(txRef: string): Promise<DepositStatus>
+}
+
 export interface DrawMartApi {
-  /** True while running against the in-browser mock with fake money. */
+  /** True while no real money moves: test top-ups, demo controls and the test banner. */
   readonly testMode: boolean
+  /** Present when the backend has user accounts. */
+  readonly auth?: AuthAdapter
+  /** Present when top-ups go through a payment provider. */
+  readonly payments?: PaymentsAdapter
 
   // Session
   getCurrentUser(): Promise<User>
@@ -109,6 +157,7 @@ export interface DrawMartApi {
 
   // Wallet
   getWallet(): Promise<WalletView>
+  /** Instant test money. Errors outside test mode; real top-ups use `payments`. */
   topUp(amountKobo: Kobo): Promise<void>
   setWeeklyLimit(amountKobo: Kobo): Promise<void>
 
@@ -123,8 +172,9 @@ export interface DrawMartApi {
   approveListing(id: string): Promise<void>
   rejectListing(id: string): Promise<void>
 
-  // Demo-only helpers (no-ops / errors in production)
+  // Demo-only helpers (errors outside test mode; admins only on a real backend)
   demoSellOut(listingId: string): Promise<void>
   demoExpire(listingId: string): Promise<void>
-  demoReset(): Promise<void>
+  /** Wipes all data. Only the in-browser mock can do this. */
+  demoReset?(): Promise<void>
 }

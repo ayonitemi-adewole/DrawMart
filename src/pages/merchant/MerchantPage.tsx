@@ -1,7 +1,7 @@
 import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { api } from '@/api'
-import { useCreateListing, useMerchant, useMerchantListings } from '@/api/hooks'
+import { useAccess, useCreateListing, useMerchant, useMerchantListings } from '@/api/hooks'
 import type { ListingView } from '@/api/types'
 import { CATEGORY_STYLE } from '@/components/category'
 import { Countdown } from '@/components/Countdown'
@@ -862,6 +862,7 @@ type StatusFilter = 'all' | 'live' | 'pending_review' | 'done'
 
 function MerchantListings({ onNew }: { onNew: () => void }) {
   const q = useMerchantListings()
+  const { isAdmin } = useAccess()
   const [filter, setFilter] = useState<StatusFilter>('all')
   if (q.isPending) return <Skeleton className="h-60" />
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />
@@ -884,9 +885,11 @@ function MerchantListings({ onNew }: { onNew: () => void }) {
             { value: 'done', label: 'Finished', count: count('done') },
           ]}
         />
-        <Link to="/admin" className="text-sm">
-          Admin review →
-        </Link>
+        {isAdmin ? (
+          <Link to="/admin" className="text-sm">
+            Admin review →
+          </Link>
+        ) : null}
       </div>
       {items.length === 0 ? (
         <EmptyState
