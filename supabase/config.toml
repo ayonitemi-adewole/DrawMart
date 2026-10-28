@@ -414,3 +414,11 @@ enabled = true
 # formatted with uppercase keywords, indent 2, max width 180, trailing commas,
 # and column/key alignment. Set to "null" to emit raw, unformatted SQL.
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":180,\"commaStyle\":\"trailing\"}"
+
+# Edge Functions. Both check who's calling themselves: confirm-deposit reads the
+# user's token, and Flutterwave's webhook sends a secret hash instead of a JWT.
+[functions.confirm-deposit]
+verify_jwt = false
+
+[functions.flutterwave-webhook]
+verify_jwt = false

@@ -16,6 +16,7 @@ Ticket-draw marketplace for Lagos. React 19 + TypeScript + Tailwind v4 + Vite, R
 - `draw_results.winner_user_id` is not readable by clients: select named columns, never `*`, and derive "you won" from the user's own tickets.
 - Access in the UI comes from `useAccess()` (signed in / store / admin; everything allowed on the mock). Guard routes with `RequireSignIn`; browsing stays public.
 - Wallet balances are derived from the append-only ledger; never store a balance.
+- Real top-ups go through `api.payments` (Flutterwave, Supabase only). Only `complete_deposit`, called by the Edge Functions in `supabase/functions/` after Flutterwave's verify API confirms the payment, may credit a deposit; never trust the browser's checkout result. The Flutterwave secret key lives only in Supabase secrets. Test keys while test mode is on.
 - Draw seeds are secret until the draw runs. Never include `seed` in a listing response before `status === 'drawn'`.
 - Design tokens are in `src/index.css` (`@theme`): use `bg-brand`, `text-muted`, `bg-ticket` etc., not raw hex values. Dark mode overrides the same tokens under `.dark`, so don't add `dark:` colour variants; use `text-on-brand` / `text-on-ticket` / `text-on-hero` for text on those fills.
 - Reuse the UI kit before writing new markup: `components/ui.tsx` (Button/`buttonClass`, Card, Badge, Notice, Segmented, StatTile, EmptyState, Field/`inputCls`), `Sheet` for modals, `Countdown`, `TicketStub`.

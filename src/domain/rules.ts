@@ -1,4 +1,4 @@
-import { applyBps } from './money'
+import { applyBps, formatNaira } from './money'
 import type { Kobo, LedgerEntry, Listing, User, WalletBalance } from './types'
 
 /** Platform-wide settings. These will move to the backend/admin later. */
@@ -20,6 +20,9 @@ export const RULES = {
   /** How far ahead a pickup or inspection can be booked. */
   handoverMinLeadDays: 1,
   handoverMaxLeadDays: 14,
+  /** Size of one wallet top-up. */
+  minTopUpKobo: 100_00,
+  maxTopUpKobo: 500_000_00,
 }
 
 export function balanceFromLedger(entries: LedgerEntry[]): WalletBalance {
@@ -27,6 +30,14 @@ export function balanceFromLedger(entries: LedgerEntry[]): WalletBalance {
     (acc, e) => ({ cashKobo: acc.cashKobo + e.cashKobo, creditKobo: acc.creditKobo + e.creditKobo }),
     { cashKobo: 0, creditKobo: 0 },
   )
+}
+
+/** Why a top-up amount isn't allowed, or null if it is. */
+export function topUpError(amountKobo: Kobo): string | null {
+  if (!Number.isInteger(amountKobo) || amountKobo <= 0) return 'Enter an amount to add.'
+  if (amountKobo < RULES.minTopUpKobo) return `The smallest top-up is ${formatNaira(RULES.minTopUpKobo)}.`
+  if (amountKobo > RULES.maxTopUpKobo) return `The largest single top-up is ${formatNaira(RULES.maxTopUpKobo)}.`
+  return null
 }
 
 /** Ticket spend in the 7 days up to `now`, net of refunds. */

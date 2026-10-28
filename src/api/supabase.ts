@@ -7,17 +7,20 @@
  */
 import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js'
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
+import { openFlutterwaveCheckout } from '@/lib/flutterwave'
 import type { Category, FeeMode, Handover, LedgerEntry, LedgerKind, ListingStatus, Merchant, UnsoldPolicy, User } from '@/domain/types'
 import {
   ApiError,
   type ApiErrorCode,
   type AuthAdapter,
   type AuthSession,
+  type DepositStatus,
   type DrawMartApi,
   type DrawResultView,
   type ListingFilter,
   type ListingView,
   type NewListingInput,
+  type PaymentsAdapter,
   type PurchaseReceipt,
   type WalletView,
 } from './types'
@@ -227,6 +230,8 @@ function sortForBrowsing(a: ListingView, b: ListingView) {
 export interface SupabaseApiOptions {
   /** Must match app_settings.test_mode in the database (it decides what's allowed). */
   testMode: boolean
+  /** Flutterwave public key. Without it, top-ups are instant test money. */
+  flutterwavePublicKey?: string
 }
 
 export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptions): DrawMartApi {
@@ -335,9 +340,40 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     },
   }
 
+  async function checkDeposit(txRef: string): Promise<DepositStatus> {
+    const { data, error } = await client.functions.invoke<{ status: DepositStatus }>('confirm-deposit', { body: { txRef } })
+    if (error) {
+      // FunctionsHttpError carries the function's JSON reply in `context`.
+      const reply = await (error as { context?: Response }).context?.json?.().catch(() => null)
+      throw new ApiError('invalid_input', reply?.error ?? 'Couldn’t check the payment. Try again in a moment.')
+    }
+    return data!.status
+  }
+
+  const publicKey = opts.flutterwavePublicKey
+  const payments: PaymentsAdapter | undefined = publicKey
+    ? {
+        provider: 'Flutterwave',
+        async deposit(amountKobo) {
+          const c = await rpc<{ txRef: string; amountKobo: number; email: string; name: string }>('start_deposit', { p_amount_kobo: amountKobo })
+          const result = await openFlutterwaveCheckout({ publicKey, ...c })
+          // If the check fails, the webhook still credits it; show it as pending meanwhile.
+          const status = await checkDeposit(c.txRef).catch((): DepositStatus => 'pending')
+          if (result === 'closed' && status === 'pending') {
+            // Left without paying. A bank transfer that still lands is credited by the webhook.
+            await rpc('cancel_deposit', { p_tx_ref: c.txRef })
+            return 'cancelled'
+          }
+          return status
+        },
+        checkDeposit,
+      }
+    : undefined
+
   return {
     testMode: opts.testMode,
     auth,
+    payments,
 
     // Session
     getCurrentUser: async () => toUser(await myProfile()),
@@ -380,10 +416,19 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     // Wallet
     getWallet: async (): Promise<WalletView> => {
       const me = await requireId()
-      const [summary, entries, pending] = await Promise.all([
+      const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      const [summary, entries, pending, deposits] = await Promise.all([
         rpc<{ cashKobo: number; creditKobo: number; spentThisWeekKobo: number; weeklyLimitKobo: number }>('wallet_summary'),
         client.from('ledger_entries').select('*').eq('user_id', me).order('created_at', { ascending: false }).limit(200).returns<LedgerRow[]>(),
         client.from('pending_limits').select('*').eq('user_id', me).maybeSingle<{ amount_kobo: number; effective_at: string }>(),
+        client
+          .from('deposits')
+          .select('tx_ref, amount_kobo, created_at')
+          .eq('user_id', me)
+          .eq('status', 'pending')
+          .gte('created_at', dayAgo)
+          .order('created_at', { ascending: false })
+          .returns<{ tx_ref: string; amount_kobo: number; created_at: string }[]>(),
       ])
       const p = unwrap(pending)
       return {
@@ -392,6 +437,7 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
         spentThisWeekKobo: num(summary.spentThisWeekKobo),
         weeklyLimitKobo: num(summary.weeklyLimitKobo),
         pendingLimit: p ? { amountKobo: num(p.amount_kobo), effectiveAt: p.effective_at } : null,
+        pendingDeposits: unwrap(deposits).map((d) => ({ txRef: d.tx_ref, amountKobo: num(d.amount_kobo), createdAt: d.created_at })),
       }
     },
 

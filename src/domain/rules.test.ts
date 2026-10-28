@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { nairaToKobo as k } from './money'
-import { balanceFromLedger, checkPurchase, consolationCredit, maxPurchasable, spentInLastWeek, splitPayment } from './rules'
+import { balanceFromLedger, checkPurchase, consolationCredit, maxPurchasable, spentInLastWeek, splitPayment, topUpError } from './rules'
 import type { LedgerEntry, Listing, User } from './types'
 
 const user: User = { id: 'u1', displayName: 'Test', state: 'Lagos', weeklyLimitKobo: k(50_000), ageVerified: true }
@@ -41,4 +41,11 @@ describe('wallet helpers', () => {
   it('spends credit before cash', () => expect(splitPayment(k(5_000), { cashKobo: k(10_000), creditKobo: k(2_000) })).toEqual({ fromCredit: k(2_000), fromCash: k(3_000) }))
   it('computes consolation credit', () => expect(consolationCredit(k(15_000))).toBe(k(3_000)))
   it('caps purchasable quantity', () => expect(maxPurchasable(listing, 15)).toBe(5))
+  it('keeps top-ups between ₦100 and ₦500,000', () => {
+    expect(topUpError(k(100))).toBeNull()
+    expect(topUpError(k(500_000))).toBeNull()
+    expect(topUpError(0)).toBe('Enter an amount to add.')
+    expect(topUpError(k(99))).toBe('The smallest top-up is ₦100.')
+    expect(topUpError(k(500_001))).toBe('The largest single top-up is ₦500,000.')
+  })
 })

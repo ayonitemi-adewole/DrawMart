@@ -11,6 +11,8 @@ The app still runs on the in-browser mock by default. Supabase switches on only 
 | `supabase/migrations/…_drawmart_core.sql` | Tables, security rules, and every write as a database function (buy tickets, run draws, refunds, listings, approvals) |
 | `supabase/seed.sql` | The same sample stores and draws as the mock |
 | `supabase/tests/db.test.ts` | Runs the migration in a local Postgres (PGlite, no Docker) and checks it against `src/domain` |
+| `supabase/migrations/…_flutterwave_deposits.sql` | Deposits table and the functions that start and complete a Flutterwave top-up |
+| `supabase/functions/` | Edge Functions: `confirm-deposit` (checks a payment after checkout) and `flutterwave-webhook` |
 | `supabase/config.toml` | Supabase CLI settings |
 | `src/api/supabase.ts` | `DrawMartApi` implemented on Supabase |
 | `src/pages/SignInPage.tsx` | Email sign-in link screen |
@@ -109,9 +111,36 @@ Reload the app.
 - **Demo controls** on a listing (signed in as an admin; they're hidden for everyone else): "sell out" runs the draw; open the result and press **Verify**.
 - **Merchant dashboard**: create a listing with a photo. The photo uploads to the `listing-photos` storage bucket.
 - **Admin review**: approve it; it appears on the home page.
-- **Wallet**: test top-ups and spending limits.
+- **Wallet**: top-ups (instant test money, or Flutterwave's test checkout once Step 9 is done) and spending limits.
 
 Sign in from a second email in a private window to see another buyer's view. You won't see the first account's tickets or wallet.
+
+## Step 9 (optional): Flutterwave top-ups
+
+Without this, the wallet's top-up buttons add test money instantly. With it, they open Flutterwave's checkout (card, bank transfer, USSD). Use Flutterwave **test** keys until the licence is granted: the app and the Edge Functions both refuse a live key while test mode is on (and a test key once it's off).
+
+1. In the [Flutterwave dashboard](https://app.flutterwave.com), switch to **Test mode** and open **Settings → API keys**. Copy the public key (`FLWPUBK_TEST-…`) and secret key (`FLWSECK_TEST-…`).
+2. Pick a long random string as your webhook secret hash.
+3. Give the secret key and hash to your Supabase project and deploy the functions:
+
+   ```bash
+   npx supabase secrets set FLW_SECRET_KEY=FLWSECK_TEST-… FLW_WEBHOOK_HASH=your-random-string
+   npx supabase functions deploy confirm-deposit
+   npx supabase functions deploy flutterwave-webhook
+   ```
+
+4. In Flutterwave, **Settings → Webhooks**: set the URL to `https://<project-ref>.supabase.co/functions/v1/flutterwave-webhook`, paste the same secret hash, and tick the charge-completed events.
+5. Add the public key to `.env.local` and restart `npm run dev`:
+
+   ```bash
+   VITE_FLUTTERWAVE_PUBLIC_KEY=FLWPUBK_TEST-…
+   ```
+
+Try it on the Wallet page with one of [Flutterwave's test cards](https://developer.flutterwave.com/docs/test-cards).
+
+**How a top-up works:** `start_deposit` records a pending deposit with a fresh `tx_ref`; the buyer pays in Flutterwave's modal; `confirm-deposit` asks Flutterwave's API (with the secret key) whether that `tx_ref` was paid in full, in naira, and only then calls `complete_deposit`, which adds the `topup` ledger entry. The webhook does the same for payments that settle later, such as bank transfers. Either path can run first or both can run: a deposit is credited once. The browser's "payment successful" is never trusted on its own, and the secret key only lives in Supabase secrets.
+
+Running the functions locally: copy `supabase/functions/.env.example` to `supabase/functions/.env`, then `npx supabase functions serve`. Flutterwave can't reach your computer, so webhooks only work on the hosted project (or through a tunnel).
 
 ## How it's secured
 
@@ -119,6 +148,7 @@ Sign in from a second email in a private window to see another buyer's view. You
 - Every **write** is a database function (`buy_tickets`, `create_listing`, `approve_listing`, …) that checks the same rules as `src/domain`. People can't change balances or ticket counts directly, even with the API key.
 - **Draw seeds** sit in a `private` schema the API never exposes, and are copied into `draw_results` only when the draw runs.
 - **Who won** isn't public: anyone can read and verify a draw result, but not `draw_results.winner_user_id`. The app works out "you won" from your own tickets.
+- **Top-ups**: only the Edge Functions (service role) can call `complete_deposit`, and only after Flutterwave's API confirms the payment. Short or non-naira payments are marked failed, not credited.
 - `app_settings.test_mode` (on by default) allows test top-ups and the admin demo controls. While it's on, new accounts are treated as verified Lagos adults.
 
 ## Optional: run Supabase on your computer
@@ -147,7 +177,8 @@ If you install Docker, `npx supabase start` runs a full local Supabase (with a m
 ## Before real money
 
 - Turn off test mode: set `test_mode = false` in the `app_settings` table **and** `VITE_TEST_MODE=false`.
-- Real top-ups from a payment provider (e.g. Paystack or Flutterwave): an Edge Function that verifies the payment webhook and inserts the `topup` ledger entry.
+- Switch Flutterwave to live keys (`FLWPUBK-…` in the app, `FLWSECK-…` in Supabase secrets) at the same time as test mode goes off, and set the live webhook in Flutterwave's live dashboard.
+- A way for admins to see deposits marked failed (paid short, or the wrong currency) and settle them with Flutterwave.
 - KYC (NIN/BVN) to set `age_verified` and `state` on profiles. Until then, new accounts can't buy tickets outside test mode.
 - Store payouts and caution-fee charging.
 - **Draw fairness:** today the server makes the closing reference, so a dishonest operator could in theory retry it. Before launch, take it from a public randomness source after the draw closes, such as a [drand](https://drand.love) round.

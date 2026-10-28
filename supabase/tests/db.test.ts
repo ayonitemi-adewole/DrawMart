@@ -20,7 +20,7 @@ const SUPABASE_STUBS = `
   create role authenticated nologin;
   create role service_role nologin;
   create schema extensions;
-  grant usage on schema public, extensions to anon, authenticated;
+  grant usage on schema public, extensions to anon, authenticated, service_role;
   create schema auth;
   grant usage on schema auth to anon, authenticated;
   create table auth.users (
@@ -46,6 +46,16 @@ interface PgError extends Error {
 async function asUser<T = Record<string, unknown>>(userId: string | null, query: string, params: unknown[] = []): Promise<T[]> {
   await db.query(`select set_config('request.jwt.claim.sub', $1, false)`, [userId ?? ''])
   await db.exec(userId ? 'set role authenticated' : 'set role anon')
+  try {
+    return (await db.query<T>(query, params)).rows
+  } finally {
+    await db.exec('reset role')
+  }
+}
+
+/** As the Edge Functions run: the service role, no user. */
+async function asService<T = Record<string, unknown>>(query: string, params: unknown[] = []): Promise<T[]> {
+  await db.exec('set role service_role')
   try {
     return (await db.query<T>(query, params)).rows
   } finally {
@@ -365,6 +375,78 @@ describe('deadlines and demo controls', () => {
     } finally {
       await admin(`update public.app_settings set test_mode = true`)
     }
+  })
+})
+
+describe('flutterwave deposits', () => {
+  let buyer: string
+  let other: string
+  type Checkout = { txRef: string; amountKobo: number; email: string; name: string }
+  const start = async (amount: number, who = buyer) => (await asUser<{ c: Checkout }>(who, `select public.start_deposit($1) c`, [amount]))[0].c
+  const complete = async (txRef: string, status: string, amountKobo: number | null, currency = 'NGN') =>
+    (await asService<{ s: string }>(`select public.complete_deposit($1, $2, $3, $4, 'FLW-1') s`, [txRef, status, amountKobo, currency]))[0].s
+  const depositStatus = async (txRef: string) => (await admin<{ status: string }>(`select status from public.deposits where tx_ref = $1`, [txRef]))[0].status
+
+  beforeAll(async () => {
+    buyer = await newUser('payer@example.com')
+    other = await newUser('snoop@example.com')
+  })
+
+  it('starts a pending deposit with what the checkout needs', async () => {
+    const c = await start(2_000_000)
+    expect(c).toMatchObject({ amountKobo: 2_000_000, email: 'payer@example.com', name: 'payer' })
+    expect(c.txRef).toMatch(/^DM-[0-9A-F]{32}$/)
+    expect(await asUser(buyer, `select status from public.deposits where tx_ref = $1`, [c.txRef])).toEqual([{ status: 'pending' }])
+    expect(await asUser(other, `select * from public.deposits`)).toEqual([])
+  })
+
+  it('checks the amount like topUpError', async () => {
+    for (const [amount, text] of [[0, 'Enter an amount'], [9_999, 'smallest top-up is ₦100.'], [50_000_001, 'largest single top-up is ₦500,000.']] as const) {
+      const e = await expectFail(start(amount), 'invalid_input')
+      expect(e.detail).toContain(text)
+    }
+    await expectFail(asUser(buyer, `select public.top_up(50000001)`), 'invalid_input')
+    await expect(asUser(null, `select public.start_deposit(10000)`)).rejects.toThrow(/permission denied/)
+  })
+
+  it('credits the wallet once, only through the service role', async () => {
+    const c = await start(1_500_000)
+    const before = await balance(buyer)
+    await expect(asUser(buyer, `select public.complete_deposit($1, 'successful', 1500000, 'NGN', 'x')`, [c.txRef])).rejects.toThrow(/permission denied/)
+
+    expect(await complete(c.txRef, 'successful', 1_500_000)).toBe('successful')
+    expect(await complete(c.txRef, 'successful', 1_500_000)).toBe('successful') // webhook and confirm both arrive
+    expect(Number((await balance(buyer)).cash)).toBe(Number(before.cash) + 1_500_000)
+    const [entry] = await asUser<{ memo: string }>(buyer, `select memo from public.ledger_entries order by created_at desc limit 1`)
+    expect(entry.memo).toBe('Wallet top-up (Flutterwave test)')
+  })
+
+  it('never credits short or foreign-currency payments', async () => {
+    const before = await balance(buyer)
+    const short = await start(1_000_000)
+    expect(await complete(short.txRef, 'successful', 999_999)).toBe('failed')
+    const usd = await start(1_000_000)
+    expect(await complete(usd.txRef, 'successful', 1_000_000, 'USD')).toBe('failed')
+    expect(await balance(buyer)).toEqual(before)
+  })
+
+  it('keeps pending while unpaid, and still credits a late payment after a cancel', async () => {
+    const c = await start(500_000)
+    expect(await complete(c.txRef, 'pending', null)).toBe('pending')
+    await asUser(other, `select public.cancel_deposit($1)`, [c.txRef]) // not theirs: no effect
+    expect(await depositStatus(c.txRef)).toBe('pending')
+    await asUser(buyer, `select public.cancel_deposit($1)`, [c.txRef])
+    expect(await depositStatus(c.txRef)).toBe('cancelled')
+    expect(await complete(c.txRef, 'failed', null)).toBe('cancelled')
+    expect(await complete(c.txRef, 'successful', 500_000)).toBe('successful')
+    await expectFail(complete('DM-NOPE', 'successful', 1), 'not_found')
+  })
+
+  it('limits unfinished deposits', async () => {
+    const spammer = await newUser('spam@example.com')
+    for (let i = 0; i < 10; i++) await start(10_000, spammer)
+    const e = await expectFail(start(10_000, spammer), 'invalid_input')
+    expect(e.detail).toContain('Too many unfinished top-ups')
   })
 })
 

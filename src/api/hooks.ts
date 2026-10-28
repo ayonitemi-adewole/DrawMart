@@ -65,6 +65,17 @@ export function useTopUp() {
   return useMutation({ mutationFn: (amount: Kobo) => api.topUp(amount), onSettled: invalidate })
 }
 
+/** Top-up through the payment provider's checkout. Only when `api.payments` exists. */
+export function useDeposit() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: (amount: Kobo) => api.payments!.deposit(amount), onSettled: invalidate })
+}
+
+export function useCheckDeposit() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: (txRef: string) => api.payments!.checkDeposit(txRef), onSettled: invalidate })
+}
+
 export function useSetWeeklyLimit() {
   const invalidate = useInvalidateAll()
   return useMutation({ mutationFn: (amount: Kobo) => api.setWeeklyLimit(amount), onSettled: invalidate })

@@ -46,6 +46,7 @@ src/
     types.ts     DrawMartApi interface: the contract the backend must implement
     mock.ts      localStorage implementation of that contract
     supabase.ts  Supabase implementation (reads via RLS, writes via RPC)
+  lib/flutterwave.ts  Flutterwave checkout modal (top-ups on Supabase)
     hooks.ts     TanStack Query hooks used by pages
     index.ts     Picks the implementation from VITE_BACKEND
   components/  UI kit, icons, toasts, listing card

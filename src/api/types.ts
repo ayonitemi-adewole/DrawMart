@@ -47,7 +47,18 @@ export interface WalletView {
   spentThisWeekKobo: Kobo
   weeklyLimitKobo: Kobo
   pendingLimit: { amountKobo: Kobo; effectiveAt: string } | null
+  /** Paid top-ups the payment provider hasn't confirmed yet (e.g. a bank transfer on its way). */
+  pendingDeposits: PendingDeposit[]
 }
+
+export interface PendingDeposit {
+  txRef: string
+  amountKobo: Kobo
+  createdAt: string
+}
+
+/** Where a top-up ended up. 'cancelled': the buyer closed the checkout without paying. */
+export type DepositStatus = 'successful' | 'pending' | 'failed' | 'cancelled'
 
 export interface PurchaseReceipt {
   purchaseId: string
@@ -112,11 +123,26 @@ export interface AuthAdapter {
   signOut(): Promise<void>
 }
 
+/**
+ * Real top-ups through a payment provider. Absent when top-ups are instant
+ * test money (the mock, or no provider configured); use `topUp` then.
+ */
+export interface PaymentsAdapter {
+  /** Shown to buyers, e.g. "Flutterwave". */
+  readonly provider: string
+  /** Opens the provider's checkout and resolves once the buyer finishes or leaves. */
+  deposit(amountKobo: Kobo): Promise<DepositStatus>
+  /** Asks the provider again about a pending deposit. */
+  checkDeposit(txRef: string): Promise<DepositStatus>
+}
+
 export interface DrawMartApi {
   /** True while no real money moves: test top-ups, demo controls and the test banner. */
   readonly testMode: boolean
   /** Present when the backend has user accounts. */
   readonly auth?: AuthAdapter
+  /** Present when top-ups go through a payment provider. */
+  readonly payments?: PaymentsAdapter
 
   // Session
   getCurrentUser(): Promise<User>
@@ -131,6 +157,7 @@ export interface DrawMartApi {
 
   // Wallet
   getWallet(): Promise<WalletView>
+  /** Instant test money. Errors outside test mode; real top-ups use `payments`. */
   topUp(amountKobo: Kobo): Promise<void>
   setWeeklyLimit(amountKobo: Kobo): Promise<void>
 

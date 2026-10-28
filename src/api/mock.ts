@@ -28,6 +28,7 @@ import {
   consolationCredit,
   spentInLastWeek,
   splitPayment,
+  topUpError,
 } from '@/domain/rules'
 import type { Category, DrawResult, LedgerEntry, Listing, ListingStatus, Merchant, Ticket, UnsoldPolicy, User } from '@/domain/types'
 import {
@@ -472,12 +473,14 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           spentThisWeekKobo: spentInLastWeek(mine, new Date(now())),
           weeklyLimitKobo: me(db).weeklyLimitKobo,
           pendingLimit: db.pendingLimits[ME] ?? null,
+          pendingDeposits: [], // the mock has no payment provider
         }
       }),
 
     topUp: (amountKobo) =>
       tx((db) => {
-        if (!Number.isInteger(amountKobo) || amountKobo <= 0) throw new ApiError('invalid_input', 'Enter an amount to add.')
+        const problem = topUpError(amountKobo)
+        if (problem) throw new ApiError('invalid_input', problem)
         db.ledger.push({ id: uid('E'), userId: ME, kind: 'topup', cashKobo: amountKobo, creditKobo: 0, memo: 'Wallet top-up (test money)', createdAt: iso(now()) })
       }),
 
