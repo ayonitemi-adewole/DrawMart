@@ -142,7 +142,7 @@ const SEED_LISTINGS: SeedListing[] = [
     price: 210_000_000, ticket: 50_000, sold: 1_130, closesInHours: 480,
   },
   {
-    merchantId: 'm-vi', title: 'Mercedes-AMG G 63 2025', category: 'Cars', images: img('mercedesBenzG632025.jpg'),
+    merchantId: 'm-vi', title: 'Mercedes-AMG G 63 2025', category: 'Cars', images: img('MercedesG-wagon.jpg'),
     description: 'Brand new with full dealer history. Registration in the winner’s name.',
     price: 330_000_000, ticket: 50_000, sold: 540, closesInHours: 600,
   },
