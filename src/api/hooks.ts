@@ -73,7 +73,7 @@ export function useDemoActions() {
     sellOut: useMutation({ mutationFn: (id: string) => api.demoSellOut(id), onSettled: invalidate }),
     expire: useMutation({ mutationFn: (id: string) => api.demoExpire(id), onSettled: invalidate }),
     reset: useMutation({
-      mutationFn: () => api.demoReset(),
+      mutationFn: () => api.demoReset?.() ?? Promise.resolve(),
       onSuccess: () => window.location.assign('/'),
     }),
   }

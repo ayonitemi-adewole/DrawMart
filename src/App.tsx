@@ -5,6 +5,7 @@ import { SearchIcon } from '@/components/icons'
 import { EmptyState, ErrorState, buttonClass } from '@/components/ui'
 import { BackOfficeLayout } from '@/layouts/BackOfficeLayout'
 import { BuyerLayout } from '@/layouts/BuyerLayout'
+import { AuthGate } from '@/pages/SignInPage'
 import { AdminPage } from '@/pages/admin/AdminPage'
 import { DrawsPage } from '@/pages/DrawsPage'
 import { HomePage } from '@/pages/HomePage'
@@ -48,24 +49,31 @@ function NotFound() {
 
 const router = createBrowserRouter([
   {
-    element: <BuyerLayout />,
+    // Shows the sign-in screen when the backend has accounts and nobody is signed in.
+    element: <AuthGate />,
     errorElement: <RouteError />,
     children: [
-      { index: true, element: <HomePage /> },
-      { path: 'listings/:id', element: <ListingPage /> },
-      { path: 'tickets', element: <TicketsPage /> },
-      { path: 'draws', element: <DrawsPage /> },
-      { path: 'draws/:id', element: <ResultPage /> },
-      { path: 'wallet', element: <WalletPage /> },
-      { path: '*', element: <NotFound /> },
-    ],
-  },
-  {
-    element: <BackOfficeLayout />,
-    errorElement: <RouteError />,
-    children: [
-      { path: 'merchant', element: <MerchantPage /> },
-      { path: 'admin', element: <AdminPage /> },
+      {
+        element: <BuyerLayout />,
+        errorElement: <RouteError />,
+        children: [
+          { index: true, element: <HomePage /> },
+          { path: 'listings/:id', element: <ListingPage /> },
+          { path: 'tickets', element: <TicketsPage /> },
+          { path: 'draws', element: <DrawsPage /> },
+          { path: 'draws/:id', element: <ResultPage /> },
+          { path: 'wallet', element: <WalletPage /> },
+          { path: '*', element: <NotFound /> },
+        ],
+      },
+      {
+        element: <BackOfficeLayout />,
+        errorElement: <RouteError />,
+        children: [
+          { path: 'merchant', element: <MerchantPage /> },
+          { path: 'admin', element: <AdminPage /> },
+        ],
+      },
     ],
   },
 ])

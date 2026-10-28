@@ -2,18 +2,20 @@
 
 A Lagos marketplace where verified stores list real items and buyers get tickets for a fraction of the price. When every ticket sells, a provably fair draw picks the winner. Losing buyers get part of their spend back as store credit.
 
-> **Status:** frontend MVP running against an in-browser mock backend. **Test mode only: no real money.** Do not take real payments until the LSLGA licence is in place.
+> **Status:** runs on an in-browser mock by default, or on Supabase (see [docs/supabase-setup.md](docs/supabase-setup.md)). **Test mode only: no real money.** Do not take real payments until the LSLGA licence is in place.
 
 ## Run it
 
 ```bash
 npm install
 npm run dev        # http://localhost:5173
-npm test           # domain + mock API tests (Vitest)
+npm test           # domain, mock API and database tests (Vitest + PGlite)
 npm run typecheck
 npm run lint       # oxlint
 npm run build
 ```
+
+To run against Supabase instead of the mock, follow [docs/supabase-setup.md](docs/supabase-setup.md) and set `VITE_BACKEND=supabase` in `.env.local`.
 
 Routes:
 
@@ -43,11 +45,16 @@ src/
   api/
     types.ts     DrawMartApi interface: the contract the backend must implement
     mock.ts      localStorage implementation of that contract
+    supabase.ts  Supabase implementation (reads via RLS, writes via RPC)
     hooks.ts     TanStack Query hooks used by pages
-    index.ts     Picks the implementation (swap mock → real here)
+    index.ts     Picks the implementation from VITE_BACKEND
   components/  UI kit, icons, toasts, listing card
   layouts/     Buyer shell (mobile bottom nav) and back-office shell
-  pages/       Screens
+  pages/       Screens (SignInPage.tsx only shows with Supabase)
+supabase/
+  migrations/  Schema, row-level security, and the database functions for every write
+  seed.sql     Sample stores and draws
+  tests/       Runs the migration in PGlite and checks it against src/domain
 ```
 
 The UI only talks to `DrawMartApi`. To add a real backend, implement that interface (Supabase, NestJS, …) and change one line in `src/api/index.ts`. `src/api/mock.test.ts` describes the behaviour the backend must match.
@@ -77,7 +84,7 @@ The UI only talks to `DrawMartApi`. To add a real backend, implement that interf
 
 ## Before going live
 
-- Real backend implementing `DrawMartApi`, with the draw and wallet logic in transactions.
+- Finish the Supabase setup for production (see the last section of docs/supabase-setup.md).
 - Payments (bank transfer / card) and payouts to merchants after delivery confirmation.
 - KYC (NIN/BVN) for age and state of residence.
 - Merchant onboarding with CAC verification, escrow check-in, product photo uploads.

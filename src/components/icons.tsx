@@ -322,3 +322,9 @@ export const GridIcon = (p: IconProps) => (
     <rect x="14" y="14" width="7" height="7" rx="1.5" />
   </Icon>
 )
+export const MailIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <path d="M3 7l9 6 9-6" />
+  </Icon>
+)

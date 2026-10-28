@@ -374,14 +374,15 @@ function AccountCard() {
         >
           Replay the intro
         </Button>
-        {api.testMode ? (
+        {api.auth ? <SignOutButton /> : null}
+        {api.testMode && api.demoReset ? (
           <Button variant="danger" size="sm" onClick={() => setConfirmReset(true)}>
             Reset demo data
           </Button>
         ) : null}
       </div>
 
-      {api.testMode ? (
+      {api.testMode && api.demoReset ? (
         <Sheet open={confirmReset} onClose={() => setConfirmReset(false)} title="Reset demo data">
           <h2 className="pr-10 font-display text-2xl font-extrabold">Start over?</h2>
           <p className="text-sm text-muted">This clears your test wallet, tickets and any listings you created, and reloads the sample draws.</p>
@@ -396,5 +397,23 @@ function AccountCard() {
         </Sheet>
       ) : null}
     </Card>
+  )
+}
+
+function SignOutButton() {
+  const [busy, setBusy] = useState(false)
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      loading={busy}
+      onClick={async () => {
+        setBusy(true)
+        await api.auth?.signOut()
+        window.location.assign('/')
+      }}
+    >
+      Sign out
+    </Button>
   )
 }

@@ -33,7 +33,7 @@ export function TestModeBanner() {
   return (
     <div className="flex items-center justify-center gap-2 bg-ticket px-4 py-1.5 text-center text-xs font-bold text-on-ticket">
       <span className="rounded-full bg-on-ticket px-1.5 py-px text-[10px] tracking-wider text-ticket">TEST</span>
-      No real money. Data is stored in this browser only.
+      {api.auth ? 'No real money. Test accounts and test money only.' : 'No real money. Data is stored in this browser only.'}
     </div>
   )
 }

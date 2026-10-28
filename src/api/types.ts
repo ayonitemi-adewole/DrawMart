@@ -92,9 +92,26 @@ export class ApiError extends Error {
   }
 }
 
+export interface AuthSession {
+  userId: string
+  email: string | null
+}
+
+/** Sign-in for backends that have real accounts. The mock has none. */
+export interface AuthAdapter {
+  getSession(): Promise<AuthSession | null>
+  /** Calls back on sign-in and sign-out. Returns an unsubscribe function. */
+  onChange(callback: (session: AuthSession | null) => void): () => void
+  /** Emails a one-time sign-in link that returns to `redirectTo`. */
+  sendSignInLink(email: string, redirectTo: string): Promise<void>
+  signOut(): Promise<void>
+}
+
 export interface DrawMartApi {
-  /** True while running against the in-browser mock with fake money. */
+  /** True while no real money moves: test top-ups, demo controls and the test banner. */
   readonly testMode: boolean
+  /** Present when the backend has user accounts. */
+  readonly auth?: AuthAdapter
 
   // Session
   getCurrentUser(): Promise<User>
@@ -123,8 +140,9 @@ export interface DrawMartApi {
   approveListing(id: string): Promise<void>
   rejectListing(id: string): Promise<void>
 
-  // Demo-only helpers (no-ops / errors in production)
+  // Demo-only helpers (errors outside test mode; admins only on a real backend)
   demoSellOut(listingId: string): Promise<void>
   demoExpire(listingId: string): Promise<void>
-  demoReset(): Promise<void>
+  /** Wipes all data. Only the in-browser mock can do this. */
+  demoReset?(): Promise<void>
 }
