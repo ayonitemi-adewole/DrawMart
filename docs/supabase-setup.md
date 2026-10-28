@@ -63,6 +63,8 @@ select cron.schedule('drawmart-process-deadlines', '* * * * *', 'select private.
    - **Redirect URLs**: add `http://localhost:5173/**`
 2. **Authentication → Sign In / Providers → Email** should be enabled (it is by default).
 
+People sign in on `/login`, either with an emailed link (this also creates their account the first time) or with a password if their account has one. Browsing draws doesn't need an account.
+
 Supabase's built-in email sender only allows a few emails per hour. That's fine for testing; before launch, add your own SMTP provider under **Authentication → Emails → SMTP Settings**.
 
 ## Step 6: Point the app at Supabase
@@ -104,7 +106,7 @@ Reload the app.
 ## Step 8: Try the whole flow
 
 - **Buy tickets** on a live draw; your wallet goes down and your numbers appear under Tickets.
-- **Demo controls** on a listing: "sell out" runs the draw; open the result and press **Verify**.
+- **Demo controls** on a listing (signed in as an admin; they're hidden for everyone else): "sell out" runs the draw; open the result and press **Verify**.
 - **Merchant dashboard**: create a listing with a photo. The photo uploads to the `listing-photos` storage bucket.
 - **Admin review**: approve it; it appears on the home page.
 - **Wallet**: test top-ups and spending limits.
@@ -116,7 +118,19 @@ Sign in from a second email in a private window to see another buyer's view. You
 - The app can only **read** tables, and row-level security limits what each person sees: their own tickets, wallet and profile; public listings; and, for stores and admins, their own listings and pickup details.
 - Every **write** is a database function (`buy_tickets`, `create_listing`, `approve_listing`, …) that checks the same rules as `src/domain`. People can't change balances or ticket counts directly, even with the API key.
 - **Draw seeds** sit in a `private` schema the API never exposes, and are copied into `draw_results` only when the draw runs.
+- **Who won** isn't public: anyone can read and verify a draw result, but not `draw_results.winner_user_id`. The app works out "you won" from your own tickets.
 - `app_settings.test_mode` (on by default) allows test top-ups and the admin demo controls. While it's on, new accounts are treated as verified Lagos adults.
+
+## Optional: run Supabase on your computer
+
+If you install [Docker Desktop](https://www.docker.com/products/docker-desktop/), you can run the whole stack locally instead of using a hosted project:
+
+```bash
+npx supabase start      # prints a local API URL and publishable key for .env.local
+npx supabase db reset   # re-runs migrations, seed.sql and seed-local-accounts.sql
+```
+
+`seed-local-accounts.sql` adds three password accounts for local testing only (password `drawmart-demo`): `buyer@drawmart.test`, `store@drawmart.test` (Ikeja Partner Store) and `admin@drawmart.test`. The sign-in page has buttons that fill them in. **Never run that file on a hosted project.** It creates an admin with a published password. `db push` doesn't run seeds, so it can't happen by accident.
 
 ## Changing the database later
 

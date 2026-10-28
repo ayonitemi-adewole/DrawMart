@@ -95,6 +95,9 @@ export class ApiError extends Error {
 export interface AuthSession {
   userId: string
   email: string | null
+  isAdmin: boolean
+  /** The store this account manages, if any. */
+  merchantId: string | null
 }
 
 /** Sign-in for backends that have real accounts. The mock has none. */
@@ -102,8 +105,10 @@ export interface AuthAdapter {
   getSession(): Promise<AuthSession | null>
   /** Calls back on sign-in and sign-out. Returns an unsubscribe function. */
   onChange(callback: (session: AuthSession | null) => void): () => void
-  /** Emails a one-time sign-in link that returns to `redirectTo`. */
+  /** Emails a one-time sign-in link that returns to `redirectTo`. Creates the account on first use. */
   sendSignInLink(email: string, redirectTo: string): Promise<void>
+  /** For accounts that have a password, e.g. the local demo accounts. */
+  signInWithPassword(email: string, password: string): Promise<void>
   signOut(): Promise<void>
 }
 

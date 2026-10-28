@@ -1,17 +1,21 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query'
+import { useEffect } from 'react'
 import { Link, RouterProvider, createBrowserRouter, useRouteError } from 'react-router'
+import { api } from '@/api'
+import { keys } from '@/api/hooks'
+import { RequireSignIn } from '@/components/RequireSignIn'
 import { ToastProvider } from '@/components/toast'
 import { SearchIcon } from '@/components/icons'
 import { EmptyState, ErrorState, buttonClass } from '@/components/ui'
 import { BackOfficeLayout } from '@/layouts/BackOfficeLayout'
 import { BuyerLayout } from '@/layouts/BuyerLayout'
-import { AuthGate } from '@/pages/SignInPage'
 import { AdminPage } from '@/pages/admin/AdminPage'
 import { DrawsPage } from '@/pages/DrawsPage'
 import { HomePage } from '@/pages/HomePage'
 import { ListingPage } from '@/pages/ListingPage'
 import { MerchantPage } from '@/pages/merchant/MerchantPage'
 import { ResultPage } from '@/pages/ResultPage'
+import { SignInPage } from '@/pages/SignInPage'
 import { TicketsPage } from '@/pages/TicketsPage'
 import { WalletPage } from '@/pages/WalletPage'
 
@@ -47,33 +51,47 @@ function NotFound() {
   )
 }
 
+/** Keeps the cached session current, and never shows one account's data to another. */
+function SessionSync() {
+  const qc = useQueryClient()
+  useEffect(() => {
+    if (!api.auth) return
+    let lastUser: string | null | undefined
+    void api.auth.getSession().then((s) => {
+      lastUser ??= s?.userId ?? null
+    })
+    return api.auth.onChange((s) => {
+      const user = s?.userId ?? null
+      if (lastUser !== undefined && lastUser !== user) qc.clear()
+      lastUser = user
+      qc.setQueryData(keys.session, s)
+    })
+  }, [qc])
+  return null
+}
+
+// Browsing is public. Buying, wallets and the back office need the right account (on Supabase).
 const router = createBrowserRouter([
   {
-    // Shows the sign-in screen when the backend has accounts and nobody is signed in.
-    element: <AuthGate />,
+    element: <BuyerLayout />,
     errorElement: <RouteError />,
     children: [
-      {
-        element: <BuyerLayout />,
-        errorElement: <RouteError />,
-        children: [
-          { index: true, element: <HomePage /> },
-          { path: 'listings/:id', element: <ListingPage /> },
-          { path: 'tickets', element: <TicketsPage /> },
-          { path: 'draws', element: <DrawsPage /> },
-          { path: 'draws/:id', element: <ResultPage /> },
-          { path: 'wallet', element: <WalletPage /> },
-          { path: '*', element: <NotFound /> },
-        ],
-      },
-      {
-        element: <BackOfficeLayout />,
-        errorElement: <RouteError />,
-        children: [
-          { path: 'merchant', element: <MerchantPage /> },
-          { path: 'admin', element: <AdminPage /> },
-        ],
-      },
+      { index: true, element: <HomePage /> },
+      { path: 'login', element: <SignInPage /> },
+      { path: 'listings/:id', element: <ListingPage /> },
+      { path: 'tickets', element: <RequireSignIn><TicketsPage /></RequireSignIn> },
+      { path: 'draws', element: <DrawsPage /> },
+      { path: 'draws/:id', element: <ResultPage /> },
+      { path: 'wallet', element: <RequireSignIn><WalletPage /></RequireSignIn> },
+      { path: '*', element: <NotFound /> },
+    ],
+  },
+  {
+    element: <BackOfficeLayout />,
+    errorElement: <RouteError />,
+    children: [
+      { path: 'merchant', element: <RequireSignIn need="store"><MerchantPage /></RequireSignIn> },
+      { path: 'admin', element: <RequireSignIn need="admin"><AdminPage /></RequireSignIn> },
     ],
   },
 ])
@@ -81,6 +99,7 @@ const router = createBrowserRouter([
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
+      <SessionSync />
       <ToastProvider>
         <RouterProvider router={router} />
       </ToastProvider>

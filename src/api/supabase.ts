@@ -46,7 +46,6 @@ interface DrawResultRow {
   seed: string
   closing_ref: string
   winning_number: number
-  winner_user_id: string | null
   drawn_at: string
 }
 
@@ -100,7 +99,9 @@ interface LedgerRow {
   created_at: string
 }
 
-const LISTING_SELECT = '*, merchant:merchants(*), result:draw_results(*), handover:listing_handovers(*)'
+// draw_results.winner_user_id isn't readable by clients, so name the columns.
+const RESULT_COLUMNS = 'listing_id, commitment, seed, closing_ref, winning_number, drawn_at'
+const LISTING_SELECT = `*, merchant:merchants(*), result:draw_results(${RESULT_COLUMNS}), handover:listing_handovers(*)`
 const PHOTO_BUCKET = 'listing-photos'
 
 // ---------------------------------------------------------------- errors
@@ -151,30 +152,33 @@ function toLedgerEntry(e: LedgerRow): LedgerEntry {
   }
 }
 
-interface Mine {
+export interface Mine {
   numbers: Map<string, number[]>
   credits: Map<string, number>
 }
 
-function toResultView(
+/** "You won" comes from your own tickets; who else won is never sent to the browser. */
+export function toResultView(
   r: DrawResultRow,
   listing: { title: string; images: string[]; ticket_count: number },
   me: string | null,
   mine: Mine,
 ): DrawResultView {
+  const myNumbers = mine.numbers.get(r.listing_id) ?? []
+  const iWon = !!me && myNumbers.includes(r.winning_number)
   return {
     listingId: r.listing_id,
     commitment: r.commitment,
     seed: r.seed,
     closingRef: r.closing_ref,
     winningNumber: r.winning_number,
-    winnerUserId: r.winner_user_id ?? '',
+    winnerUserId: iWon ? me! : '',
     drawnAt: r.drawn_at,
     listingTitle: listing.title,
     listingImage: listing.images[0] ?? null,
     ticketCount: listing.ticket_count,
-    iWon: !!me && r.winner_user_id === me,
-    myNumbers: mine.numbers.get(r.listing_id) ?? [],
+    iWon,
+    myNumbers,
     myCreditKobo: mine.credits.get(r.listing_id) ?? 0,
   }
 }
@@ -217,7 +221,6 @@ function sortForBrowsing(a: ListingView, b: ListingView) {
   return b.ticketsSold / b.ticketCount - a.ticketsSold / a.ticketCount
 }
 
-const toSession = (s: Session | null): AuthSession | null => (s ? { userId: s.user.id, email: s.user.email ?? null } : null)
 
 // ------------------------------------------------------------------- API
 
@@ -299,14 +302,29 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     )
   }
 
+  /** Adds what the account may do (admin, linked store) to the auth session. */
+  async function toSession(s: Session | null): Promise<AuthSession | null> {
+    if (!s) return null
+    const { data } = await client.from('profiles').select('role, merchant_id').eq('id', s.user.id).maybeSingle<Pick<ProfileRow, 'role' | 'merchant_id'>>()
+    return { userId: s.user.id, email: s.user.email ?? null, isAdmin: data?.role === 'admin', merchantId: data?.merchant_id ?? null }
+  }
+
   const auth: AuthAdapter = {
     async getSession() {
       const { data } = await client.auth.getSession()
       return toSession(data.session)
     },
     onChange(callback) {
-      const { data } = client.auth.onAuthStateChange((_event, session) => callback(toSession(session)))
+      // Supabase warns against awaiting other Supabase calls inside this callback, so defer.
+      const { data } = client.auth.onAuthStateChange((event, session) => {
+        if (event === 'INITIAL_SESSION') return
+        setTimeout(() => void toSession(session).then(callback, () => callback(null)), 0)
+      })
       return () => data.subscription.unsubscribe()
+    },
+    async signInWithPassword(email, password) {
+      const { error } = await client.auth.signInWithPassword({ email, password })
+      if (error) throw new ApiError('invalid_input', error.message === 'Invalid login credentials' ? 'That email and password don’t match.' : error.message)
     },
     async sendSignInLink(email, redirectTo) {
       const { error } = await client.auth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo } })
@@ -353,7 +371,7 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     listResults: async () => {
       type Row = DrawResultRow & { listing: { title: string; images: string[]; ticket_count: number } }
       const rows = unwrap(
-        await client.from('draw_results').select('*, listing:listings(title, images, ticket_count)').order('drawn_at', { ascending: false }).limit(100).returns<Row[]>(),
+        await client.from('draw_results').select(`${RESULT_COLUMNS}, listing:listings(title, images, ticket_count)`).order('drawn_at', { ascending: false }).limit(100).returns<Row[]>(),
       ).filter((r) => r.listing)
       const [me, mine] = await Promise.all([myId(), mineFor(rows.map((r) => r.listing_id))])
       return rows.map((r) => toResultView(r, r.listing, me, mine))

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { api } from '@/api'
-import { useDemoActions, useMe, useSetWeeklyLimit, useTopUp, useUpdateProfile, useWallet } from '@/api/hooks'
+import { useAccess, useDemoActions, useMe, useSetWeeklyLimit, useTopUp, useUpdateProfile, useWallet } from '@/api/hooks'
 import type { WalletView } from '@/api/types'
 import { resetIntro } from '@/components/HowItWorks'
 import { ArrowDownIcon, ArrowUpIcon, CoinIcon, GaugeIcon, GiftIcon, MapPinIcon, PlusIcon, RefreshIcon, SettingsIcon, TicketIcon, WalletIcon, type IconComponent } from '@/components/icons'
@@ -322,6 +322,7 @@ function AccountCard() {
   const me = useMe()
   const update = useUpdateProfile()
   const demo = useDemoActions()
+  const { email } = useAccess()
   const toast = useToast()
   const [confirmReset, setConfirmReset] = useState(false)
   if (!me.data) return <Skeleton className="h-56" />
@@ -333,7 +334,10 @@ function AccountCard() {
         <span className="flex size-10 items-center justify-center rounded-xl bg-sunken text-muted">
           <SettingsIcon size={20} />
         </span>
-        <strong>Account & settings</strong>
+        <div className="flex min-w-0 flex-col">
+          <strong>Account & settings</strong>
+          {email ? <span className="truncate text-xs text-subtle">Signed in as {email}</span> : null}
+        </div>
       </div>
 
       <Field

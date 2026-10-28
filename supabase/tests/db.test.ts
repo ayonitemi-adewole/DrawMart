@@ -5,7 +5,7 @@
  * Calls are made as the `authenticated` role with a user id, the same way
  * Supabase runs API requests, so grants and row-level security are exercised.
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { PGlite } from '@electric-sql/pglite'
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto'
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -23,7 +23,16 @@ const SUPABASE_STUBS = `
   grant usage on schema public, extensions to anon, authenticated;
   create schema auth;
   grant usage on schema auth to anon, authenticated;
-  create table auth.users (id uuid primary key default gen_random_uuid(), email text, raw_user_meta_data jsonb not null default '{}');
+  create table auth.users (
+    id uuid primary key default gen_random_uuid(), email text, raw_user_meta_data jsonb not null default '{}',
+    -- Columns supabase/seed-local-accounts.sql fills in, as on real Supabase.
+    instance_id uuid, aud text, role text, encrypted_password text, email_confirmed_at timestamptz, raw_app_meta_data jsonb,
+    created_at timestamptz, updated_at timestamptz, confirmation_token text, recovery_token text, email_change_token_new text, email_change text
+  );
+  create table auth.identities (
+    id uuid primary key, user_id uuid, provider_id text, identity_data jsonb, provider text,
+    last_sign_in_at timestamptz, created_at timestamptz, updated_at timestamptz
+  );
   create function auth.uid() returns uuid language sql stable
     as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 `
@@ -90,7 +99,8 @@ function listingInput(overrides: Record<string, unknown> = {}) {
 beforeAll(async () => {
   db = new PGlite({ extensions: { pgcrypto } })
   await db.exec(SUPABASE_STUBS)
-  await db.exec(sql('migrations/20261028200000_drawmart_core.sql'))
+  // Every migration, in order, like `supabase db push`.
+  for (const f of readdirSync(new URL('../migrations', import.meta.url)).sort()) await db.exec(sql(`migrations/${f}`))
   await db.exec(sql('seed.sql'))
 }, 60_000)
 
@@ -115,6 +125,29 @@ describe('schema and seed', () => {
     expect(statuses).toEqual(['drawn', 'for_sale', 'live'])
     expect(await asUser(u, `select * from public.listing_handovers`)).toEqual([])
     expect((await asUser(null, `select id from public.listings`)).length).toBeGreaterThan(0)
+  })
+
+  it('shows draw results to everyone but never who won', async () => {
+    const u = await newUser('curious@example.com')
+    for (const who of [u, null]) {
+      expect((await asUser(who, `select listing_id, seed, winning_number from public.draw_results`)).length).toBe(3)
+      await expect(asUser(who, `select winner_user_id from public.draw_results`)).rejects.toThrow(/permission denied/)
+      await expect(asUser(who, `select * from public.draw_results`)).rejects.toThrow(/permission denied/)
+    }
+  })
+
+  it('creates the local demo accounts with the right access', async () => {
+    await db.exec(sql('seed-local-accounts.sql'))
+    await db.exec(sql('seed-local-accounts.sql')) // safe to re-run
+    const rows = await admin<{ email: string; role: string; merchant_id: string | null; has_identity: boolean }>(
+      `select u.email, p.role, p.merchant_id, exists (select 1 from auth.identities i where i.user_id = u.id) has_identity
+         from auth.users u join public.profiles p on p.id = u.id where u.email like '%@drawmart.test' order by u.email`,
+    )
+    expect(rows).toEqual([
+      { email: 'admin@drawmart.test', role: 'admin', merchant_id: null, has_identity: true },
+      { email: 'buyer@drawmart.test', role: 'buyer', merchant_id: null, has_identity: true },
+      { email: 'store@drawmart.test', role: 'buyer', merchant_id: IKEJA, has_identity: true },
+    ])
   })
 
   it('blocks direct writes from API users', async () => {
@@ -257,19 +290,23 @@ describe('store → admin → draw', () => {
     expect(r.drawn).toBe(true)
 
     const [l] = await asUser<{ status: string; commitment: string; caution_fee_status: string }>(alice, `select * from public.listings where id = $1`, [listingId])
-    const [res] = await asUser<{ seed: string; closing_ref: string; winning_number: number; winner_user_id: string }>(alice, `select * from public.draw_results where listing_id = $1`, [listingId])
+    const [res] = await asUser<{ seed: string; closing_ref: string; winning_number: number }>(
+      alice, `select seed, closing_ref, winning_number from public.draw_results where listing_id = $1`, [listingId],
+    )
+    // Only the database knows who won; API users can't read it.
+    const [{ winner_user_id }] = await admin<{ winner_user_id: string }>(`select winner_user_id from public.draw_results where listing_id = $1`, [listingId])
     expect(l.status).toBe('drawn')
     expect(res.closing_ref).toBe(r.purchaseId)
     const v = await verifyDraw({ commitment: l.commitment, seed: res.seed, closingRef: res.closing_ref, ticketCount: 10, claimedWinner: res.winning_number })
     expect(v.valid).toBe(true)
-    expect(res.winner_user_id).toBe(res.winning_number <= 4 ? alice : bob)
+    expect(winner_user_id).toBe(res.winning_number <= 4 ? alice : bob)
 
     // Loser gets 20% of what they spent as store credit; winner gets none.
-    const loser = res.winner_user_id === alice ? bob : alice
+    const loser = winner_user_id === alice ? bob : alice
     const spent = (loser === alice ? 4 : 6) * 10_000
     const credits = async (u: string) => asUser<{ credit_kobo: string }>(u, `select credit_kobo from public.ledger_entries where kind = 'store_credit' and listing_id = $1`, [listingId])
     expect((await credits(loser)).map((c) => Number(c.credit_kobo))).toEqual([spent * 0.2])
-    expect(await credits(res.winner_user_id)).toEqual([])
+    expect(await credits(winner_user_id)).toEqual([])
   })
 })
 

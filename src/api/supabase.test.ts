@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { PURCHASE_ERROR_TEXT } from '@/domain/rules'
-import { toApiError } from './supabase'
+import { toApiError, toResultView } from './supabase'
 
 describe('toApiError', () => {
   it('maps purchase rule codes to their messages', () => {
@@ -20,5 +20,20 @@ describe('toApiError', () => {
 
   it('passes anything else through as invalid input', () => {
     expect(toApiError({ message: 'something odd', details: '', code: 'XX000' })).toMatchObject({ code: 'invalid_input', message: 'something odd' })
+  })
+})
+
+describe('toResultView', () => {
+  const r = { listing_id: 'l1', commitment: 'c', seed: 's', closing_ref: 'P-1', winning_number: 4, drawn_at: '2026-10-02T00:00:00Z' }
+  const listing = { title: 'Phone', images: [], ticket_count: 200 }
+  const mine = (numbers: number[]) => ({ numbers: new Map([['l1', numbers]]), credits: new Map([['l1', 100]]) })
+
+  it('works out "you won" from your own tickets', () => {
+    expect(toResultView(r, listing, 'u1', mine([3, 4]))).toMatchObject({ iWon: true, winnerUserId: 'u1', myNumbers: [3, 4] })
+  })
+
+  it('never names anyone else as the winner', () => {
+    expect(toResultView(r, listing, 'u1', mine([5]))).toMatchObject({ iWon: false, winnerUserId: '', myCreditKobo: 100 })
+    expect(toResultView(r, listing, null, { numbers: new Map(), credits: new Map() })).toMatchObject({ iWon: false, winnerUserId: '' })
   })
 })
