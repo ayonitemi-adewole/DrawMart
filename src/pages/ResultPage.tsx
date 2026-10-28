@@ -139,7 +139,7 @@ function Result({
             <h1 className="font-display text-2xl leading-tight font-extrabold sm:text-3xl">{r.iWon ? `You won ${title}!` : title}</h1>
             <p className="max-w-md text-sm leading-relaxed opacity-90">
               {r.iWon
-                ? 'The item is already in escrow. We’ll call you to arrange delivery in Lagos within 48 hours.'
+                ? 'We’ll call you within 48 hours to arrange delivery or collection in Lagos.'
                 : played
                   ? `Not this time. ${formatNaira(r.myCreditKobo)} store credit has been added to your wallet.`
                   : 'You didn’t have tickets in this draw.'}

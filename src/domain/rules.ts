@@ -12,8 +12,14 @@ export const RULES = {
   /** Raising a weekly limit only takes effect after this delay. */
   limitIncreaseDelayHours: 24,
   defaultFeeBps: 1000,
-  listingDurationsDays: [3, 7, 14, 30] as const,
+  /** Draws run for a store-chosen number of days, counted from approval. */
+  minDurationDays: 3,
+  maxDurationDays: 60,
+  durationPresetsDays: [7, 14, 30] as const,
   extensionDays: 7,
+  /** How far ahead a pickup or inspection can be booked. */
+  handoverMinLeadDays: 1,
+  handoverMaxLeadDays: 14,
 }
 
 export function balanceFromLedger(entries: LedgerEntry[]): WalletBalance {
@@ -48,9 +54,12 @@ export type PurchaseError =
   | 'state_not_licensed'
   | 'age_not_verified'
 
+/** The listing fields purchase rules depend on. */
+export type PurchasableListing = Pick<Listing, 'status' | 'ticketCount' | 'ticketsSold' | 'buyerTicketPriceKobo'>
+
 export interface PurchaseCheckInput {
   user: User
-  listing: Listing
+  listing: PurchasableListing
   quantity: number
   ticketsAlreadyHeld: number
   balance: WalletBalance
@@ -86,7 +95,7 @@ export const PURCHASE_ERROR_TEXT: Record<PurchaseError, string> = {
 }
 
 /** Largest quantity a user could buy right now, ignoring wallet balance. */
-export function maxPurchasable(listing: Listing, ticketsAlreadyHeld: number): number {
+export function maxPurchasable(listing: PurchasableListing, ticketsAlreadyHeld: number): number {
   return Math.max(0, Math.min(RULES.maxTicketsPerUserPerListing - ticketsAlreadyHeld, listing.ticketCount - listing.ticketsSold))
 }
 

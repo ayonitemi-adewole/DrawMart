@@ -56,4 +56,10 @@ describe('validateListingEconomics', () => {
     expect(validateListingEconomics({ title: 'x', priceKobo: k(10_000_000), ticketPriceKobo: k(100), feeBps: 1000, feeMode: 'seller' })).toContain('too_many_tickets')
     expect(validateListingEconomics({ title: 'x', priceKobo: k(1_000), ticketPriceKobo: k(2_000), feeBps: 1000, feeMode: 'seller' })).toContain('ticket_above_price')
   })
+  it('enforces a 10% minimum platform fee', () => {
+    const base = { title: 'x', priceKobo: k(1_000_000), ticketPriceKobo: k(5_000), feeMode: 'seller' as const }
+    expect(validateListingEconomics({ ...base, feeBps: 999 })).toContain('fee_out_of_range')
+    expect(validateListingEconomics({ ...base, feeBps: 1000 })).toEqual([])
+    expect(validateListingEconomics({ ...base, feeBps: 3001 })).toContain('fee_out_of_range')
+  })
 })

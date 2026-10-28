@@ -1,19 +1,30 @@
 import { useState } from 'react'
 import { usePendingListings, useReviewListing } from '@/api/hooks'
 import type { ListingView } from '@/api/types'
-import { CheckIcon, ClipboardIcon, LockIcon, XIcon } from '@/components/icons'
+import { CalendarIcon, CarIcon, CheckIcon, ClipboardIcon, LockIcon, MapPinIcon, TruckIcon, XIcon } from '@/components/icons'
 import { Sheet } from '@/components/Sheet'
 import { useToast } from '@/components/toast'
 import { Badge, Button, Card, EmptyState, ErrorState, PageTitle, ProductImage, Skeleton, cx, errorMessage } from '@/components/ui'
 import { computeListingEconomics } from '@/domain/fees'
+import { TIME_SLOTS, UNSOLD_POLICY_LABEL } from '@/domain/listing'
 import { formatNaira } from '@/domain/money'
+import type { HandoverMethod } from '@/domain/types'
+import { calendarDay } from '@/lib/time'
 
-const CHECKS = [
-  'Item has arrived at the escrow point',
-  'Item matches the title and description',
-  'Item photographed and condition logged',
-  'Store’s CAC registration is current',
-]
+const CHECKS: Record<HandoverMethod, string[]> = {
+  pickup: [
+    'Item collected and checked into escrow',
+    'Item matches the title and description',
+    'Item photographed and condition logged',
+    'Store’s CAC registration is current',
+  ],
+  inspection: [
+    'Car inspected at the booked visit',
+    'VIN, papers and ownership match the listing',
+    'Car photographed and condition logged',
+    'Store’s CAC registration is current',
+  ],
+}
 
 const FEE_MODE_TEXT = { seller: 'store pays', buyer: 'buyer pays', split: 'split 50/50' }
 
@@ -25,7 +36,7 @@ export function AdminPage() {
     <div className="flex flex-col gap-6">
       <PageTitle
         eyebrow="Admin"
-        sub="Approve only after the item has arrived at escrow and matches the listing. Tick each check to unlock approval."
+        sub="Approve only after the item is in escrow (or the car has passed inspection) and matches the listing. Tick each check to unlock approval."
         action={q.data ? <Badge tone={q.data.length ? 'ticket' : 'brand'}>{q.data.length} waiting</Badge> : null}
       >
         Listings to review
@@ -50,7 +61,9 @@ export function AdminPage() {
 function ReviewCard({ listing: l }: { listing: ListingView }) {
   const review = useReviewListing()
   const toast = useToast()
-  const [checked, setChecked] = useState<boolean[]>(() => CHECKS.map(() => false))
+  const method = l.handover?.method ?? 'pickup'
+  const checks = CHECKS[method]
+  const [checked, setChecked] = useState<boolean[]>(() => checks.map(() => false))
   const [confirmReject, setConfirmReject] = useState(false)
   const ready = checked.every(Boolean)
   const econ = computeListingEconomics(l)
@@ -80,7 +93,7 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
             <div className="flex flex-wrap gap-1.5">
               <Badge tone="neutral">{l.category}</Badge>
               <Badge tone="sky">{l.durationDays}-day draw</Badge>
-              <Badge tone="violet">{l.unsoldPolicy === 'refund' ? 'Refund if unsold' : 'Extend once if unsold'}</Badge>
+              <Badge tone="violet">{UNSOLD_POLICY_LABEL[l.unsoldPolicy]}</Badge>
             </div>
           </div>
         </div>
@@ -91,6 +104,8 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
             ['Tickets', `${l.ticketCount.toLocaleString('en-NG')} × ${formatNaira(l.buyerTicketPriceKobo)}`],
             ['Fee', `${l.feeBps / 100}% (${FEE_MODE_TEXT[l.feeMode]})`],
             ['Store payout', formatNaira(econ.sellerPayoutKobo)],
+            ['Caution fee', `${formatNaira(l.cautionFee.amountKobo)} ${l.cautionFee.status}`],
+            ...(l.fallbackPriceKobo ? [['Fixed price if unsold', formatNaira(l.fallbackPriceKobo)]] : []),
           ].map(([k, v]) => (
             <div key={k} className="flex flex-col rounded-2xl bg-ground p-3">
               <dt className="text-[11px] font-semibold text-subtle">{k}</dt>
@@ -98,17 +113,34 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
             </div>
           ))}
         </dl>
+        {l.handover ? (
+          <div className="flex flex-col gap-2 rounded-2xl border border-line p-4 text-sm">
+            <span className="flex items-center gap-2 font-bold">
+              {method === 'inspection' ? <CarIcon size={16} className="text-brand" /> : <TruckIcon size={16} className="text-brand" />}
+              {method === 'inspection' ? 'Inspection booking' : 'Pickup booking'}
+            </span>
+            <span className="flex items-center gap-2 text-muted">
+              <CalendarIcon size={14} className="shrink-0" /> {calendarDay(l.handover.date)}, {TIME_SLOTS[l.handover.slot]}
+            </span>
+            <span className="flex items-start gap-2 text-muted">
+              <MapPinIcon size={14} className="mt-0.5 shrink-0" /> {l.handover.address}
+            </span>
+            <a href={`tel:${l.handover.contactPhone.replace(/\s/g, '')}`} className="flex min-h-11 w-fit items-center">
+              {l.handover.contactPhone}
+            </a>
+          </div>
+        ) : null}
       </div>
 
       <div className="flex flex-col gap-3 rounded-2xl border border-line bg-ground/60 p-4">
         <span className="flex items-center gap-2 text-sm font-bold">
-          <ClipboardIcon size={16} className="text-brand" /> Escrow checklist
+          <ClipboardIcon size={16} className="text-brand" /> {method === 'inspection' ? 'Inspection checklist' : 'Escrow checklist'}
           <span className="ml-auto text-xs text-subtle">
-            {checked.filter(Boolean).length}/{CHECKS.length}
+            {checked.filter(Boolean).length}/{checks.length}
           </span>
         </span>
         <ul className="flex flex-col gap-1">
-          {CHECKS.map((c, i) => (
+          {checks.map((c, i) => (
             <li key={c}>
               <label className={cx('flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-2 text-sm transition hover:bg-surface', checked[i] && 'text-brand-ink')}>
                 <input
@@ -134,7 +166,10 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
 
       <Sheet open={confirmReject} onClose={() => !busy && setConfirmReject(false)} title="Reject listing">
         <h2 className="pr-10 font-display text-2xl font-extrabold">Reject “{l.title}”?</h2>
-        <p className="text-sm text-muted">The store will need to submit a new listing. This can’t be undone.</p>
+        <p className="text-sm text-muted">
+          The store will need to submit a new listing, and its {formatNaira(l.cautionFee.amountKobo)} caution fee is kept to cover the{' '}
+          {method === 'inspection' ? 'inspection visit' : 'pickup and return'}. This can’t be undone.
+        </p>
         <div className="flex gap-2">
           <Button variant="outline" className="flex-1" onClick={() => setConfirmReject(false)} disabled={busy}>
             Keep in review

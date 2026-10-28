@@ -30,6 +30,7 @@ import { TicketStub } from '@/components/TicketStub'
 import { useToast } from '@/components/toast'
 import { Badge, Button, Card, ErrorState, IconButton, Notice, ProductImage, ProgressBar, Skeleton, buttonClass, cx, errorMessage } from '@/components/ui'
 import { formatNaira } from '@/domain/money'
+import { describeUnsoldPolicy, handoverMethodFor } from '@/domain/listing'
 import { PURCHASE_ERROR_TEXT, RULES, checkPurchase, maxPurchasable, splitPayment, type PurchaseError } from '@/domain/rules'
 import { ticketNo } from '@/lib/time'
 
@@ -112,7 +113,7 @@ function ListingDetail({ listing: l }: { listing: ListingView }) {
                 </Badge>
               ) : null}
               <Badge tone="sky">
-                <LockIcon size={12} /> Item held in escrow
+                <LockIcon size={12} /> {handoverMethodFor(l.category) === 'inspection' ? 'Inspected by DrawMart' : 'Item held in escrow'}
               </Badge>
               <Badge tone="violet">
                 <ShieldIcon size={12} /> Provably fair
@@ -161,9 +162,7 @@ function ListingDetail({ listing: l }: { listing: ListingView }) {
             <ProgressBar value={l.ticketsSold} max={l.ticketCount} hot={hot} label="Tickets sold" size="lg" />
             <p className="text-xs leading-relaxed text-subtle">
               The draw runs the moment the last ticket sells.{' '}
-              {l.unsoldPolicy === 'refund'
-                ? 'If it doesn’t sell out by the deadline, everyone is refunded to their wallet.'
-                : `If it doesn’t sell out, the deadline is extended once by ${RULES.extensionDays} days, then everyone is refunded.`}
+              {describeUnsoldPolicy(l.unsoldPolicy, l.fallbackPriceKobo)}
             </p>
           </Card>
 
@@ -275,7 +274,7 @@ function Gallery({ listing: l }: { listing: ListingView }) {
           </>
         ) : null}
         <span className="absolute right-4 bottom-4 flex items-center gap-1 rounded-full bg-surface/90 px-2.5 py-1 text-[11px] font-bold text-brand-ink shadow-card backdrop-blur">
-          <CheckIcon size={12} /> Photographed at escrow
+          <CheckIcon size={12} /> {handoverMethodFor(l.category) === 'inspection' ? 'Photographed at inspection' : 'Photographed at escrow'}
         </span>
       </div>
       {count > 1 ? (
@@ -305,6 +304,7 @@ const STATUS_TEXT: Record<ListingView['status'], string> = {
   live: 'Live',
   drawn: 'Drawn',
   refunded: 'Refunded',
+  for_sale: 'Buy now',
   rejected: 'Not on sale',
 }
 
@@ -355,7 +355,9 @@ function InfoTabs({ listing: l }: { listing: ListingView }) {
           <div className="flex flex-col gap-3">
             <p>{l.description || 'No description from the store yet.'}</p>
             <p className="text-xs text-subtle">
-              Listed by {l.merchant.name} ({l.merchant.cacNumber}). DrawMart has checked the item into escrow and confirmed it matches this listing.
+              Listed by {l.merchant.name} ({l.merchant.cacNumber}). {handoverMethodFor(l.category) === 'inspection'
+                ? 'A DrawMart inspector has checked the vehicle and its papers and confirmed they match this listing.'
+                : 'DrawMart has checked the item into escrow and confirmed it matches this listing.'}
             </p>
           </div>
         ) : tab === 'fair' ? (
@@ -376,7 +378,9 @@ function InfoTabs({ listing: l }: { listing: ListingView }) {
         ) : (
           <ul className="flex flex-col gap-3">
             <li className="flex gap-3">
-              <TruckIcon size={20} className="shrink-0 text-brand" /> The item is already in a DrawMart escrow point. The winner gets it delivered anywhere in Lagos.
+              <TruckIcon size={20} className="shrink-0 text-brand" /> {handoverMethodFor(l.category) === 'inspection'
+                ? 'The vehicle was inspected before listing and stays with the dealer until handover. The winner collects it with the papers in their name.'
+                : 'The item is already in a DrawMart escrow point. The winner gets it delivered anywhere in Lagos.'}
             </li>
             <li className="flex gap-3">
               <ShieldIcon size={20} className="shrink-0 text-brand" /> The store is only paid after the winner confirms delivery.
@@ -419,6 +423,25 @@ function BuyPanel({ listing: l, left }: { listing: ListingView; left: number }) 
         <Link to={`/draws/${l.id}`} className={buttonClass('ticket', 'lg', 'w-full')}>
           See result and verify
         </Link>
+      </Card>
+    )
+  }
+  if (l.status === 'for_sale' && l.fallbackPriceKobo) {
+    return (
+      <Card className="flex flex-col gap-4 p-5">
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-extrabold tracking-[0.14em] text-brand uppercase">Draw ended · now for sale</span>
+          <span className="font-display text-4xl font-extrabold tabular-nums">{formatNaira(l.fallbackPriceKobo)}</span>
+          <span className="text-sm text-muted">
+            The draw didn’t sell out, so everyone was refunded. {l.merchant.name} is selling it at a fixed price instead.
+          </span>
+        </div>
+        <Button size="lg" onClick={() => toast('Buy-now checkout is coming next: pay the full price and the store delivers.', 'info')}>
+          Buy now for {formatNaira(l.fallbackPriceKobo)}
+        </Button>
+        <Notice icon={LockIcon}>
+          {handoverMethodFor(l.category) === 'inspection' ? 'Inspected by DrawMart.' : 'Still held in DrawMart escrow.'} The store is paid only after you confirm delivery.
+        </Notice>
       </Card>
     )
   }

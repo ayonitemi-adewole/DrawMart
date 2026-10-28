@@ -22,6 +22,9 @@ export interface ListingEconomics {
 
 export const MIN_TICKET_KOBO = 100_00 // ₦100
 export const MAX_TICKETS_PER_LISTING = 10_000
+/** Platform fee bounds in basis points. The floor is 10%. */
+export const MIN_FEE_BPS = 1000
+export const MAX_FEE_BPS = 3000
 
 /**
  * The money maths for a listing. Invariant: pool = sellerPayout + platform.
@@ -69,7 +72,7 @@ export function validateListingEconomics(
   if (input.priceKobo > 0 && input.ticketPriceKobo > input.priceKobo) errors.push('ticket_above_price')
   if (input.priceKobo > 0 && input.ticketPriceKobo > 0 && Math.ceil(input.priceKobo / input.ticketPriceKobo) > MAX_TICKETS_PER_LISTING)
     errors.push('too_many_tickets')
-  if (input.feeBps < 0 || input.feeBps > 3000) errors.push('fee_out_of_range')
+  if (input.feeBps < MIN_FEE_BPS || input.feeBps > MAX_FEE_BPS) errors.push('fee_out_of_range')
   return errors
 }
 
@@ -79,5 +82,5 @@ export const LISTING_ERROR_TEXT: Record<ListingValidationError, string> = {
   ticket_too_cheap: 'Tickets must cost at least ₦100.',
   ticket_above_price: 'A ticket can’t cost more than the item.',
   too_many_tickets: `That would need more than ${MAX_TICKETS_PER_LISTING.toLocaleString('en-NG')} tickets. Raise the ticket price.`,
-  fee_out_of_range: 'Fee must be between 0% and 30%.',
+  fee_out_of_range: `Platform fee must be between ${MIN_FEE_BPS / 100}% and ${MAX_FEE_BPS / 100}%.`,
 }

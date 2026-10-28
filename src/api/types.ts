@@ -5,11 +5,13 @@
  * mock (src/api/mock.ts); later a real implementation (Supabase, NestJS, …)
  * implements the same interface and nothing in src/pages has to change.
  */
+import type { HandoverDetails } from '@/domain/listing'
 import type { PurchaseError } from '@/domain/rules'
 import type {
   Category,
   DrawResult,
   FeeMode,
+  Handover,
   Kobo,
   LedgerEntry,
   Listing,
@@ -31,7 +33,9 @@ export interface DrawResultView extends DrawResult {
   myCreditKobo: Kobo
 }
 
-export interface ListingView extends Listing {
+export interface ListingView extends Omit<Listing, 'handover'> {
+  /** Pickup/inspection booking. Only sent to the listing's store and admins; null for buyers. */
+  handover: Handover | null
   merchant: Merchant
   myNumbers: number[]
   result: DrawResultView | null
@@ -63,8 +67,13 @@ export interface NewListingInput {
   ticketPriceKobo: Kobo
   feeMode: FeeMode
   feeBps: number
+  /** Days on sale once approved, RULES.minDurationDays..maxDurationDays. */
   durationDays: number
   unsoldPolicy: UnsoldPolicy
+  /** Required when unsoldPolicy is 'convert_to_sale'. */
+  fallbackPriceKobo?: Kobo
+  /** Where and when to collect or inspect the item. The method follows from the category. */
+  handover: HandoverDetails
 }
 
 export interface ListingFilter {
@@ -106,6 +115,7 @@ export interface DrawMartApi {
   // Merchant
   getMyMerchant(): Promise<Merchant>
   listMerchantListings(): Promise<ListingView[]>
+  /** Charges the caution fee for the category and queues the listing for pickup/inspection and review. */
   createListing(input: NewListingInput): Promise<ListingView>
 
   // Admin

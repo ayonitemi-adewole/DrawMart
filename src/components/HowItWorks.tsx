@@ -5,7 +5,7 @@ import { Sheet } from './Sheet'
 import { Button, cx } from './ui'
 
 export const HOW_STEPS: { icon: IconComponent; title: string; body: string; tone: string }[] = [
-  { icon: LockIcon, title: 'Real items, held in escrow', body: 'Verified Lagos stores hand the item to DrawMart before a single ticket is sold.', tone: 'bg-brand-soft text-brand-ink' },
+  { icon: LockIcon, title: 'Real items, checked first', body: 'DrawMart collects each item into escrow, or inspects cars on site, before a single ticket is sold.', tone: 'bg-brand-soft text-brand-ink' },
   { icon: TicketIcon, title: 'Grab a few tickets', body: `Pay from your wallet. Up to ${RULES.maxTicketsPerUserPerListing} tickets per person, per draw.`, tone: 'bg-ticket-soft text-ticket-ink' },
   { icon: DiceIcon, title: 'Sold out? It draws instantly', body: 'A provably fair draw picks the winner. Anyone can re-check the maths.', tone: 'bg-sky-soft text-sky' },
   { icon: CoinIcon, title: 'Didn’t win? Get credit', body: `${RULES.consolationCreditBps / 100}% of what you spent comes back as store credit.`, tone: 'bg-hot-soft text-hot-ink' },

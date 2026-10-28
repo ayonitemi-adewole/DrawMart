@@ -7,7 +7,18 @@
  * built against realistic behaviour.
  */
 import { commitmentFor, createSeed, randomHex, winningTicketNumber } from '@/domain/draw'
-import { computeListingEconomics, validateListingEconomics } from '@/domain/fees'
+import { LISTING_ERROR_TEXT, computeListingEconomics, validateListingEconomics } from '@/domain/fees'
+import {
+  HANDOVER_ERROR_TEXT,
+  LISTING_TERMS_ERROR_TEXT,
+  addDays,
+  cautionFeeFor,
+  handoverMethodFor,
+  localDate,
+  settleCautionFee,
+  validateHandover,
+  validateListingTerms,
+} from '@/domain/listing'
 import { nairaToKobo } from '@/domain/money'
 import {
   PURCHASE_ERROR_TEXT,
@@ -18,7 +29,7 @@ import {
   spentInLastWeek,
   splitPayment,
 } from '@/domain/rules'
-import type { Category, DrawResult, LedgerEntry, Listing, Merchant, Ticket, User } from '@/domain/types'
+import type { Category, DrawResult, LedgerEntry, Listing, ListingStatus, Merchant, Ticket, UnsoldPolicy, User } from '@/domain/types'
 import {
   ApiError,
   type DrawMartApi,
@@ -29,7 +40,7 @@ import {
   type WalletView,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v2' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v3' // bump when seed data or the Db shape changes
 const ME = 'u-me'
 const MY_MERCHANT = 'm-ikeja'
 const CROWD = 'u-crowd'
@@ -81,7 +92,10 @@ interface SeedListing {
   ticket: number
   sold: number
   closesInHours: number
-  status?: 'live' | 'pending_review'
+  status?: Extract<ListingStatus, 'live' | 'pending_review' | 'for_sale'>
+  unsold?: UnsoldPolicy
+  /** Naira; regular price for convert_to_sale listings. */
+  fallback?: number
 }
 
 const img = (...files: string[]) => files.map((f) => `/assets/${f}`)
@@ -93,19 +107,19 @@ const SEED_LISTINGS: SeedListing[] = [
     price: 2_600_000, ticket: 5_000, sold: 448, closesInHours: 28,
   },
   {
-    merchantId: 'm-lekki', title: 'Samsung Galaxy S26 Ultra, 512GB', category: 'Phones', images: img('samsungS26Ultra.jpg', 'samsungS26UltraBlack.jpg'),
+    merchantId: 'm-lekki', title: 'Samsung Galaxy S26 Ultra, 512GB', category: 'Phones', images: img('samsungS26Ultra.jpg'),
     description: 'Brand new and sealed, with S Pen and local warranty.',
     price: 2_100_000, ticket: 5_000, sold: 230, closesInHours: 60,
   },
   {
     merchantId: 'm-lekki', title: 'LG 55-inch 4K UHD TV + soundbar', category: 'Electronics', images: img('LG55inchSmartTv.jpg'),
     description: 'Smart TV with matching soundbar. Delivery and wall mounting anywhere in Lagos included.',
-    price: 650_000, ticket: 2_500, sold: 241, closesInHours: 9,
+    price: 650_000, ticket: 2_500, sold: 241, closesInHours: 9, unsold: 'extend_once',
   },
   {
     merchantId: 'm-surulere', title: 'Samsung 65-inch 4K smart TV', category: 'Electronics', images: img('samsung65inch4KTV.jpg'),
     description: 'Crystal UHD smart TV with remote and wall bracket.',
-    price: 950_000, ticket: 2_500, sold: 190, closesInHours: 48,
+    price: 950_000, ticket: 2_500, sold: 190, closesInHours: 48, unsold: 'convert_to_sale', fallback: 990_000,
   },
   {
     merchantId: MY_MERCHANT, title: 'MacBook Pro 14-inch, M5', category: 'Electronics', images: img('macbookProM5.jpg', 'macbookProM5-2.jpg'),
@@ -133,14 +147,15 @@ const SEED_LISTINGS: SeedListing[] = [
     price: 330_000_000, ticket: 50_000, sold: 540, closesInHours: 600,
   },
   {
-    merchantId: 'm-surulere', title: 'Rice, 50kg bag', category: 'Food',
-    description: 'Premium parboiled long grain. Delivered to your door in Lagos.',
-    price: 85_000, ticket: 500, sold: 96, closesInHours: 48,
-  },
-  {
     merchantId: 'm-yaba', title: '5kVA inverter + battery', category: 'Home',
     description: 'Inverter with two batteries, installed by the store.',
     price: 1_800_000, ticket: 6_000, sold: 122, closesInHours: 96,
+  },
+  // A draw that ended unsold and stayed on as a regular product.
+  {
+    merchantId: 'm-lekki', title: 'Samsung Galaxy S26 Ultra, 256GB', category: 'Phones', images: img('samsungS26UltraBlack.jpg'),
+    description: 'Brand new and sealed, Titanium Black, with local warranty.',
+    price: 1_700_000, ticket: 5_000, sold: 0, closesInHours: -48, status: 'for_sale', unsold: 'convert_to_sale', fallback: 1_650_000,
   },
   // Waiting in the admin queue.
   {
@@ -157,6 +172,8 @@ const SEED_LISTINGS: SeedListing[] = [
 
 async function makeListing(s: SeedListing, now: number, seeds: Record<string, string>): Promise<Listing> {
   const id = uid('L')
+  const merchant = MERCHANTS.find((m) => m.id === s.merchantId)!
+  const status = s.status ?? 'live'
   const seed = createSeed()
   seeds[id] = seed
   const econ = computeListingEconomics({ priceKobo: nairaToKobo(s.price), ticketPriceKobo: nairaToKobo(s.ticket), feeBps: RULES.defaultFeeBps, feeMode: 'seller' })
@@ -174,10 +191,19 @@ async function makeListing(s: SeedListing, now: number, seeds: Record<string, st
     ticketsSold: 0,
     feeMode: 'seller',
     feeBps: RULES.defaultFeeBps,
-    unsoldPolicy: 'refund',
-    durationDays: Math.ceil(s.closesInHours / 24),
+    unsoldPolicy: s.unsold ?? 'refund',
+    fallbackPriceKobo: s.fallback ? nairaToKobo(s.fallback) : null,
+    durationDays: Math.max(RULES.minDurationDays, Math.ceil(s.closesInHours / 24)),
     extended: false,
-    status: s.status ?? 'live',
+    status,
+    handover: {
+      method: handoverMethodFor(s.category),
+      address: `${merchant.name}, ${merchant.area}, Lagos`,
+      contactPhone: '0803 000 0000',
+      date: addDays(localDate(new Date(now)), status === 'pending_review' ? 2 : -3),
+      slot: 'morning',
+    },
+    cautionFee: settleCautionFee({ amountKobo: cautionFeeFor(s.category), status: 'held' }, status),
     commitment: await commitmentFor(seed),
     createdAt: iso(now - 2 * DAY),
     closesAt: iso(now + s.closesInHours * 60 * 60 * 1000),
@@ -213,7 +239,7 @@ async function freshDb(): Promise<Db> {
     if (s.sold) crowdBuys(db, l, s.sold, iso(now - DAY))
     db.listings.push(l)
   }
-  // Two finished draws so the results page isn't empty.
+  // Finished draws so the results page isn't empty.
   for (const [i, s] of ([
     { merchantId: MY_MERCHANT, title: 'MacBook Pro 13-inch, M1', description: 'UK-used, 8GB RAM, 256GB SSD.', category: 'Electronics', images: img('macbookProM1.jpg'), price: 900_000, ticket: 2_500, sold: 0, closesInHours: 1 },
     { merchantId: 'm-lekki', title: 'Samsung 50-inch smart TV', description: 'Crystal UHD smart TV with wall bracket.', category: 'Electronics', images: img('samsung50inchTV.jpg'), price: 420_000, ticket: 1_500, sold: 0, closesInHours: 1 },
@@ -236,6 +262,7 @@ async function runDraw(db: Db, listing: Listing, closingRef: string, at: string)
   const winner = db.tickets.find((t) => t.listingId === listing.id && t.number === winningNumber)
   if (!winner) throw new Error(`No ticket ${winningNumber} for ${listing.id}`)
   listing.status = 'drawn'
+  listing.cautionFee = settleCautionFee(listing.cautionFee, 'drawn')
   db.results.push({ listingId: listing.id, commitment: listing.commitment, seed, closingRef, winningNumber, winnerUserId: winner.userId, drawnAt: at })
 
   // Consolation credit for every losing buyer (the crowd is a stand-in for many users).
@@ -247,7 +274,23 @@ async function runDraw(db: Db, listing: Listing, closingRef: string, at: string)
   }
 }
 
-/** Deadlines: extend once if the listing allows it, otherwise refund everyone. */
+/** Pays every ticket buyer back into the same buckets (cash/credit) the money came from. */
+function refundBuyers(db: Db, l: Listing, at: string) {
+  const paid = new Map<string, { cash: number; credit: number }>()
+  for (const e of db.ledger) {
+    if (e.listingId !== l.id || e.kind !== 'ticket_purchase') continue
+    const p = paid.get(e.userId) ?? { cash: 0, credit: 0 }
+    paid.set(e.userId, { cash: p.cash - e.cashKobo, credit: p.credit - e.creditKobo })
+  }
+  for (const [userId, p] of paid) {
+    db.ledger.push({ id: uid('E'), userId, kind: 'refund', cashKobo: p.cash, creditKobo: p.credit, memo: `Refund · ${l.title} didn’t sell out`, listingId: l.id, createdAt: at })
+  }
+}
+
+/**
+ * Deadlines: extend once if the listing allows it; otherwise refund every
+ * buyer, then either close the listing or keep it on as a regular product.
+ */
 function processDeadlines(db: Db, now: number): boolean {
   let changed = false
   for (const l of db.listings) {
@@ -258,17 +301,9 @@ function processDeadlines(db: Db, now: number): boolean {
       l.closesAt = iso(now + RULES.extensionDays * DAY)
       continue
     }
-    l.status = 'refunded'
-    const paid = new Map<string, { cash: number; credit: number }>()
-    for (const e of db.ledger) {
-      if (e.listingId !== l.id || e.kind !== 'ticket_purchase') continue
-      const p = paid.get(e.userId) ?? { cash: 0, credit: 0 }
-      paid.set(e.userId, { cash: p.cash - e.cashKobo, credit: p.credit - e.creditKobo })
-    }
-    for (const [userId, p] of paid) {
-      // Refund to the same buckets the money came from.
-      db.ledger.push({ id: uid('E'), userId, kind: 'refund', cashKobo: p.cash, creditKobo: p.credit, memo: `Refund · ${l.title} didn’t sell out`, listingId: l.id, createdAt: iso(now) })
-    }
+    refundBuyers(db, l, iso(now))
+    l.status = l.unsoldPolicy === 'convert_to_sale' && l.fallbackPriceKobo ? 'for_sale' : 'refunded'
+    l.cautionFee = settleCautionFee(l.cautionFee, l.status)
   }
   return changed
 }
@@ -294,11 +329,15 @@ function resultView(db: Db, r: DrawResult): DrawResultView {
   return { ...r, listingTitle: l.title, listingImage: l.images[0] ?? null, ticketCount: l.ticketCount, iWon: r.winnerUserId === ME, myNumbers, myCreditKobo }
 }
 
-function listingView(db: Db, l: Listing): ListingView {
+/**
+ * `full` is for the listing's own store and for admins. Buyers never see the
+ * store's pickup address or phone number.
+ */
+function listingView(db: Db, l: Listing, audience: 'buyer' | 'full' = 'buyer'): ListingView {
   const merchant = db.merchants.find((m) => m.id === l.merchantId)!
   const myNumbers = db.tickets.filter((t) => t.listingId === l.id && t.userId === ME).map((t) => t.number)
   const r = db.results.find((x) => x.listingId === l.id)
-  return { ...l, merchant, myNumbers, result: r ? resultView(db, r) : null }
+  return { ...l, handover: audience === 'full' ? l.handover : null, merchant, myNumbers, result: r ? resultView(db, r) : null }
 }
 
 // -------------------------------------------------------------------- API
@@ -461,15 +500,18 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         db.listings
           .filter((l) => l.merchantId === MY_MERCHANT)
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-          .map((l) => listingView(db, l)),
+          .map((l) => listingView(db, l, 'full')),
       ),
 
     createListing: (input: NewListingInput) =>
       tx(async (db) => {
-        const errors = validateListingEconomics(input)
-        if (errors.length) throw new ApiError('invalid_input', errors.join(', '))
-        if (!RULES.listingDurationsDays.includes(input.durationDays as (typeof RULES.listingDurationsDays)[number]))
-          throw new ApiError('invalid_input', 'Pick a listed duration.')
+        const today = localDate(new Date(now()))
+        const problems = [
+          ...validateListingEconomics(input).map((e) => LISTING_ERROR_TEXT[e]),
+          ...validateListingTerms(input).map((e) => LISTING_TERMS_ERROR_TEXT[e]),
+          ...validateHandover(input.handover, today).map((e) => HANDOVER_ERROR_TEXT[e]),
+        ]
+        if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
         const econ = computeListingEconomics(input)
         const seed = createSeed()
         const id = uid('L')
@@ -479,15 +521,19 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           id, merchantId: MY_MERCHANT, title: input.title.trim(), description: input.description.trim(), category: input.category, images: input.images ?? [],
           priceKobo: input.priceKobo, ticketPriceKobo: input.ticketPriceKobo, buyerTicketPriceKobo: econ.buyerTicketKobo,
           ticketCount: econ.ticketCount, ticketsSold: 0, feeMode: input.feeMode, feeBps: input.feeBps,
-          unsoldPolicy: input.unsoldPolicy, durationDays: input.durationDays, extended: false, status: 'pending_review',
+          unsoldPolicy: input.unsoldPolicy, fallbackPriceKobo: input.unsoldPolicy === 'convert_to_sale' ? input.fallbackPriceKobo! : null,
+          durationDays: input.durationDays, extended: false, status: 'pending_review',
+          handover: { ...input.handover, address: input.handover.address.trim(), method: handoverMethodFor(input.category) },
+          // In test mode the fee is recorded, not charged. A real backend takes it before booking the pickup.
+          cautionFee: { amountKobo: cautionFeeFor(input.category), status: 'held' },
           commitment: await commitmentFor(seed), createdAt: iso(at), closesAt: iso(at + input.durationDays * DAY),
         }
         db.listings.push(listing)
-        return listingView(db, listing)
+        return listingView(db, listing, 'full')
       }),
 
     listPendingListings: () =>
-      tx((db) => db.listings.filter((l) => l.status === 'pending_review').map((l) => listingView(db, l))),
+      tx((db) => db.listings.filter((l) => l.status === 'pending_review').map((l) => listingView(db, l, 'full'))),
 
     approveListing: (id) =>
       tx((db) => {
@@ -502,6 +548,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const l = getListingOr404(db, id)
         if (l.status !== 'pending_review') throw new ApiError('invalid_input', 'Only listings in review can be rejected.')
         l.status = 'rejected'
+        l.cautionFee = settleCautionFee(l.cautionFee, 'rejected')
       }),
 
     demoSellOut: (listingId) =>

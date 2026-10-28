@@ -19,6 +19,7 @@ export function ListingCard({ listing: l, className, style }: { listing: Listing
   const hot = isAlmostGone(l)
   const pct = Math.round((l.ticketsSold / l.ticketCount) * 100)
   const mine = l.myNumbers.length
+  const forSale = l.status === 'for_sale' && l.fallbackPriceKobo !== null
 
   return (
     <Link
@@ -60,11 +61,14 @@ export function ListingCard({ listing: l, className, style }: { listing: Listing
               </Badge>
             ) : null}
             {l.status === 'drawn' ? <Badge tone="neutral">DRAWN</Badge> : null}
+            {forSale ? <Badge tone="sky">BUY NOW</Badge> : null}
           </div>
         </div>
-        <span className="absolute right-4 bottom-2 rounded-full bg-ink px-2.5 py-1 text-[11px] font-extrabold text-ground shadow-card">
-          {valueMultiple(l)}× cheaper
-        </span>
+        {forSale ? null : (
+          <span className="absolute right-4 bottom-2 rounded-full bg-ink px-2.5 py-1 text-[11px] font-extrabold text-ground shadow-card">
+            {valueMultiple(l)}× cheaper
+          </span>
+        )}
       </div>
 
       <div className="flex flex-1 flex-col gap-3 p-4">
@@ -78,6 +82,9 @@ export function ListingCard({ listing: l, className, style }: { listing: Listing
           </span>
         </div>
 
+        {forSale ? (
+          <p className="text-xs text-subtle">The draw ended unsold and everyone was refunded. The store is now selling it at a fixed price.</p>
+        ) : (
         <div className="flex flex-col gap-1.5">
           <div className="flex justify-between text-xs font-semibold">
             <span className={hot ? 'text-hot-ink' : 'text-muted'}>{pct}% sold</span>
@@ -85,15 +92,23 @@ export function ListingCard({ listing: l, className, style }: { listing: Listing
           </div>
           <ProgressBar value={l.ticketsSold} max={l.ticketCount} hot={hot} label={`${l.ticketsSold} of ${l.ticketCount} tickets sold`} />
         </div>
+        )}
 
         <div className="mt-auto flex items-end justify-between gap-2 border-t border-dashed border-line pt-3">
-          <div className="flex flex-col">
-            <span className="text-[11px] text-subtle line-through decoration-subtle/50">Worth {formatNaira(l.priceKobo)}</span>
-            <span className="text-lg leading-tight font-extrabold">
-              {formatNaira(l.buyerTicketPriceKobo)}
-              <span className="text-xs font-semibold text-subtle"> / ticket</span>
-            </span>
-          </div>
+          {forSale ? (
+            <div className="flex flex-col">
+              <span className="text-[11px] text-subtle">Buy now</span>
+              <span className="text-lg leading-tight font-extrabold">{formatNaira(l.fallbackPriceKobo!)}</span>
+            </div>
+          ) : (
+            <div className="flex flex-col">
+              <span className="text-[11px] text-subtle line-through decoration-subtle/50">Worth {formatNaira(l.priceKobo)}</span>
+              <span className="text-lg leading-tight font-extrabold">
+                {formatNaira(l.buyerTicketPriceKobo)}
+                <span className="text-xs font-semibold text-subtle"> / ticket</span>
+              </span>
+            </div>
+          )}
           {l.status === 'live' ? <Countdown closesAt={l.closesAt} className="rounded-full bg-sunken px-2.5 py-1 text-xs font-bold" /> : null}
         </div>
       </div>

@@ -10,9 +10,11 @@ import { formatNaira } from '@/domain/money'
 import { ticketNo } from '@/lib/time'
 
 function status(l: ListingView): { tone: Tone; label: string; detail: string } {
-  if (l.status === 'drawn' && l.result?.iWon) return { tone: 'ticket', label: 'You won', detail: `Ticket ${ticketNo(l.result.winningNumber)} · delivery from escrow` }
+  if (l.status === 'drawn' && l.result?.iWon) return { tone: 'ticket', label: 'You won', detail: `Ticket ${ticketNo(l.result.winningNumber)} · we’ll arrange delivery` }
   if (l.status === 'drawn' && l.result)
     return { tone: 'neutral', label: 'Not this time', detail: `Winner ${ticketNo(l.result.winningNumber)} · ${formatNaira(l.result.myCreditKobo)} credit returned` }
+  if (l.status === 'for_sale')
+    return { tone: 'neutral', label: 'Refunded', detail: `Didn’t sell out; you were refunded. Now for sale at ${formatNaira(l.fallbackPriceKobo ?? l.priceKobo)}` }
   if (l.status === 'refunded') return { tone: 'neutral', label: 'Refunded', detail: 'Didn’t sell out in time; your money is back in your wallet' }
   return { tone: 'brand', label: `${(l.ticketCount - l.ticketsSold).toLocaleString('en-NG')} left`, detail: `Odds ${l.myNumbers.length} in ${l.ticketCount.toLocaleString('en-NG')}` }
 }

@@ -6,21 +6,49 @@
 export type Kobo = number
 export type ISODate = string
 
-export type Category = 'Phones' | 'Electronics' | 'Home' | 'Food' | 'Cars' | 'Fashion'
-export const CATEGORIES: Category[] = ['Phones', 'Electronics', 'Home', 'Food', 'Cars', 'Fashion']
+/** No perishables: items can sit in escrow for weeks before a draw ends. */
+export type Category = 'Phones' | 'Electronics' | 'Home' | 'Cars' | 'Fashion'
+export const CATEGORIES: Category[] = ['Phones', 'Electronics', 'Home', 'Cars', 'Fashion']
 
 /** Who carries the platform fee. */
 export type FeeMode = 'seller' | 'buyer' | 'split'
 
-/** What happens if a draw hasn't sold out by its deadline. */
-export type UnsoldPolicy = 'refund' | 'extend_once'
+/**
+ * What happens if a draw hasn't sold out by its deadline. Ticket buyers are
+ * always refunded in the end; `convert_to_sale` then keeps the item on the
+ * platform as a regular product at `fallbackPriceKobo`.
+ */
+export type UnsoldPolicy = 'refund' | 'extend_once' | 'convert_to_sale'
 
 export type ListingStatus =
   | 'pending_review' // submitted by a merchant, waiting for admin + escrow check
   | 'live' // tickets on sale
   | 'drawn' // sold out, winner picked
   | 'refunded' // deadline passed without selling out, buyers refunded
+  | 'for_sale' // draw ended unsold, buyers refunded, item now sold at a fixed price
   | 'rejected'
+
+/** How the item reaches DrawMart for checking: big items are inspected where they are. */
+export type HandoverMethod = 'pickup' | 'inspection'
+export type TimeSlot = 'morning' | 'afternoon'
+
+/** Where and when DrawMart collects (or inspects) the item. Private to the store and admins. */
+export interface Handover {
+  method: HandoverMethod
+  address: string
+  contactPhone: string
+  date: string // YYYY-MM-DD
+  slot: TimeSlot
+}
+
+/**
+ * Paid by the store when it submits a listing. Refunded with the payout if the
+ * draw sells out; otherwise kept to cover pickup/return or the inspection visit.
+ */
+export interface CautionFee {
+  amountKobo: Kobo
+  status: 'held' | 'refunded' | 'kept'
+}
 
 export interface Merchant {
   id: string
@@ -46,9 +74,14 @@ export interface Listing {
   feeMode: FeeMode
   feeBps: number // platform fee in basis points (1000 = 10%)
   unsoldPolicy: UnsoldPolicy
+  /** Regular price once a `convert_to_sale` draw ends unsold; null otherwise. */
+  fallbackPriceKobo: Kobo | null
+  /** Days tickets are on sale, counted from approval. */
   durationDays: number
   extended: boolean
   status: ListingStatus
+  handover: Handover
+  cautionFee: CautionFee
   /** SHA-256 of the secret draw seed, published before any ticket is sold. */
   commitment: string
   createdAt: ISODate

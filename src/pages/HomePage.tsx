@@ -37,6 +37,7 @@ export function HomePage() {
 
   const listings = useListings({ category })
   const all = useListings()
+  const forSale = useListings({ category, status: ['for_sale'] })
 
   const update = (patch: Record<string, string | undefined>) => {
     const next = new URLSearchParams(params)
@@ -140,6 +141,23 @@ export function HomePage() {
           </div>
         )}
       </section>
+
+      {forSale.data?.length && !query ? (
+        <section className="flex flex-col gap-4" aria-labelledby="buy-now-heading">
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-extrabold tracking-[0.14em] text-brand uppercase">Buy now</span>
+            <h2 id="buy-now-heading" className="font-display text-2xl font-extrabold tracking-tight">
+              Skip the draw, buy at a fixed price
+            </h2>
+            <p className="text-sm text-muted">These draws ended without selling out. Ticket buyers were refunded, and the stores kept the items on sale.</p>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {forSale.data.map((l) => (
+              <ListingCard key={l.id} listing={l} />
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="flex flex-col gap-4" aria-labelledby="how-heading">
         <div className="flex flex-col gap-1">
@@ -250,7 +268,7 @@ function Hero({ listings, query, onQuery }: { listings?: ListingView[]; query: s
             Win it for the price of a <span className="relative whitespace-nowrap text-ticket">ticket.</span>
           </h1>
           <p className="max-w-md text-[15px] leading-relaxed text-on-brand-muted">
-            Real items from verified Lagos stores, held in escrow. Every draw is public and anyone can check it.
+            Real items from verified Lagos stores, checked by DrawMart before they go live. Every draw is public and anyone can check it.
           </p>
 
           <form role="search" onSubmit={(e) => e.preventDefault()} className="relative max-w-md">
@@ -263,14 +281,14 @@ function Hero({ listings, query, onQuery }: { listings?: ListingView[]; query: s
               type="search"
               value={query}
               onChange={(e) => onQuery(e.target.value)}
-              placeholder="Search phones, TVs, rice…"
+              placeholder="Search phones, TVs, cars…"
               className="min-h-14 w-full rounded-2xl border-0 bg-surface pr-4 pl-12 text-base text-ink shadow-lift placeholder:text-subtle focus:ring-4 focus:ring-ticket/50 focus:outline-none"
             />
           </form>
 
           <ul className="flex flex-wrap gap-x-5 gap-y-2 text-sm font-semibold text-on-brand-muted">
             <li className="flex items-center gap-1.5">
-              <LockIcon size={16} className="text-ticket" /> Items in escrow
+              <LockIcon size={16} className="text-ticket" /> Checked before listing
             </li>
             <li className="flex items-center gap-1.5">
               <SparklesIcon size={16} className="text-ticket" /> Provably fair

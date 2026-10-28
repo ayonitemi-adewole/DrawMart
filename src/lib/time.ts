@@ -46,3 +46,9 @@ export function dayLabel(isoDate: string, now = new Date()): string {
 export function timeOfDay(isoDate: string): string {
   return new Date(isoDate).toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' })
 }
+
+/** "Wed, 30 Oct" for a YYYY-MM-DD calendar date. */
+export function calendarDay(date: string): string {
+  const [y, m, d] = date.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString('en-NG', { weekday: 'short', day: 'numeric', month: 'short' })
+}

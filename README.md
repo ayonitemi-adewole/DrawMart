@@ -24,8 +24,8 @@ Routes:
 | `/tickets` | Your tickets, waiting and finished |
 | `/draws`, `/draws/:id` | Results, with in-browser verification |
 | `/wallet` | Balance, store credit, test top-ups, weekly limit, state of residence |
-| `/merchant` | Store dashboard: new listing with live fee breakdown |
-| `/admin` | Approve listings once the item is in escrow |
+| `/merchant` | Store dashboard: new listing, then pickup or inspection booking and caution fee |
+| `/admin` | Approve listings once the item is in escrow or the car has passed inspection |
 
 Demo data lives in `localStorage`; **Wallet → Reset demo data** starts over.
 
@@ -37,6 +37,7 @@ src/
     types.ts     Listing, Ticket, LedgerEntry, DrawResult… (money is integer kobo)
     money.ts     Formatting/parsing ₦, basis-point maths
     fees.ts      Listing economics: ticket count, buyer price, payout, platform cut
+    listing.ts   Submission rules: deadline, unsold fallback price, pickup/inspection, caution fee
     draw.ts      Commit–reveal draw: SHA-256 commitment, winner calc, verifier
     rules.ts     Purchase rules: licensed states, 18+, per-person cap, weekly limit…
   api/
@@ -58,8 +59,12 @@ The UI only talks to `DrawMartApi`. To add a real backend, implement that interf
 - Weekly spending limit; lowering is instant, raising waits 24 h.
 - Store credit is spent before cash.
 - Losing buyers get 20% of their spend back as store credit.
-- Unsold at deadline: refund to wallet, or extend once by 7 days (merchant's choice).
-- Merchant listings go live only after admin approval (item checked into escrow).
+- Platform fee is at least 10% of the price.
+- Stores pick the deadline: 3–60 days, counted from approval.
+- Unsold at deadline, the store's choice: refund to wallet; extend once by 7 days, then refund; or refund and keep the item on sale at a fixed price the store set up front.
+- No perishables (no Food category).
+- After the listing form, the store books a pickup into escrow, or for cars an on-site inspection, and pays a caution fee. It's refunded with the payout on a sell-out and kept to cover delivery otherwise.
+- Merchant listings go live only after admin approval (item checked into escrow, or car inspected).
 
 ## How draws stay fair
 
