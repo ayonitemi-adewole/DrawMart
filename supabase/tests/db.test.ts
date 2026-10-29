@@ -726,16 +726,19 @@ describe('buyer and seller messages', () => {
     ;[{ id: raffleId }] = await admin<{ id: string }>(`select id from public.listings where kind = 'raffle' and status = 'live' limit 1`)
   })
 
-  it('opens one conversation per buyer per product, never for raffles', async () => {
-    ;[{ id: convo }] = await asUser<{ id: string }>(buyer, `select public.start_conversation($1) id`, [productId])
-    const [{ again }] = await asUser<{ again: string }>(buyer, `select public.start_conversation($1) again`, [productId])
-    expect(again).toBe(convo)
-    await expectFail(asUser(buyer, `select public.start_conversation($1)`, [raffleId]), 'invalid_input')
-    await expectFail(asUser(store, `select public.start_conversation($1)`, [productId]), 'forbidden')
+  it('creates a conversation only with its first message, one per buyer per product, never for raffles', async () => {
+    await expectFail(asUser(buyer, `select public.send_first_message($1, '   ')`, [productId]), 'invalid_input')
+    expect(await asUser(store, `select * from public.conversations`)).toEqual([]) // nothing to see yet
+    expect(await asUser(buyer, `select * from public.conversations`)).toEqual([])
+    await expect(asUser(buyer, `select public.start_conversation($1)`, [productId])).rejects.toThrow(/does not exist/)
+
+    ;[{ id: convo }] = await asUser<{ id: string }>(buyer, `select public.send_first_message($1, 'Is it still available?') id`, [productId])
+    expect((await asUser(store, `select id from public.conversations`)).map((c) => c.id)).toEqual([convo])
+    await expectFail(asUser(buyer, `select public.send_first_message($1, 'hi')`, [raffleId]), 'invalid_input')
+    await expectFail(asUser(store, `select public.send_first_message($1, 'hi')`, [productId]), 'forbidden')
   })
 
   it('lets only the buyer and the seller read and write', async () => {
-    await asUser(buyer, `select public.send_message($1, 'Is it still available?')`, [convo])
     await asUser(store, `select public.send_message($1, 'Yes! Sealed in the box.')`, [convo])
     expect((await asUser(buyer, `select body from public.messages order by created_at`)).map((m) => m.body)).toEqual(['Is it still available?', 'Yes! Sealed in the box.'])
     expect((await asUser(store, `select sender from public.messages where conversation_id = $1 order by created_at`, [convo])).map((m) => m.sender)).toEqual(['buyer', 'seller'])
@@ -808,7 +811,7 @@ describe('seller metrics', () => {
   it('adds chats and sales, per listing and per day', async () => {
     const buyer = await newUser('statbuyer@example.com')
     await asUser(buyer, `select public.record_listing_view($1, null)`, [productId])
-    await asUser(buyer, `select public.start_conversation($1)`, [productId])
+    await asUser(buyer, `select public.send_first_message($1, 'Still available?')`, [productId])
     await asUser(buyer, `select public.buy_now($1, '15 Awolowo Road, Ikoyi', '0803 123 4567')`, [productId])
     const m = await metrics(seller, 30)
     expect(m.listings[0]).toMatchObject({ views: 3, visitors: 3, chats: 1, units: 1, buyers: 1, salesKobo: 2_000_000 })

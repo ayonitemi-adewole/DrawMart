@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { Link, useParams } from 'react-router'
-import { useCallPhone, useConversations, useHasShop, useMarkConversationRead, useMessages, useSendMessage, useSetCallPhone } from '@/api/hooks'
+import { Link, useNavigate, useParams } from 'react-router'
+import { useCallPhone, useConversations, useHasShop, useListing, useMarkConversationRead, useMessages, useSendFirstMessage, useSendMessage, useSetCallPhone } from '@/api/hooks'
 import type { ChatMessage, ConversationView } from '@/api/types'
 import { AlertIcon, BackIcon, ChatIcon, PhoneIcon, SendIcon, ShieldIcon } from '@/components/icons'
 import { useToast } from '@/components/toast'
@@ -273,7 +273,11 @@ function MessageList({ messages, me }: { messages: ChatMessage[]; me: ChatMessag
 }
 
 function Composer({ conversationId }: { conversationId: string }) {
-  const send = useSendMessage(conversationId)
+  return <MessageBox send={useSendMessage(conversationId)} />
+}
+
+/** The text box and send button. `send` is a mutation taking the message text. */
+function MessageBox({ send, placeholder = 'Write a message…', autoFocus }: { send: { mutate: (body: string, o: { onSuccess: () => void; onError: (e: unknown) => void }) => void; isPending: boolean }; placeholder?: string; autoFocus?: boolean }) {
   const toast = useToast()
   const [body, setBody] = useState('')
   const problem = body ? messageError(body) : 'empty'
@@ -304,12 +308,73 @@ function Composer({ conversationId }: { conversationId: string }) {
         maxLength={MAX_MESSAGE_LENGTH}
         onChange={(e) => setBody(e.target.value)}
         onKeyDown={onKeyDown}
-        placeholder="Write a message…"
+        autoFocus={autoFocus}
+        placeholder={placeholder}
         className={cx(inputCls, 'max-h-40 min-h-11 flex-1 resize-none border-0 bg-transparent py-2.5 shadow-none')}
       />
       <Button type="submit" aria-label="Send message" loading={send.isPending} disabled={!!problem} className="size-11 shrink-0 rounded-2xl p-0">
         <SendIcon size={18} />
       </Button>
     </form>
+  )
+}
+
+/**
+ * /messages/new/:listingId: a buyer writing to a seller for the first time.
+ * Nothing is created until they send, so leaving this screen leaves no empty
+ * chat for the seller to find.
+ */
+export function NewConversationPage({ basePath }: { basePath: string }) {
+  const { listingId = '' } = useParams()
+  const listing = useListing(listingId)
+  const conversations = useConversations()
+  const navigate = useNavigate()
+  const send = useSendFirstMessage(listingId)
+  const existing = conversations.data?.find((c) => c.listingId === listingId && c.me === 'buyer')
+
+  // Already talking about this item: carry on in that chat.
+  useEffect(() => {
+    if (existing) navigate(`${basePath}/${existing.id}`, { replace: true })
+  }, [existing, basePath, navigate])
+
+  if (listing.isPending || conversations.isPending) return <Skeleton className="h-112" />
+  if (listing.isError) return <ErrorState error={listing.error} onRetry={() => listing.refetch()} />
+  const l = listing.data
+  const seller = l.merchant.kind === 'individual' ? 'the seller' : l.merchant.name
+
+  return (
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+      <Link to={`/listings/${l.id}`} className="-ml-2 flex min-h-11 w-fit items-center gap-1 rounded-xl px-2 text-sm font-bold text-muted no-underline hover:bg-sunken hover:text-ink">
+        <BackIcon size={18} /> Back to the item
+      </Link>
+      <Card className="flex items-center gap-3 p-3 sm:p-4">
+        <ProductImage category={l.category} src={l.images[0]} alt="" size="sm" className="size-14 shrink-0" />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <strong className="truncate">{l.merchant.name}</strong>
+          <span className="truncate text-xs text-subtle">{l.title}</span>
+        </div>
+      </Card>
+      <Notice tone="neutral" icon={ShieldIcon}>
+        Always pay through DrawMart: your money is only released to the seller after you confirm delivery. Never send money to an account number from a chat.
+      </Notice>
+      <Card className="flex min-h-60 flex-col p-4">
+        <p className="m-auto max-w-xs text-center text-sm text-subtle">Ask {seller} anything about the item. They’ll see the chat once you send your first message.</p>
+      </Card>
+      <MessageBox
+        autoFocus
+        placeholder={`Message ${seller}…`}
+        send={{
+          isPending: send.isPending,
+          mutate: (body, o) =>
+            send.mutate(body, {
+              onSuccess: (c) => {
+                o.onSuccess()
+                navigate(`${basePath}/${c.id}`, { replace: true })
+              },
+              onError: o.onError,
+            }),
+        }}
+      />
+    </div>
   )
 }

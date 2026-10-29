@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router'
-import { useAccess, useBuyNow, useMerchant, useMyOrders, useStartConversation, useWallet } from '@/api/hooks'
+import { Link, useLocation } from 'react-router'
+import { useAccess, useBuyNow, useConversations, useMerchant, useMyOrders, useWallet } from '@/api/hooks'
 import type { ListingView, OrderView } from '@/api/types'
 import { handoverMethodFor } from '@/domain/listing'
 import { formatNaira } from '@/domain/money'
@@ -207,10 +207,10 @@ const ORDER_STEP: Record<OrderView['status'], string> = {
 function MessageSellerButton({ listing: l }: { listing: ListingView }) {
   const access = useAccess()
   const shop = useMerchant()
-  const start = useStartConversation()
-  const navigate = useNavigate()
-  const toast = useToast()
+  const conversations = useConversations()
   const { pathname } = useLocation()
+  // The chat itself only appears once the first message is sent.
+  const existing = conversations.data?.find((c) => c.listingId === l.id && c.me === 'buyer')
   if (l.kind !== 'product' || shop.data?.id === l.merchantId) return null
   if (access.ready && !access.signedIn)
     return (
@@ -219,15 +219,9 @@ function MessageSellerButton({ listing: l }: { listing: ListingView }) {
       </Link>
     )
   return (
-    <Button
-      variant="outline"
-      size="lg"
-      className="w-full"
-      loading={start.isPending}
-      onClick={() => start.mutate(l.id, { onSuccess: (c) => navigate(`/messages/${c.id}`), onError: (e) => toast(errorMessage(e), 'error') })}
-    >
-      <ChatIcon size={18} /> Message {l.merchant.kind === 'individual' ? 'the seller' : l.merchant.name}
-    </Button>
+    <Link to={existing ? `/messages/${existing.id}` : `/messages/new/${l.id}`} className={buttonClass('outline', 'lg', 'w-full')}>
+      <ChatIcon size={18} /> {existing ? 'Open your chat' : `Message ${l.merchant.kind === 'individual' ? 'the seller' : l.merchant.name}`}
+    </Link>
   )
 }
 

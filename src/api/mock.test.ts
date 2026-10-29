@@ -260,18 +260,19 @@ describe('mock api', () => {
     const products = await api.listListings({ status: ['for_sale'] })
     const ikejaPhone = products.find((l) => l.kind === 'product' && l.merchant.id === 'm-ikeja')!
     const raffle = (await api.listListings())[0]
-    await expect(api.startConversation(raffle.id)).rejects.toThrow(/no seller chat/)
-    const c = await api.startConversation(ikejaPhone.id)
-    expect((await api.startConversation(ikejaPhone.id)).id).toBe(c.id)
-    await expect(api.sendMessage(c.id, '  ')).rejects.toThrow(/Write a message/)
-    await api.sendMessage(c.id, 'Can I pick it up today?')
+    await expect(api.sendFirstMessage(raffle.id, 'Hi')).rejects.toThrow(/no seller chat/)
+    await expect(api.sendFirstMessage(ikejaPhone.id, '  ')).rejects.toThrow(/Write a message/)
+    expect(await api.listConversations()).toHaveLength(1) // a blank message created nothing
+    const c = await api.sendFirstMessage(ikejaPhone.id, 'Can I pick it up today?')
+    expect((await api.sendFirstMessage(ikejaPhone.id, 'Or tomorrow?')).id).toBe(c.id) // same chat
+    expect((await api.listMessages(c.id)).length).toBe(2)
     expect(c.callPhone).toBeNull() // the store hasn't shared a number
 
     // The store sees it as unread, replies, and shares a number.
     await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
     const storeInbox = await api.listConversations()
     expect(storeInbox.map((x) => x.buyerName).sort()).toEqual(['Ada Okafor', 'Chidi Eze'])
-    expect(storeInbox.find((x) => x.id === c.id)).toMatchObject({ me: 'seller', unread: 1, callPhone: null })
+    expect(storeInbox.find((x) => x.id === c.id)).toMatchObject({ me: 'seller', unread: 2, callPhone: null })
     await api.markConversationRead(c.id)
     await api.sendMessage(c.id, 'Yes, any time before 6pm.')
     await expect(api.setCallPhone('123')).rejects.toThrow(/Nigerian mobile/)
@@ -280,7 +281,7 @@ describe('mock api', () => {
 
     await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
     expect((await api.listConversations()).find((x) => x.id === c.id)).toMatchObject({ unread: 1, callPhone: '0803 555 0000' })
-    expect((await api.listMessages(c.id)).map((m) => m.sender)).toEqual(['buyer', 'seller'])
+    expect((await api.listMessages(c.id)).map((m) => m.sender)).toEqual(['buyer', 'buyer', 'seller'])
   })
 
   it('counts listing views for seller insights, but not the seller’s own', async () => {

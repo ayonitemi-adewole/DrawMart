@@ -543,8 +543,8 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     confirmOrder: (orderId) => rpc('confirm_order', { p_order_id: orderId }),
 
     // Messages
-    startConversation: async (listingId) => {
-      const id = await rpc<string>('start_conversation', { p_listing_id: listingId })
+    sendFirstMessage: async (listingId, body) => {
+      const id = await rpc<string>('send_first_message', { p_listing_id: listingId, p_body: body })
       const all = await rpc<ConversationView[]>('list_conversations')
       const c = all.find((x) => x.id === id)
       if (!c) throw new ApiError('not_found', 'That conversation doesn’t exist.')

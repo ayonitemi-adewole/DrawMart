@@ -78,9 +78,10 @@ export const useMessages = (conversationId: string) =>
   useQuery({ queryKey: keys.messages(conversationId), queryFn: () => api.listMessages(conversationId), enabled: useCanChat(), refetchInterval: 4_000 })
 export const useCallPhone = () => useQuery({ queryKey: keys.callPhone, queryFn: () => api.getCallPhone(), enabled: useHasShop() })
 
-export function useStartConversation() {
+/** The buyer's first message about a product, which is what creates the chat. */
+export function useSendFirstMessage(listingId: string) {
   const qc = useQueryClient()
-  return useMutation({ mutationFn: (listingId: string) => api.startConversation(listingId), onSettled: () => qc.invalidateQueries({ queryKey: keys.conversations }) })
+  return useMutation({ mutationFn: (body: string) => api.sendFirstMessage(listingId, body), onSettled: () => qc.invalidateQueries({ queryKey: keys.conversations }) })
 }
 
 export function useSendMessage(conversationId: string) {

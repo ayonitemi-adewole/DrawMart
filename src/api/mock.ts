@@ -818,6 +818,21 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     const monthAgo = iso(now() - 30 * DAY)
     return new Set(db.ledger.filter((e) => (e.kind === 'ticket_purchase' || e.kind === 'order_payment') && e.createdAt > monthAgo).map((e) => e.userId)).size
   }
+  /** Checks and adds one message (messages.ts messageError, MAX_MESSAGES_PER_MINUTE). */
+  function postMessage(db: Db, c: MockConversation, side: ChatSide, body: string): ChatMessage {
+    const problem = messageError(body)
+    if (problem) throw new ApiError('invalid_input', problem)
+    const minuteAgo = iso(now() - 60_000)
+    if (db.messages.filter((m) => m.conversationId === c.id && m.sender === side && m.createdAt > minuteAgo).length >= MAX_MESSAGES_PER_MINUTE)
+      throw new ApiError('invalid_input', 'You’re sending messages very fast. Wait a moment.')
+    const at = iso(now())
+    const msg: ChatMessage = { id: uid('X'), conversationId: c.id, sender: side, body: body.trim(), createdAt: at }
+    db.messages.push(msg)
+    c.lastMessageAt = at
+    if (side === 'buyer') c.buyerReadAt = at
+    else c.sellerReadAt = at
+    return msg
+  }
   const conversationOr404 = (db: Db, id: string) => {
     const c = db.conversations.find((x) => x.id === id)
     const side = c ? sideIn(db, c) : null
@@ -1037,18 +1052,23 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         o.dispatchedAt = iso(now())
       }),
 
-    startConversation: (listingId) =>
+    sendFirstMessage: (listingId, body) =>
       tx((db) => {
         const l = getListingOr404(db, listingId)
+        if (readSession() && readSession()!.role !== 'buyer') throw new ApiError('forbidden', 'Only buyer accounts can message sellers.')
         if (l.kind !== 'product') throw new ApiError('invalid_input', 'Raffle items are held and checked by DrawMart, so there’s no seller chat.')
         if (l.status !== 'for_sale' && l.status !== 'sold') throw new ApiError('not_found', 'That item isn’t on sale.')
         if (l.merchantId === db.sellerShops[buyer()]) throw new ApiError('invalid_input', 'This is your own item.')
+        // Check the text before creating anything.
+        const problem = messageError(body)
+        if (problem) throw new ApiError('invalid_input', problem)
         let c = db.conversations.find((x) => x.listingId === l.id && x.buyerId === buyer())
         if (!c) {
           const at = iso(now())
           c = { id: uid('C'), listingId: l.id, buyerId: buyer(), merchantId: l.merchantId, lastMessageAt: at, buyerReadAt: at, sellerReadAt: iso(0) }
           db.conversations.push(c)
         }
+        postMessage(db, c, 'buyer', body)
         return conversationView(db, c, 'buyer')
       }),
 
@@ -1071,18 +1091,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     sendMessage: (conversationId, body) =>
       tx((db) => {
         const { c, side } = conversationOr404(db, conversationId)
-        const problem = messageError(body)
-        if (problem) throw new ApiError('invalid_input', problem)
-        const minuteAgo = iso(now() - 60_000)
-        if (db.messages.filter((m) => m.conversationId === c.id && m.sender === side && m.createdAt > minuteAgo).length >= MAX_MESSAGES_PER_MINUTE)
-          throw new ApiError('invalid_input', 'You’re sending messages very fast. Wait a moment.')
-        const at = iso(now())
-        const msg: ChatMessage = { id: uid('X'), conversationId: c.id, sender: side, body: body.trim(), createdAt: at }
-        db.messages.push(msg)
-        c.lastMessageAt = at
-        if (side === 'buyer') c.buyerReadAt = at
-        else c.sellerReadAt = at
-        return msg
+        return postMessage(db, c, side, body)
       }),
 
     markConversationRead: (conversationId) =>

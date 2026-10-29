@@ -325,8 +325,12 @@ export interface DrawMartApi {
   getBoostInsights(boostId: string): Promise<BoostInsightsView>
 
   // Messages: buyer ↔ seller chat about a regular product
-  /** Opens (or reopens) the buyer's conversation with the seller of a product. */
-  startConversation(listingId: string): Promise<ConversationView>
+  /**
+   * A buyer's message about a product. Creates the conversation if this is the
+   * first one: a chat only exists once something is said, so sellers never
+   * see empty ones. Later messages use sendMessage.
+   */
+  sendFirstMessage(listingId: string, body: string): Promise<ConversationView>
   /** Every conversation the signed-in user is in, on either side, newest first. */
   listConversations(): Promise<ConversationView[]>
   listMessages(conversationId: string): Promise<ChatMessage[]>
