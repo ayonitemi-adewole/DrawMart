@@ -185,6 +185,27 @@ dialog::backdrop {
   animation: fade-in 0.2s ease-out;
 }
 
+/*
+ * A card in a scrolling ListingRow. At most 4 cards show at once on large
+ * screens: 3 whole ones and three-quarters of the next, so the cut-off card
+ * shows the row scrolls. Tablets: 2 + ¾. Phones: 1 + ¾.
+ * Width = (row − one 1rem gap per whole card) ÷ (whole cards + 0.75).
+ * Breakpoints match Tailwind's sm (40rem) and lg (64rem).
+ */
+.listing-row-item {
+  width: calc((100% - 1rem) / 1.75); /* 1 + ¾ */
+}
+@media (width >= 40rem) {
+  .listing-row-item {
+    width: calc((100% - 2rem) / 2.75); /* 2 + ¾ */
+  }
+}
+@media (width >= 64rem) {
+  .listing-row-item {
+    width: calc((100% - 3rem) / 3.75); /* 3 + ¾ */
+  }
+}
+
 /* Hide scrollbars on horizontal rails while keeping them scrollable. */
 .no-scrollbar {
   scrollbar-width: none;

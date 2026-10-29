@@ -16,7 +16,8 @@ export function valueMultiple(l: Pick<ListingView, 'priceKobo' | 'buyerTicketPri
   return Math.round(l.priceKobo / l.buyerTicketPriceKobo)
 }
 
-export function ListingCard({ listing: l, className, style }: { listing: ListingView; className?: string; style?: React.CSSProperties }) {
+/** `compact`: for the scrolling rows, where cards are narrower than in a grid. */
+export function ListingCard({ listing: l, className, style, compact }: { listing: ListingView; className?: string; style?: React.CSSProperties; compact?: boolean }) {
   const left = l.ticketCount - l.ticketsSold
   const hot = isAlmostGone(l)
   const pct = Math.round((l.ticketsSold / l.ticketCount) * 100)
@@ -39,7 +40,7 @@ export function ListingCard({ listing: l, className, style }: { listing: Listing
           category={l.category}
           src={l.images[0]}
           alt={l.title}
-          className="h-52"
+          className={compact ? 'h-36 sm:h-44 lg:h-48' : 'h-52'}
           imgClassName="transition-transform duration-500 ease-out group-hover:scale-105"
         />
         {l.images.length > 1 ? (
@@ -82,9 +83,9 @@ export function ListingCard({ listing: l, className, style }: { listing: Listing
         )}
       </div>
 
-      <div className="flex flex-1 flex-col gap-3 p-4">
+      <div className={cx('flex flex-1 flex-col gap-3', compact ? 'p-3 sm:p-4' : 'p-4')}>
         <div className="flex flex-col gap-1">
-          <span className="text-[17px] leading-tight font-extrabold">{l.title}</span>
+          <span className={cx('leading-tight font-extrabold', compact ? 'line-clamp-2 text-[15px] sm:text-[17px]' : 'text-[17px]')}>{l.title}</span>
           <span className="flex items-center gap-1 truncate text-xs text-subtle">
             {l.merchant.verified ? <CheckIcon size={13} className="text-brand" /> : null}
             {l.merchant.name}
@@ -109,7 +110,7 @@ export function ListingCard({ listing: l, className, style }: { listing: Listing
         </div>
         )}
 
-        <div className="mt-auto flex items-end justify-between gap-2 border-t border-dashed border-line pt-3">
+        <div className="mt-auto flex flex-wrap items-end justify-between gap-2 border-t border-dashed border-line pt-3">
           {forSale ? (
             <div className="flex flex-col">
               <span className="text-[11px] text-subtle">{l.status === 'sold' ? 'Sold for' : 'Buy now'}</span>

@@ -2,10 +2,10 @@ import { useListings } from '@/api/hooks'
 import type { ListingView } from '@/api/types'
 import { moreFromSeller, similarListings } from '@/domain/related'
 import { browseHref } from '@/pages/BrowsePage'
-import { CappedListingGrid, SeeAllLink } from './ListingGrid'
+import { ListingRow, SeeAllLink } from './ListingGrid'
 import { Skeleton } from './ui'
 
-/** Under a listing: one row from the same seller, then one row of similar items, each linking to the full list. */
+/** Under a listing: a scrolling row from the same seller, then one of similar items, each linking to the full list. */
 export function RelatedListings({ listing }: { listing: ListingView }) {
   // Everything a buyer can act on, from the cache the home page already fills.
   const q = useListings({ status: ['live', 'for_sale'] })
@@ -52,7 +52,7 @@ function Row({ id, eyebrow, title, listings, seeAll }: { id: string; eyebrow: st
         </div>
         <SeeAllLink to={seeAll.to} label={seeAll.label} />
       </div>
-      <CappedListingGrid listings={listings} rows={1} seeAll={{ ...seeAll, label: 'See all' }} />
+      <ListingRow listings={listings} label={title} />
     </section>
   )
 }

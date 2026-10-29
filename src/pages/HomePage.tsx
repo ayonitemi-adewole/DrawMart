@@ -16,7 +16,7 @@ import {
   XIcon,
 } from "@/components/icons";
 import { isAlmostGone, valueMultiple } from "@/components/ListingCard";
-import { CappedListingGrid, SeeAllLink } from "@/components/ListingGrid";
+import { ListingRow, SeeAllLink } from "@/components/ListingGrid";
 import { SponsoredCarousel } from "@/components/SponsoredCarousel";
 import { browseHref } from "@/pages/BrowsePage";
 import {
@@ -240,18 +240,13 @@ export function HomePage() {
             }
           />
         ) : category || query ? (
-          <CappedListingGrid
-            listings={visible}
-            rows={MAX_ROWS}
-            seeAll={{
-              to: browseHref({
-                category,
-                q: query || undefined,
-                type: "draws",
-              }),
-              label: "See all draws",
-            }}
-          />
+          <div className="flex flex-col gap-2">
+            <ListingRow listings={visible} label={category ? `${category} draws` : "Matching draws"} />
+            <SeeAllLink
+              to={browseHref({ category, q: query || undefined, type: "draws" })}
+              label={`See all ${visible.length} draws`}
+            />
+          </div>
         ) : (
           <ByCategory listings={visible} type="draws" />
         )}
@@ -280,14 +275,10 @@ export function HomePage() {
             </p>
           </div>
           {category ? (
-            <CappedListingGrid
-              listings={shop}
-              rows={MAX_ROWS}
-              seeAll={{
-                to: browseHref({ category, type: "buy" }),
-                label: "See all items",
-              }}
-            />
+            <div className="flex flex-col gap-2">
+              <ListingRow listings={shop} label={`${category} to buy now`} />
+              <SeeAllLink to={browseHref({ category, type: "buy" })} label={`See all ${shop.length} items`} />
+            </div>
           ) : (
             <ByCategory listings={shop} type="buy" />
           )}
@@ -315,10 +306,7 @@ export function HomePage() {
   );
 }
 
-/** Rows of cards shown per category on the explore page before "See all". */
-const MAX_ROWS = 5;
-
-/** One block per category, in the usual category order, each capped at MAX_ROWS rows. */
+/** One scrolling row per category, in the usual category order. */
 function ByCategory({
   listings,
   type,
@@ -344,11 +332,7 @@ function ByCategory({
               </h3>
               <SeeAllLink to={to} label={`All ${c.toLowerCase()}`} />
             </div>
-            <CappedListingGrid
-              listings={items}
-              rows={MAX_ROWS}
-              seeAll={{ to, label: `See all ${c.toLowerCase()}` }}
-            />
+            <ListingRow listings={items} label={type === "draws" ? `${c} draws` : `${c} to buy now`} />
           </div>
         );
       })}
