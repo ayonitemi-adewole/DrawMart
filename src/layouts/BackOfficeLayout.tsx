@@ -1,44 +1,57 @@
-import { Link, NavLink, Outlet, ScrollRestoration, useLocation } from 'react-router'
+import { NavLink, Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router'
 import { api } from '@/api'
 import { useAccess, useMerchant, usePendingListings, useSignOut } from '@/api/hooks'
-import { ArrowRightIcon, CheckIcon, ClipboardIcon, LayoutIcon, LogOutIcon } from '@/components/icons'
+import { CheckIcon, ClipboardIcon, DiceIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { cx } from '@/components/ui'
+import { APP_HOME } from '@/lib/apps'
 import { Logo, TestModeBanner } from './BuyerLayout'
 
-/** Shared desktop-first shell for the merchant and admin areas. */
-export function BackOfficeLayout() {
+type BackOfficeApp = 'store' | 'admin'
+
+interface NavItem {
+  to: string
+  label: string
+  icon: IconComponent
+  count?: number
+}
+
+/** Desktop-first shell shared by the store app and the admin app. Each only links to its own pages. */
+export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
   const { pathname } = useLocation()
+  const navigate = useNavigate()
   const merchant = useMerchant()
   const pending = usePendingListings()
-  const pendingCount = pending.data?.length ?? 0
-
   const access = useAccess()
   const signOut = useSignOut()
 
-  // Only show the areas this account can open (everything on the mock).
-  const nav = [
-    { to: '/merchant', label: 'Store dashboard', icon: LayoutIcon, count: 0, show: access.isStore },
-    { to: '/admin', label: 'Admin review', icon: ClipboardIcon, count: pendingCount, show: access.isAdmin },
-  ].filter((n) => n.show)
+  const nav: NavItem[] =
+    app === 'store'
+      ? [{ to: '/store', label: 'Dashboard', icon: LayoutIcon }]
+      : [
+          { to: '/admin', label: 'Review queue', icon: ClipboardIcon, count: pending.data?.length ?? 0 },
+          { to: '/admin/draws', label: api.testMode ? 'Live draws & demo' : 'Live draws', icon: DiceIcon },
+        ]
 
   return (
     <div className="flex min-h-dvh flex-col">
       <TestModeBanner />
       <div className="flex flex-1 flex-col lg:flex-row">
         <aside className="sticky top-0 z-30 border-b border-line bg-surface/90 backdrop-blur-xl lg:h-dvh lg:w-64 lg:shrink-0 lg:border-r lg:border-b-0">
-          <div className="flex items-center justify-between gap-2 px-4 py-2.5 lg:flex-col lg:items-stretch lg:gap-6 lg:p-5">
+          <div className="flex items-center justify-between gap-2 px-4 py-2.5 lg:h-full lg:flex-col lg:items-stretch lg:gap-6 lg:p-5">
             <div className="flex items-center justify-between">
-              <Logo suffix="Business" />
+              <Logo suffix={app === 'store' ? 'Stores' : 'Admin'} to={APP_HOME[app]} />
               <div className="hidden lg:block">
                 <ThemeToggle />
               </div>
             </div>
-            <nav className="flex items-center gap-1 lg:flex-col lg:items-stretch" aria-label="Back office">
+            <nav className="flex items-center gap-1 lg:flex-col lg:items-stretch" aria-label={app === 'store' ? 'Store' : 'Admin'}>
               {nav.map((n) => (
                 <NavLink
                   key={n.to}
                   to={n.to}
+                  end
+                  aria-label={n.label}
                   className={({ isActive }) =>
                     cx(
                       'flex min-h-11 items-center gap-2.5 rounded-xl px-3 text-sm font-bold no-underline transition',
@@ -48,15 +61,22 @@ export function BackOfficeLayout() {
                 >
                   <n.icon size={18} />
                   <span className="hidden sm:inline">{n.label}</span>
-                  {n.count > 0 ? <span className="ml-auto rounded-full bg-hot px-1.5 py-0.5 text-[10px] font-extrabold text-white">{n.count}</span> : null}
+                  {n.count ? <span className="ml-auto rounded-full bg-hot px-1.5 py-0.5 text-[10px] font-extrabold text-white">{n.count}</span> : null}
                 </NavLink>
               ))}
               <div className="lg:hidden">
                 <ThemeToggle />
               </div>
+              <button
+                onClick={() => signOut.mutate(undefined, { onSuccess: () => navigate('/login') })}
+                aria-label="Sign out"
+                className="flex min-h-11 items-center justify-center rounded-xl px-3 text-muted hover:bg-sunken hover:text-ink lg:hidden"
+              >
+                <LogOutIcon size={18} />
+              </button>
             </nav>
             <div className="mt-auto hidden flex-col gap-3 lg:flex">
-              {merchant.data ? (
+              {app === 'store' && merchant.data ? (
                 <div className="flex items-center gap-3 rounded-2xl bg-sunken p-3">
                   <span className="flex size-10 items-center justify-center rounded-xl bg-brand font-display text-lg font-extrabold text-on-brand">
                     {merchant.data.name.charAt(0)}
@@ -70,18 +90,13 @@ export function BackOfficeLayout() {
                   </div>
                 </div>
               ) : null}
-              <Link to="/" className="flex min-h-11 items-center justify-between rounded-xl px-3 text-sm font-bold text-muted no-underline hover:bg-sunken hover:text-ink">
-                Open buyer app <ArrowRightIcon size={16} />
-              </Link>
-              {api.auth && access.signedIn ? (
-                <button
-                  onClick={() => signOut.mutate()}
-                  className="flex min-h-11 items-center justify-between gap-2 rounded-xl px-3 text-left text-sm font-bold text-muted hover:bg-sunken hover:text-ink"
-                >
-                  <span className="min-w-0 truncate">Sign out{access.email ? <span className="font-normal"> · {access.email}</span> : null}</span>
-                  <LogOutIcon size={16} className="shrink-0" />
-                </button>
-              ) : null}
+              <button
+                onClick={() => signOut.mutate(undefined, { onSuccess: () => navigate('/login') })}
+                className="flex min-h-11 items-center justify-between gap-2 rounded-xl px-3 text-left text-sm font-bold text-muted hover:bg-sunken hover:text-ink"
+              >
+                <span className="min-w-0 truncate">Sign out{access.email ? <span className="font-normal"> · {access.email}</span> : null}</span>
+                <LogOutIcon size={16} className="shrink-0" />
+              </button>
             </div>
           </div>
         </aside>

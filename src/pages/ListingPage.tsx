@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { api } from "@/api";
 import {
   useBuyTickets,
-  useDemoActions,
   useListing,
   useAccess,
   useMe,
@@ -18,8 +16,6 @@ import {
   CheckIcon,
   ChevronRightIcon,
   CoinIcon,
-  DiceIcon,
-  FastForwardIcon,
   GaugeIcon,
   LockIcon,
   MapPinIcon,
@@ -551,7 +547,6 @@ function BuyPanel({
   const access = useAccess();
   const signedOut = access.ready && !access.signedIn;
   const buy = useBuyTickets();
-  const demo = useDemoActions();
   const held = l.myNumbers.length;
   const max = maxPurchasable(l, held);
   const [qty, setQty] = useState(1);
@@ -876,40 +871,6 @@ function BuyPanel({
       >
         Skip the draw: buy now for {formatNaira(l.priceKobo)}
       </Button>
-
-      {/* The database only lets admins use these on Supabase; anyone on the mock. */}
-      {api.testMode && access.isAdmin ? (
-        <div className="flex flex-col gap-2 rounded-3xl border border-dashed border-ticket bg-ticket-soft/50 p-4">
-          <span className="flex items-center gap-1.5 text-xs font-extrabold tracking-wider text-ticket-ink uppercase">
-            <DiceIcon size={14} /> Demo controls
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            loading={demo.sellOut.isPending}
-            onClick={() =>
-              demo.sellOut.mutateAsync(l.id).then(
-                () => navigate(`/draws/${l.id}`),
-                (e) => toast(errorMessage(e), "error"),
-              )
-            }
-          >
-            <TrophyIcon size={14} /> Sell remaining tickets and run the draw
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            loading={demo.expire.isPending}
-            onClick={() =>
-              demo.expire.mutate(l.id, {
-                onError: (e) => toast(errorMessage(e), "error"),
-              })
-            }
-          >
-            <FastForwardIcon size={14} /> Skip to deadline (unsold)
-          </Button>
-        </div>
-      ) : null}
 
       <Sheet
         open={confirming}

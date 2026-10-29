@@ -700,7 +700,7 @@ function AccountCard() {
         >
           Replay the intro
         </Button>
-        {api.auth ? <SignOutButton /> : null}
+        <SignOutButton />
         {api.testMode && api.demoReset ? (
           <Button
             variant="danger"
@@ -757,7 +757,7 @@ function SignOutButton() {
       loading={busy}
       onClick={async () => {
         setBusy(true);
-        await api.auth?.signOut();
+        await api.auth.signOut();
         window.location.assign("/");
       }}
     >

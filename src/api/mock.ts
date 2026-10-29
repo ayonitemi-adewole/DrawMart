@@ -20,6 +20,7 @@ import {
   validateListingTerms,
 } from '@/domain/listing'
 import { nairaToKobo } from '@/domain/money'
+import { DEMO_ACCOUNTS } from './demoAccounts'
 import {
   PURCHASE_ERROR_TEXT,
   RULES,
@@ -39,9 +40,12 @@ import {
   type ListingView,
   type NewListingInput,
   type WalletView,
+  type AuthAdapter,
+  type AuthSession,
 } from './types'
 
 const STORAGE_KEY = 'drawmart:mock-db:v3' // bump when seed data or the Db shape changes
+const SESSION_KEY = 'drawmart:mock-session'
 const ME = 'u-me'
 const MY_MERCHANT = 'm-ikeja'
 const CROWD = 'u-crowd'
@@ -394,6 +398,43 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     return run
   }
 
+  // Demo sign-in, so the mock opens the same three apps as a real backend. It
+  // only decides which app you see: the mock's data rules don't check roles.
+  const sessionListeners = new Set<(s: AuthSession | null) => void>()
+  function readSession(): AuthSession | null {
+    try {
+      return JSON.parse(store.getItem(SESSION_KEY) ?? 'null') as AuthSession | null
+    } catch {
+      return null
+    }
+  }
+  function setSession(s: AuthSession | null) {
+    if (s) store.setItem(SESSION_KEY, JSON.stringify(s))
+    else store.removeItem(SESSION_KEY)
+    sessionListeners.forEach((l) => l(s))
+  }
+  const auth: AuthAdapter = {
+    emailLinks: false,
+    demoAccounts: DEMO_ACCOUNTS,
+    getSession: async () => readSession(),
+    onChange(callback) {
+      sessionListeners.add(callback)
+      return () => void sessionListeners.delete(callback)
+    },
+    async sendSignInLink() {
+      throw new ApiError('invalid_input', 'The demo can’t send email. Use one of the demo accounts.')
+    },
+    async signInWithPassword(email, password) {
+      await sleep()
+      const a = DEMO_ACCOUNTS.find((d) => d.email === email.trim().toLowerCase())
+      if (!a || a.password !== password) throw new ApiError('invalid_input', 'That email and password don’t match. Try one of the demo accounts.')
+      setSession({ userId: a.role === 'buyer' ? ME : `u-${a.role}`, email: a.email, role: a.role })
+    },
+    async signOut() {
+      setSession(null)
+    },
+  }
+
   const me = (db: Db) => db.users.find((u) => u.id === ME)!
   const getListingOr404 = (db: Db, id: string) => {
     const l = db.listings.find((x) => x.id === id)
@@ -403,6 +444,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
   return {
     testMode: true,
+    auth,
 
     getCurrentUser: () => tx((db) => ({ ...me(db) })),
 

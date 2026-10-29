@@ -65,7 +65,9 @@ select cron.schedule('drawmart-process-deadlines', '* * * * *', 'select private.
    - **Redirect URLs**: add `http://localhost:5173/**`
 2. **Authentication → Sign In / Providers → Email** should be enabled (it is by default).
 
-People sign in on `/login`, either with an emailed link (this also creates their account the first time) or with a password if their account has one. Browsing draws doesn't need an account.
+Everyone signs in on `/login`, either with an emailed link or with a password if their account has one. The first emailed link creates a **buyer** account. After sign-in, each account goes to its own app: buyers to `/`, stores to `/store`, admins to `/admin`. Browsing draws doesn't need an account.
+
+If the app is deployed (e.g. on Vercel), set **Site URL** to that address and add `https://<your-domain>/**` to **Redirect URLs** too.
 
 Supabase's built-in email sender only allows a few emails per hour. That's fine for testing; before launch, add your own SMTP provider under **Authentication → Emails → SMTP Settings**.
 
@@ -92,28 +94,32 @@ npm run dev
 
 Open http://localhost:5173, enter your email, and click the link in the email. You're in, with ₦25,000 of test money.
 
-## Step 7: Make yourself an admin and a store
+## Step 7: Set up a store account and an admin account
 
-New accounts are buyers. To use **Admin review**, the **demo controls**, and the **merchant dashboard**, run this in **SQL Editor** with your email:
+Buyer, store and admin are separate apps, and **each account belongs to exactly one**. A store or admin account can't buy tickets or top up, and the database enforces that. So use three emails, e.g. `you@example.com` (buyer), `you+store@example.com` and `you+admin@example.com`. Sign in once with each email so the account exists, then run this in **SQL Editor**:
 
 ```sql
+-- Store app (/store): link the account to a store
 update public.profiles
-set role = 'admin',
-    merchant_id = '11111111-1111-4111-8111-000000000001'  -- Ikeja Partner Store from the seed
-where id = (select id from auth.users where email = 'you@example.com');
+set role = 'store', merchant_id = '11111111-1111-4111-8111-000000000001'  -- Ikeja Partner Store from the seed
+where id = (select id from auth.users where email = 'you+store@example.com');
+
+-- Admin app (/admin): review queue, live draws and demo controls
+update public.profiles
+set role = 'admin', merchant_id = null
+where id = (select id from auth.users where email = 'you+admin@example.com');
 ```
 
-Reload the app.
+`role` and `merchant_id` must change together: a store account always has a store, and other accounts never do. Sign out and back in to land in the new app.
 
 ## Step 8: Try the whole flow
 
-- **Buy tickets** on a live draw; your wallet goes down and your numbers appear under Tickets.
-- **Demo controls** on a listing (signed in as an admin; they're hidden for everyone else): "sell out" runs the draw; open the result and press **Verify**.
-- **Merchant dashboard**: create a listing with a photo. The photo uploads to the `listing-photos` storage bucket.
-- **Admin review**: approve it; it appears on the home page.
+- **Buyer**: buy tickets on a live draw; your wallet goes down and your numbers appear under Tickets.
+- **Store** (`/store`): create a listing with a photo. The photo uploads to the `listing-photos` storage bucket.
+- **Admin** (`/admin`): approve it in the review queue; it appears on the home page. Under **Live draws & demo**, "Run the draw" sells it out and draws a winner; as the buyer, open the result and press **Verify**.
 - **Wallet**: top-ups (instant test money, or Flutterwave's test checkout once Step 9 is done) and spending limits.
 
-Sign in from a second email in a private window to see another buyer's view. You won't see the first account's tickets or wallet.
+Use a private window per account to keep several signed in at once. Sign in from a second buyer email to see another buyer's view. You won't see the first account's tickets or wallet.
 
 ## Step 9 (optional): Flutterwave top-ups
 

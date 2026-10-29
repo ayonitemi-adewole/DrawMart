@@ -35,6 +35,22 @@ describe('mock api', () => {
     expect((await api.createListing(newListing())).images).toEqual([])
   })
 
+  it('signs demo accounts into their own app and remembers them', async () => {
+    const store = memoryStore()
+    const api = createMockApi({ store, latencyMs: 0 })
+    const seen: (string | null)[] = []
+    const stop = api.auth.onChange((s) => seen.push(s?.role ?? null))
+    expect(await api.auth.getSession()).toBeNull()
+    await expect(api.auth.signInWithPassword('store@drawmart.test', 'nope')).rejects.toThrow(ApiError)
+    await api.auth.signInWithPassword(' Store@drawmart.test ', 'drawmart-demo')
+    expect(await createMockApi({ store, latencyMs: 0 }).auth.getSession()).toMatchObject({ role: 'store', email: 'store@drawmart.test' })
+    await api.auth.signOut()
+    stop()
+    expect(seen).toEqual(['store', null])
+    expect(await api.auth.getSession()).toBeNull()
+    await expect(api.auth.sendSignInLink('a@b.co', '/')).rejects.toThrow(/demo accounts/)
+  })
+
   it('tops up within the per-top-up limits', async () => {
     const api = make()
     const before = (await api.getWallet()).balance.cashKobo

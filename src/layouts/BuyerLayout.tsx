@@ -1,6 +1,7 @@
 import {
   Link,
   NavLink,
+  Navigate,
   Outlet,
   ScrollRestoration,
   useLocation,
@@ -11,7 +12,6 @@ import { IntroSheet } from "@/components/HowItWorks";
 import {
   HomeIcon,
   ShieldIcon,
-  StoreIcon,
   TicketIcon,
   TrophyIcon,
   WalletIcon,
@@ -19,6 +19,7 @@ import {
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { buttonClass, cx } from "@/components/ui";
 import { formatNaira } from "@/domain/money";
+import { APP_HOME } from "@/lib/apps";
 
 const NAV = [
   { to: "/", label: "Explore", icon: HomeIcon, end: true },
@@ -27,10 +28,10 @@ const NAV = [
   { to: "/wallet", label: "Wallet", icon: WalletIcon },
 ];
 
-export function Logo({ suffix }: { suffix?: string }) {
+export function Logo({ suffix, to = "/" }: { suffix?: string; to?: string }) {
   return (
     <Link
-      to="/"
+      to={to}
       className="group flex items-center gap-2 text-ink no-underline"
       aria-label={`DrawMart${suffix ? " " + suffix : ""} home`}
     >
@@ -56,9 +57,9 @@ export function TestModeBanner() {
       <span className="rounded-full bg-on-ticket px-1.5 py-px text-[10px] tracking-wider text-ticket">
         TEST
       </span>
-      {api.auth
-        ? "No real money. Test accounts and test money only."
-        : "No real money. Data is stored in this browser only."}
+      {api.demoReset
+        ? "No real money. Data is stored in this browser only."
+        : "No real money. Test accounts and test money only."}
     </div>
   );
 }
@@ -75,6 +76,10 @@ export function BuyerLayout() {
   const active = useActiveTicketCount();
   const cash = wallet.data?.balance.cashKobo ?? null;
   const credit = wallet.data?.balance.creditKobo ?? 0;
+
+  // Store and admin accounts have their own apps and never see this one.
+  if (access.role && access.role !== "buyer")
+    return <Navigate to={APP_HOME[access.role]} replace />;
 
   return (
     <div className="flex min-h-dvh flex-col">
@@ -111,22 +116,14 @@ export function BuyerLayout() {
             ))}
           </nav>
           <div className="flex items-center gap-1">
-            <Link
-              to="/merchant"
-              className="hidden min-h-11 items-center gap-1.5 rounded-xl px-3 text-sm font-bold text-muted no-underline hover:bg-sunken hover:text-ink lg:flex"
-            >
-              <StoreIcon size={18} /> For stores
-            </Link>
             <ThemeToggle />
             {access.ready && !access.signedIn ? (
-              pathname === "/login" ? null : (
-                <Link
-                  to={`/login?next=${encodeURIComponent(pathname + search)}`}
-                  className={buttonClass("primary")}
-                >
-                  <span className="text-on-brand">Sign in</span>
-                </Link>
-              )
+              <Link
+                to={`/login?next=${encodeURIComponent(pathname + search)}`}
+                className={buttonClass("primary")}
+              >
+                <span className="text-on-brand">Sign in</span>
+              </Link>
             ) : (
               <Link
                 to="/wallet"
@@ -167,10 +164,9 @@ export function BuyerLayout() {
               Play responsibly
             </span>
           </div>
-          <div className="flex gap-4">
-            <Link to="/merchant">For stores</Link>
-            <Link to="/admin">Admin review</Link>
-          </div>
+          {access.signedIn ? null : (
+            <Link to="/login">Store or DrawMart team? Sign in</Link>
+          )}
         </div>
       </footer>
 

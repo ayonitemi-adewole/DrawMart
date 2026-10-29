@@ -29,6 +29,6 @@ select gen_random_uuid(), u.id, u.id::text, jsonb_build_object('sub', u.id::text
  where u.email like '%@drawmart.test'
    and not exists (select 1 from auth.identities i where i.user_id = u.id and i.provider = 'email');
 
--- The sign-up trigger made buyer profiles; promote two of them.
-update public.profiles set merchant_id = '11111111-1111-4111-8111-000000000001' where id = 'a0000000-0000-4000-8000-000000000002';
+-- The sign-up trigger made buyer profiles; turn two of them into store and admin accounts.
+update public.profiles set role = 'store', merchant_id = '11111111-1111-4111-8111-000000000001' where id = 'a0000000-0000-4000-8000-000000000002';
 update public.profiles set role = 'admin' where id = 'a0000000-0000-4000-8000-000000000003';

@@ -103,16 +103,26 @@ export class ApiError extends Error {
   }
 }
 
+/** Buyer, store and admin are separate apps; every account belongs to exactly one. */
+export type AccountRole = 'buyer' | 'store' | 'admin'
+
 export interface AuthSession {
   userId: string
   email: string | null
-  isAdmin: boolean
-  /** The store this account manages, if any. */
-  merchantId: string | null
+  role: AccountRole
 }
 
-/** Sign-in for backends that have real accounts. The mock has none. */
+/** A ready-made account the sign-in page can fill in (the mock, or a local database). */
+export interface DemoAccount {
+  email: string
+  password: string
+  role: AccountRole
+}
+
 export interface AuthAdapter {
+  /** False when the backend can't send email (the mock): only demo accounts work. */
+  readonly emailLinks: boolean
+  readonly demoAccounts: readonly DemoAccount[]
   getSession(): Promise<AuthSession | null>
   /** Calls back on sign-in and sign-out. Returns an unsubscribe function. */
   onChange(callback: (session: AuthSession | null) => void): () => void
@@ -139,8 +149,7 @@ export interface PaymentsAdapter {
 export interface DrawMartApi {
   /** True while no real money moves: test top-ups, demo controls and the test banner. */
   readonly testMode: boolean
-  /** Present when the backend has user accounts. */
-  readonly auth?: AuthAdapter
+  readonly auth: AuthAdapter
   /** Present when top-ups go through a payment provider. */
   readonly payments?: PaymentsAdapter
 

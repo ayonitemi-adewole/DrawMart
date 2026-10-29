@@ -1,36 +1,48 @@
 import type { ReactNode } from 'react'
-import { Link, Navigate, useLocation } from 'react-router'
-import { useAccess } from '@/api/hooks'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router'
+import { useAccess, useSignOut } from '@/api/hooks'
+import type { AccountRole } from '@/api/types'
+import { APP_HOME, APP_LABEL } from '@/lib/apps'
 import { LockIcon } from './icons'
-import { EmptyState, Skeleton, buttonClass } from './ui'
+import { Button, EmptyState, Skeleton, buttonClass } from './ui'
 
-type Need = 'account' | 'store' | 'admin'
-
-const NEED_TEXT: Record<Exclude<Need, 'account'>, { title: string; body: string }> = {
-  store: { title: 'For store accounts', body: 'This account isn’t linked to a store. Ask a DrawMart admin to link it.' },
-  admin: { title: 'For admins', body: 'Only DrawMart admins can review listings.' },
-}
-
-/** Sends signed-out visitors to /login and keeps out accounts without the right access. */
-export function RequireSignIn({ need = 'account', children }: { need?: Need; children: ReactNode }) {
+/**
+ * Lets in only accounts of one app. Signed-out visitors go to /login, which
+ * brings them back here; accounts from another app are turned away.
+ */
+export function RequireSignIn({ role, children }: { role: AccountRole; children: ReactNode }) {
   const access = useAccess()
   const location = useLocation()
-  if (!access.ready) return <Skeleton className="h-72" />
+  if (!access.ready) return <Skeleton className="m-4 h-72" />
   if (!access.signedIn) return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`} replace />
-  if ((need === 'store' && !access.isStore) || (need === 'admin' && !access.isAdmin)) {
-    return (
+  if (access.role !== role) return <WrongApp needed={role} />
+  return children
+}
+
+function WrongApp({ needed }: { needed: AccountRole }) {
+  const { role, email } = useAccess()
+  const signOut = useSignOut()
+  const navigate = useNavigate()
+  return (
+    <div className="grid min-h-dvh place-items-center p-4">
       <EmptyState
         icon={LockIcon}
         tone="neutral"
-        title={NEED_TEXT[need].title}
-        body={`You’re signed in as ${access.email ?? 'a buyer'}. ${NEED_TEXT[need].body}`}
+        title={`This is the ${APP_LABEL[needed]} app`}
+        body={`You’re signed in as ${email ?? 'someone else'}, which is a ${role ? APP_LABEL[role] : ''} account. Each account opens one app. Sign out and sign in with a ${APP_LABEL[needed]} account to continue.`}
         action={
-          <Link to="/" className={buttonClass('outline')}>
-            Back to live draws
-          </Link>
+          <div className="flex flex-wrap justify-center gap-2">
+            {role ? (
+              <Link to={APP_HOME[role]} className={buttonClass('outline')}>
+                Back to my app
+              </Link>
+            ) : null}
+            <Button loading={signOut.isPending} onClick={() => signOut.mutate(undefined, { onSuccess: () => navigate(`/login?next=${encodeURIComponent(APP_HOME[needed])}`) })}>
+              Sign out
+            </Button>
+          </div>
         }
       />
-    )
-  }
-  return children
+    </div>
+  )
 }

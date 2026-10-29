@@ -4,6 +4,7 @@ Working name: DrawMart (placeholder)
 
 ## Decided
 - **Launch market:** Lagos only, under an LSLGA public online lottery licence. Expand state by state; restrict ticket purchases by state in the code from day one.
+- **Separate apps:** Buyer, store and admin are separate apps, entered only through one shared sign-in page that sends each account to its own app. Each account belongs to exactly one app; store and admin accounts can't buy tickets. Sign-ups are buyers; DrawMart sets up store accounts after verification. Browsing draws stays public.
 - **Sellers:** Registered stores and companies only (CAC verified, admin-approved). No individual sellers at launch.
 - **Escrow:** DrawMart collects the item from the store (the store books a pickup day and address) and verifies it in escrow before tickets go on sale. Seller is paid after the winner confirms delivery.
 - **Cars:** Too big to store, so they skip escrow. The store books an on-site inspection (car, VIN, papers, photos) instead, and the car stays with the dealer until the winner collects it.

@@ -51,7 +51,7 @@ src/
     index.ts     Picks the implementation from VITE_BACKEND
   components/  UI kit, icons, toasts, listing card
   layouts/     Buyer shell (mobile bottom nav) and back-office shell
-  pages/       Screens (/login only matters with Supabase; browsing never needs an account)
+  pages/       Screens for three separate apps: buyer (/), store (/store), admin (/admin), all entered through /login
 supabase/
   migrations/  Schema, row-level security, and the database functions for every write
   seed.sql     Sample stores and draws

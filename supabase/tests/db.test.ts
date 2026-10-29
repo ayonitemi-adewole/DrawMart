@@ -80,7 +80,7 @@ async function expectFail(p: Promise<unknown>, code: string): Promise<PgError> {
 async function newUser(email: string, opts: { role?: 'admin'; merchantId?: string } = {}): Promise<string> {
   const [u] = await admin<{ id: string }>(`insert into auth.users (email) values ($1) returning id`, [email])
   if (opts.role) await admin(`update public.profiles set role = $2 where id = $1`, [u.id, opts.role])
-  if (opts.merchantId) await admin(`update public.profiles set merchant_id = $2 where id = $1`, [u.id, opts.merchantId])
+  if (opts.merchantId) await admin(`update public.profiles set role = 'store', merchant_id = $2 where id = $1`, [u.id, opts.merchantId])
   return u.id
 }
 
@@ -156,7 +156,7 @@ describe('schema and seed', () => {
     expect(rows).toEqual([
       { email: 'admin@drawmart.test', role: 'admin', merchant_id: null, has_identity: true },
       { email: 'buyer@drawmart.test', role: 'buyer', merchant_id: null, has_identity: true },
-      { email: 'store@drawmart.test', role: 'buyer', merchant_id: IKEJA, has_identity: true },
+      { email: 'store@drawmart.test', role: 'store', merchant_id: IKEJA, has_identity: true },
     ])
   })
 
@@ -447,6 +447,39 @@ describe('flutterwave deposits', () => {
     for (let i = 0; i < 10; i++) await start(10_000, spammer)
     const e = await expectFail(start(10_000, spammer), 'invalid_input')
     expect(e.detail).toContain('Too many unfinished top-ups')
+  })
+})
+
+describe('one app per account', () => {
+  let store: string
+  let staff: string
+
+  beforeAll(async () => {
+    store = await newUser('shopkeeper@example.com', { merchantId: IKEJA })
+    staff = await newUser('staff@example.com', { role: 'admin' })
+  })
+
+  it('keeps store links and roles in step', async () => {
+    const u = await newUser('mixed@example.com')
+    await expect(admin(`update public.profiles set merchant_id = $2 where id = $1`, [u, IKEJA])).rejects.toThrow(/profiles_store_has_merchant/)
+    await expect(admin(`update public.profiles set role = 'store' where id = $1`, [u])).rejects.toThrow(/profiles_store_has_merchant/)
+    await expect(admin(`update public.profiles set role = 'admin', merchant_id = $2 where id = $1`, [u, IKEJA])).rejects.toThrow(/profiles_store_has_merchant/)
+  })
+
+  it('stops store and admin accounts buying tickets or topping up', async () => {
+    const [live] = await admin<{ id: string }>(`select id from public.listings where status = 'live' limit 1`)
+    for (const who of [store, staff]) {
+      await expectFail(asUser(who, `select public.buy_tickets($1, 1)`, [live.id]), 'forbidden')
+      await expectFail(asUser(who, `select public.top_up(100000)`), 'forbidden')
+      await expectFail(asUser(who, `select public.start_deposit(100000)`), 'forbidden')
+    }
+  })
+
+  it('still lets the store and admin do their jobs', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    const [l] = await admin<{ status: string }>(`select status from public.listings where id = $1`, [id])
+    expect(l.status).toBe('live')
   })
 })
 

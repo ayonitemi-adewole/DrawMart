@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Kobo } from '@/domain/types'
 import { api } from './index'
-import type { ListingFilter, NewListingInput } from './types'
+import type { AccountRole, ListingFilter, NewListingInput } from './types'
 
 export const keys = {
   session: ['session'] as const,
@@ -17,14 +17,12 @@ export const keys = {
 }
 
 /** The signed-in account, or null. Kept fresh by SessionSync in App.tsx. */
-export const useSession = () =>
-  useQuery({ queryKey: keys.session, queryFn: async () => (api.auth ? api.auth.getSession() : null), staleTime: Infinity })
+export const useSession = () => useQuery({ queryKey: keys.session, queryFn: () => api.auth.getSession(), staleTime: Infinity })
 
-/** What the current visitor may do. The mock has no accounts, so there everything is allowed. */
+/** Who is signed in, and which app their account belongs to. */
 export function useAccess() {
   const s = useSession()
-  if (!api.auth) return { ready: true, signedIn: true, isAdmin: true, isStore: true, email: null }
-  return { ready: !s.isPending, signedIn: !!s.data, isAdmin: !!s.data?.isAdmin, isStore: !!s.data?.merchantId, email: s.data?.email ?? null }
+  return { ready: !s.isPending, signedIn: !!s.data, role: s.data?.role ?? null, email: s.data?.email ?? null }
 }
 
 // Public data
@@ -32,19 +30,30 @@ export const useListings = (f?: ListingFilter) => useQuery({ queryKey: keys.list
 export const useListing = (id: string) => useQuery({ queryKey: keys.listing(id), queryFn: () => api.getListing(id) })
 export const useResults = () => useQuery({ queryKey: keys.results, queryFn: () => api.listResults() })
 
-// Private data waits until the visitor is allowed to see it.
-export const useMe = () => useQuery({ queryKey: keys.me, queryFn: () => api.getCurrentUser(), enabled: useAccess().signedIn })
-export const useMyListings = () => useQuery({ queryKey: keys.myListings, queryFn: () => api.listMyListings(), enabled: useAccess().signedIn })
-export const useWallet = () => useQuery({ queryKey: keys.wallet, queryFn: () => api.getWallet(), enabled: useAccess().signedIn })
-export const useMerchant = () => useQuery({ queryKey: keys.merchant, queryFn: () => api.getMyMerchant(), enabled: useAccess().isStore })
+// Private data waits until the right kind of account is signed in.
+const useIs = (role: AccountRole) => useAccess().role === role
+export const useMe = () => useQuery({ queryKey: keys.me, queryFn: () => api.getCurrentUser(), enabled: useIs('buyer') })
+export const useMyListings = () => useQuery({ queryKey: keys.myListings, queryFn: () => api.listMyListings(), enabled: useIs('buyer') })
+export const useWallet = () => useQuery({ queryKey: keys.wallet, queryFn: () => api.getWallet(), enabled: useIs('buyer') })
+export const useMerchant = () => useQuery({ queryKey: keys.merchant, queryFn: () => api.getMyMerchant(), enabled: useIs('store') })
 export const useMerchantListings = () =>
-  useQuery({ queryKey: keys.merchantListings, queryFn: () => api.listMerchantListings(), enabled: useAccess().isStore })
-export const usePendingListings = () => useQuery({ queryKey: keys.pending, queryFn: () => api.listPendingListings(), enabled: useAccess().isAdmin })
+  useQuery({ queryKey: keys.merchantListings, queryFn: () => api.listMerchantListings(), enabled: useIs('store') })
+export const usePendingListings = () => useQuery({ queryKey: keys.pending, queryFn: () => api.listPendingListings(), enabled: useIs('admin') })
 
 // Auth. SessionSync (App.tsx) clears the cache when the account changes.
-export const useSendSignInLink = () => useMutation({ mutationFn: ({ email, redirectTo }: { email: string; redirectTo: string }) => api.auth!.sendSignInLink(email, redirectTo) })
-export const usePasswordSignIn = () => useMutation({ mutationFn: ({ email, password }: { email: string; password: string }) => api.auth!.signInWithPassword(email, password) })
-export const useSignOut = () => useMutation({ mutationFn: () => api.auth!.signOut() })
+export const useSendSignInLink = () => useMutation({ mutationFn: ({ email, redirectTo }: { email: string; redirectTo: string }) => api.auth.sendSignInLink(email, redirectTo) })
+export const usePasswordSignIn = () => useMutation({ mutationFn: ({ email, password }: { email: string; password: string }) => api.auth.signInWithPassword(email, password) })
+export function useSignOut() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.auth.signOut(),
+    // Don't wait for SessionSync: whatever opens next must already see "signed out".
+    onSuccess: () => {
+      qc.clear()
+      qc.setQueryData(keys.session, null)
+    },
+  })
+}
 
 /** Almost every write touches money or ticket counts, so refresh everything. */
 function useInvalidateAll() {

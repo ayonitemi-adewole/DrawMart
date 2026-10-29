@@ -9,7 +9,9 @@ import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
 import type { Category, FeeMode, Handover, LedgerEntry, LedgerKind, ListingStatus, Merchant, UnsoldPolicy, User } from '@/domain/types'
+import { DEMO_ACCOUNTS } from './demoAccounts'
 import {
+  type AccountRole,
   ApiError,
   type ApiErrorCode,
   type AuthAdapter,
@@ -87,7 +89,7 @@ interface ProfileRow {
   state: string | null
   weekly_limit_kobo: number
   age_verified: boolean
-  role: 'buyer' | 'admin'
+  role: AccountRole
   merchant_id: string | null
 }
 
@@ -307,14 +309,17 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     )
   }
 
-  /** Adds what the account may do (admin, linked store) to the auth session. */
+  /** Adds which app the account belongs to (profiles.role) to the auth session. */
   async function toSession(s: Session | null): Promise<AuthSession | null> {
     if (!s) return null
-    const { data } = await client.from('profiles').select('role, merchant_id').eq('id', s.user.id).maybeSingle<Pick<ProfileRow, 'role' | 'merchant_id'>>()
-    return { userId: s.user.id, email: s.user.email ?? null, isAdmin: data?.role === 'admin', merchantId: data?.merchant_id ?? null }
+    const { data } = await client.from('profiles').select('role').eq('id', s.user.id).maybeSingle<Pick<ProfileRow, 'role'>>()
+    return { userId: s.user.id, email: s.user.email ?? null, role: data?.role ?? 'buyer' }
   }
 
   const auth: AuthAdapter = {
+    emailLinks: true,
+    // The demo accounts only exist on a local database (supabase/seed-local-accounts.sql).
+    demoAccounts: import.meta.env.DEV && opts.testMode ? DEMO_ACCOUNTS : [],
     async getSession() {
       const { data } = await client.auth.getSession()
       return toSession(data.session)

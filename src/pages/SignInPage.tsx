@@ -1,8 +1,15 @@
 import { useState, type FormEvent } from "react";
-import { Navigate, useSearchParams } from "react-router";
+import { Link, Navigate, useSearchParams } from "react-router";
 import { api } from "@/api";
 import { usePasswordSignIn, useSendSignInLink, useSession } from "@/api/hooks";
-import { MailIcon, ShieldIcon, TicketIcon } from "@/components/icons";
+import type { AccountRole } from "@/api/types";
+import {
+  MailIcon,
+  ShieldIcon,
+  StoreIcon,
+  TicketIcon,
+  type IconComponent,
+} from "@/components/icons";
 import {
   Button,
   Card,
@@ -13,38 +20,40 @@ import {
   errorMessage,
   inputCls,
 } from "@/components/ui";
+import { landingFor } from "@/lib/apps";
 
 type Method = "link" | "password";
 
-/** Created by supabase/seed-local-accounts.sql on `supabase db reset`. */
-const DEMO_ACCOUNTS = [
-  { email: "buyer@drawmart.test", label: "Buyer" },
-  { email: "store@drawmart.test", label: "Store" },
-  { email: "admin@drawmart.test", label: "Admin" },
-];
-const DEMO_PASSWORD = "drawmart-demo";
-
-/** Only lets `next` point inside the app. */
-function safeNext(next: string | null) {
-  return next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
-}
+const ROLE_BUTTON: Record<AccountRole, { label: string; icon: IconComponent }> =
+  {
+    buyer: { label: "Buyer", icon: TicketIcon },
+    store: { label: "Store", icon: StoreIcon },
+    admin: { label: "Admin", icon: ShieldIcon },
+  };
 
 const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 
-/** /login. Signed-in visitors (and everyone on the mock, which has no accounts) go straight on. */
+/**
+ * /login, the only way into any app. Buyers, stores and admins share this
+ * form; once signed in, each account goes to its own app.
+ */
 export function SignInPage() {
   const [params] = useSearchParams();
-  const next = safeNext(params.get("next"));
+  const next = params.get("next");
   const session = useSession();
   const sendLink = useSendSignInLink();
   const passwordSignIn = usePasswordSignIn();
-  const [method, setMethod] = useState<Method>("link");
+  const { emailLinks, demoAccounts } = api.auth;
+  const [method, setMethod] = useState<Method>(
+    emailLinks ? "link" : "password",
+  );
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [invalid, setInvalid] = useState(false);
 
-  if (!api.auth || session.data) return <Navigate to={next} replace />;
+  if (session.data)
+    return <Navigate to={landingFor(session.data.role, next)} replace />;
   if (session.isPending) return <Skeleton className="mx-auto h-96 max-w-md" />;
 
   const busy = sendLink.isPending || passwordSignIn.isPending;
@@ -56,8 +65,9 @@ export function SignInPage() {
     setInvalid(!isEmail(address));
     if (!isEmail(address)) return;
     if (method === "link") {
-      // The link brings them back here, and the redirect above sends them on to `next`.
-      const redirectTo = `${window.location.origin}/login?next=${encodeURIComponent(next)}`;
+      // The link brings them back here, and the redirect above sends them to their app.
+      const back = next ? `?next=${encodeURIComponent(next)}` : "";
+      const redirectTo = `${window.location.origin}/login${back}`;
       sendLink.mutate(
         { email: address, redirectTo },
         { onSuccess: () => setSentTo(address) },
@@ -74,12 +84,14 @@ export function SignInPage() {
           <TicketIcon size={28} strokeWidth={2.4} />
         </span>
         <h1 className="font-display text-3xl font-extrabold tracking-tight">
-          Sign in to shop
+          Sign in to DrawMart
         </h1>
         <p className="text-sm text-muted">
+          One sign-in for buyers, stores and the DrawMart team. We’ll open the
+          right app for your account.
           {method === "link"
-            ? "No password needed. We’ll email you a link that signs you in, and sets up your account the first time."
-            : "Sign in with your email and password."}
+            ? " No password needed: we’ll email you a link, and set up a buyer account the first time."
+            : ""}
         </p>
       </div>
 
@@ -96,16 +108,18 @@ export function SignInPage() {
           </>
         ) : (
           <>
-            <Segmented<Method>
-              label="How to sign in"
-              value={method}
-              onChange={setMethod}
-              className="w-full"
-              options={[
-                { value: "link", label: "Email me a link" },
-                { value: "password", label: "Use a password" },
-              ]}
-            />
+            {emailLinks ? (
+              <Segmented<Method>
+                label="How to sign in"
+                value={method}
+                onChange={setMethod}
+                className="w-full"
+                options={[
+                  { value: "link", label: "Email me a link" },
+                  { value: "password", label: "Use a password" },
+                ]}
+              />
+            ) : null}
             <form
               onSubmit={onSubmit}
               noValidate
@@ -153,40 +167,59 @@ export function SignInPage() {
         )}
       </Card>
 
-      {import.meta.env.DEV && api.testMode ? (
+      {demoAccounts.length ? (
         <Card className="flex flex-col gap-3 p-4">
           <span className="text-xs font-extrabold tracking-wider text-subtle uppercase">
-            Local demo accounts
+            Demo accounts
           </span>
           <div className="grid grid-cols-3 gap-2">
-            {DEMO_ACCOUNTS.map((a) => (
-              <Button
-                key={a.email}
-                variant="outline"
-                size="sm"
-                className="min-h-11"
-                onClick={() => {
-                  setMethod("password");
-                  setEmail(a.email);
-                  setPassword(DEMO_PASSWORD);
-                  setSentTo(null);
-                }}
-              >
-                {a.label}
-              </Button>
-            ))}
+            {demoAccounts.map((a) => {
+              const b = ROLE_BUTTON[a.role];
+              return (
+                <Button
+                  key={a.email}
+                  variant="outline"
+                  size="sm"
+                  className="min-h-11"
+                  disabled={busy}
+                  onClick={() => {
+                    setMethod("password");
+                    setEmail(a.email);
+                    setPassword(a.password);
+                    passwordSignIn.mutate({
+                      email: a.email,
+                      password: a.password,
+                    });
+                  }}
+                >
+                  <b.icon size={16} /> {b.label}
+                </Button>
+              );
+            })}
           </div>
           <span className="text-xs text-subtle">
-            Only exist on a local database (`npm run db:reset`). Password:{" "}
-            {DEMO_PASSWORD}
+            {emailLinks
+              ? "Only exist on a local database (npx supabase db reset)."
+              : "Each opens its own app. Data stays in this browser."}{" "}
+            Password: {demoAccounts[0].password}
           </span>
         </Card>
       ) : null}
 
-      <p className="flex items-start justify-center gap-2 text-xs text-subtle">
-        <ShieldIcon size={16} className="mt-px shrink-0 text-brand" />
-        DrawMart is for adults 18+ living in licensed states. Play responsibly.
-      </p>
+      <div className="flex flex-col items-center gap-2 text-center text-xs text-subtle">
+        <span>
+          Selling on DrawMart? Store accounts are set up by our team once your
+          CAC registration is verified.
+        </span>
+        <Link to="/" className="flex min-h-11 items-center font-bold">
+          Just browsing? See live draws
+        </Link>
+        <span className="flex items-start gap-2">
+          <ShieldIcon size={16} className="mt-px shrink-0 text-brand" />
+          DrawMart is for adults 18+ living in licensed states. Play
+          responsibly.
+        </span>
+      </div>
     </div>
   );
 }

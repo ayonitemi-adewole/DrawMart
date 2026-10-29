@@ -1,14 +1,16 @@
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
-import { Link, RouterProvider, createBrowserRouter, useRouteError } from 'react-router'
+import { Link, Navigate, RouterProvider, createBrowserRouter, useRouteError } from 'react-router'
 import { api } from '@/api'
 import { keys } from '@/api/hooks'
 import { RequireSignIn } from '@/components/RequireSignIn'
 import { ToastProvider } from '@/components/toast'
 import { SearchIcon } from '@/components/icons'
 import { EmptyState, ErrorState, buttonClass } from '@/components/ui'
+import { AuthLayout } from '@/layouts/AuthLayout'
 import { BackOfficeLayout } from '@/layouts/BackOfficeLayout'
 import { BuyerLayout } from '@/layouts/BuyerLayout'
+import { AdminDrawsPage } from '@/pages/admin/AdminDrawsPage'
 import { AdminPage } from '@/pages/admin/AdminPage'
 import { DrawsPage } from '@/pages/DrawsPage'
 import { HomePage } from '@/pages/HomePage'
@@ -55,7 +57,6 @@ function NotFound() {
 function SessionSync() {
   const qc = useQueryClient()
   useEffect(() => {
-    if (!api.auth) return
     let lastUser: string | null | undefined
     void api.auth.getSession().then((s) => {
       lastUser ??= s?.userId ?? null
@@ -70,30 +71,51 @@ function SessionSync() {
   return null
 }
 
-// Browsing is public. Buying, wallets and the back office need the right account (on Supabase).
+// Three separate apps behind one sign-in page. Each account belongs to one of them:
+//   buyer  /        browsing is public; tickets and wallet need a buyer account
+//   store  /store   store accounts only
+//   admin  /admin   admin accounts only
 const router = createBrowserRouter([
+  {
+    path: 'login',
+    element: <AuthLayout />,
+    errorElement: <RouteError />,
+    children: [{ index: true, element: <SignInPage /> }],
+  },
   {
     element: <BuyerLayout />,
     errorElement: <RouteError />,
     children: [
       { index: true, element: <HomePage /> },
-      { path: 'login', element: <SignInPage /> },
       { path: 'listings/:id', element: <ListingPage /> },
-      { path: 'tickets', element: <RequireSignIn><TicketsPage /></RequireSignIn> },
+      { path: 'tickets', element: <RequireSignIn role="buyer"><TicketsPage /></RequireSignIn> },
       { path: 'draws', element: <DrawsPage /> },
       { path: 'draws/:id', element: <ResultPage /> },
-      { path: 'wallet', element: <RequireSignIn><WalletPage /></RequireSignIn> },
+      { path: 'wallet', element: <RequireSignIn role="buyer"><WalletPage /></RequireSignIn> },
       { path: '*', element: <NotFound /> },
     ],
   },
   {
-    element: <BackOfficeLayout />,
+    path: 'store',
+    element: <RequireSignIn role="store"><BackOfficeLayout app="store" /></RequireSignIn>,
     errorElement: <RouteError />,
     children: [
-      { path: 'merchant', element: <RequireSignIn need="store"><MerchantPage /></RequireSignIn> },
-      { path: 'admin', element: <RequireSignIn need="admin"><AdminPage /></RequireSignIn> },
+      { index: true, element: <MerchantPage /> },
+      { path: '*', element: <NotFound /> },
     ],
   },
+  {
+    path: 'admin',
+    element: <RequireSignIn role="admin"><BackOfficeLayout app="admin" /></RequireSignIn>,
+    errorElement: <RouteError />,
+    children: [
+      { index: true, element: <AdminPage /> },
+      { path: 'draws', element: <AdminDrawsPage /> },
+      { path: '*', element: <NotFound /> },
+    ],
+  },
+  // Old address of the store app.
+  { path: 'merchant', element: <Navigate to="/store" replace /> },
 ])
 
 export default function App() {
