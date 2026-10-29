@@ -438,7 +438,7 @@ function Step({
     <li className="relative flex gap-4 pb-5 last:pb-0">
       {!last ? (
         <span
-          className="absolute top-11 bottom-0 left-[21px] w-0.5 bg-line"
+          className="absolute top-11 bottom-0 left-5.25 w-0.5 bg-line"
           aria-hidden="true"
         />
       ) : null}
