@@ -2,8 +2,9 @@ import { Link } from 'react-router'
 import type { ListingView } from '@/api/types'
 import { formatNaira } from '@/domain/money'
 import { salePriceKobo } from '@/domain/orders'
+import { isBoosted } from '@/domain/boosts'
 import { Countdown } from './Countdown'
-import { CheckIcon, FlameIcon, MapPinIcon, TicketIcon } from './icons'
+import { CheckIcon, FlameIcon, MapPinIcon, SparklesIcon, TicketIcon } from './icons'
 import { Badge, ProductImage, ProgressBar, cx } from './ui'
 
 export function isAlmostGone(l: ListingView) {
@@ -49,9 +50,16 @@ export function ListingCard({ listing: l, className, style }: { listing: Listing
           </span>
         ) : null}
         <div className="absolute inset-x-4 top-4 flex flex-wrap items-start justify-between gap-1.5">
-          <Badge tone="neutral" className="bg-surface/85 backdrop-blur">
-            {l.category}
-          </Badge>
+          <span className="flex flex-wrap gap-1.5">
+            <Badge tone="neutral" className="bg-surface/85 backdrop-blur">
+              {l.category}
+            </Badge>
+            {isBoosted(l, Date.now()) ? (
+              <Badge tone="ticket" className="shadow-card">
+                <SparklesIcon size={12} /> Sponsored
+              </Badge>
+            ) : null}
+          </span>
           <div className="flex flex-wrap justify-end gap-1.5">
             {hot ? (
               <Badge tone="hot" className="shadow-card">

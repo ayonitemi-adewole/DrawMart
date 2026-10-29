@@ -119,6 +119,8 @@ where id = (select id from auth.users where email = 'you+admin@example.com');
 - **Admin** (`/admin`): approve both in the review queue. The raffle goes live; the product goes straight on sale.
 - **Individual seller**: as a buyer, open **Sell** and apply with ID photos. As the admin, approve it under **Seller ID checks**. Back as the buyer, list a product from **Sell**; the admin approves it like any listing.
 - **Messages**: as a buyer, open a product and tap **Message**; reply from the store's **Messages**, where the store can also share a call number.
+- **Boosts**: as the admin, open **Boosts** and tick "Open boosts now" (a new project has far fewer than 1,000 active buyers). As a store, press **Boost** on a live listing; it then shows first on the home page, marked Sponsored. Without Flutterwave keys, test mode pays with pretend money.
+- **Insights**: open a few listings as a buyer (or signed out), then check **Insights** in the store app.
 - **Buyer**: buy the product under "Skip the draw" on the home page, with a delivery address. The store marks the order sent under **Orders**; the buyer confirms delivery under **Tickets → Orders**. Under **Live draws & demo**, "Run the draw" sells it out and draws a winner; as the buyer, open the result and press **Verify**.
 - **Wallet**: top-ups (instant test money, or Flutterwave's test checkout once Step 9 is done) and spending limits.
 

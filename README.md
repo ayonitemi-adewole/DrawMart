@@ -67,7 +67,7 @@ The UI only talks to `DrawMartApi`. To add a real backend, implement that interf
 - Weekly spending limit; lowering is instant, raising waits 24 h.
 - Store credit is spent before cash.
 - Losing buyers get 20% of their spend back as store credit.
-- Platform fee is at least 10% of the price.
+- Platform fee is set by DrawMart from the item value: 7.5% under ₦50,000 down to 2.5% from ₦5,000,000 (`src/domain/fees.ts`).
 - Stores pick the deadline: 3–60 days, counted from approval.
 - Unsold at deadline, the store's choice: refund to wallet; extend once by 7 days, then refund; or refund and keep the item on sale at a fixed price the store set up front.
 - No perishables (no Food category).

@@ -8,6 +8,8 @@
 import type { HandoverDetails } from '@/domain/listing'
 import type { OrderError } from '@/domain/orders'
 import type { PurchaseError } from '@/domain/rules'
+import type { BoostPackage, BoostWindow } from '@/domain/boosts'
+import type { DayMetrics, ListingMetricsInput, MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput, SellerApplicationStatus } from '@/domain/sellers'
 import type {
   Category,
@@ -17,6 +19,7 @@ import type {
   Handover,
   Kobo,
   LedgerEntry,
+  ListingKind,
   Listing,
   ListingStatus,
   Merchant,
@@ -159,6 +162,66 @@ export interface ChatMessage {
   createdAt: string
 }
 
+/** One listing's views and sales over the chosen range. */
+export interface ListingMetrics extends ListingMetricsInput {
+  listingId: string
+  title: string
+  image: string | null
+  category: Category
+  kind: ListingKind
+  status: ListingStatus
+}
+
+export interface MerchantMetricsView {
+  days: MetricRange
+  /** Most viewed first. */
+  listings: ListingMetrics[]
+  /** One entry per day, oldest first, gaps filled with zeros. */
+  daily: DayMetrics[]
+}
+
+export interface BoostStatus {
+  /** Enough active buyers, or an admin switched boosts on. */
+  unlocked: boolean
+  /** Boosts that can still start right now, app-wide. */
+  slotsLeft: number
+  packages: BoostPackage[]
+  /** Only for admins. */
+  admin: BoostSettings & { activeBuyers: number } | null
+}
+
+export interface BoostSettings {
+  /** Buyers active in the last 30 days needed to unlock boosts. */
+  minActiveBuyers: number
+  forcedOn: boolean
+  /** Boosts running at once, app-wide. */
+  maxActive: number
+}
+
+export interface BoostView {
+  id: string
+  /** Payment reference, to ask the provider again while it's pending. */
+  txRef: string
+  listingId: string
+  listingTitle: string
+  merchantName: string
+  days: number
+  priceKobo: Kobo
+  status: 'pending' | 'paid' | 'failed' | 'cancelled'
+  startsAt: string | null
+  endsAt: string | null
+  createdAt: string
+}
+
+/** A boost's results so far, against the same number of days before it. */
+export interface BoostInsightsView {
+  window: BoostWindow
+  before: ListingMetricsInput
+  during: ListingMetricsInput
+  /** From the first "before" day to the last boosted day, oldest first. */
+  daily: DayMetrics[]
+}
+
 export interface ListingFilter {
   category?: Category
   status?: ListingStatus[]
@@ -232,6 +295,8 @@ export interface DrawMartApi {
   // Buyer
   listListings(filter?: ListingFilter): Promise<ListingView[]>
   getListing(id: string): Promise<ListingView>
+  /** Counts a listing page view for seller insights. `visitorId` identifies a signed-out browser; at most one view per visitor per day counts. */
+  recordListingView(listingId: string, visitorId: string): Promise<void>
   buyTickets(listingId: string, quantity: number): Promise<PurchaseReceipt>
   listMyListings(): Promise<ListingView[]>
   listResults(): Promise<DrawResultView[]>
@@ -240,6 +305,19 @@ export interface DrawMartApi {
   listMyOrders(): Promise<OrderView[]>
   /** The buyer confirms the item arrived. */
   confirmOrder(orderId: string): Promise<void>
+
+  /** Views and sales of the signed-in shop's listings (store or individual seller). */
+  getMerchantMetrics(days: MetricRange): Promise<MerchantMetricsView>
+
+  // Boosts: sellers pay to show a listing first, marked Sponsored
+  getBoostStatus(): Promise<BoostStatus>
+  /** Pays for a boost (Flutterwave checkout, or pretend money in test mode) and starts it once paid. */
+  buyBoost(listingId: string, packageId: string): Promise<DepositStatus>
+  /** The shop's own boosts; every boost for admins. Newest first. */
+  listBoosts(): Promise<BoostView[]>
+  setBoostSettings(settings: BoostSettings): Promise<void>
+  /** Views, chats and sales during a paid boost, and the same number of days before it. */
+  getBoostInsights(boostId: string): Promise<BoostInsightsView>
 
   // Messages: buyer ↔ seller chat about a regular product
   /** Opens (or reopens) the buyer's conversation with the seller of a product. */

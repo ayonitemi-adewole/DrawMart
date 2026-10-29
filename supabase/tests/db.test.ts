@@ -115,6 +115,22 @@ beforeAll(async () => {
 }, 60_000)
 
 describe('schema and seed', () => {
+  it('never updates or deletes without a WHERE clause in API functions (Supabase blocks it)', async () => {
+    const fns = await admin<{ name: string; body: string }>(
+      `select p.proname as name, p.prosrc as body from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public' and p.prosecdef`,
+    )
+    // PGlite can't load pg_safeupdate, so check the function bodies instead.
+    const offenders = fns.flatMap(({ name, body }) =>
+      body
+        .replace(/--[^\n]*/g, '')
+        .split(';')
+        .filter((stmt) => /\b(update|delete\s+from)\s+public\./i.test(stmt) && !/\bwhere\b/i.test(stmt))
+        .map(() => name),
+    )
+    expect(offenders).toEqual([])
+  })
+
   it('seeds stores and listings, and is safe to run twice', async () => {
     await db.exec(sql('seed.sql'))
     const [{ n }] = await admin<{ n: number }>(`select count(*)::int n from public.merchants`)
@@ -535,7 +551,7 @@ describe('regular products and orders', () => {
     const [{ id }] = await asUser<{ id: string }>(buyer, `select public.buy_now($1, $2, $3) id`, [productId, ...delivery])
     expect(await balance(buyer)).toEqual({ cash: String(2_500_000 + 1_500_000 - 3_700_000), credit: '0' })
     const [order] = await asUser<{ status: string; price_kobo: number; fee_kobo: number; delivery_address: string }>(buyer, `select * from public.orders where id = $1`, [id])
-    expect(order).toMatchObject({ status: 'paid', price_kobo: 4_000_000, fee_kobo: 600_000, delivery_address: '15 Awolowo Road, Ikoyi' })
+    expect(order).toMatchObject({ status: 'paid', price_kobo: 4_000_000, fee_kobo: 300_000, delivery_address: '15 Awolowo Road, Ikoyi' })
     const [l] = await admin<{ status: string }>(`select status from public.listings where id = $1`, [productId])
     expect(l.status).toBe('sold')
     await expectFail(asUser(buyer, `select public.buy_now($1, $2, $3)`, [productId, ...delivery]), 'not_for_sale')
@@ -748,6 +764,170 @@ describe('buyer and seller messages', () => {
     for (let i = 0; i < 19; i++) await asUser(buyer, `select public.send_message($1, $2)`, [convo, `msg ${i}`])
     const e = await expectFail(asUser(buyer, `select public.send_message($1, 'one too many')`, [convo]), 'invalid_input')
     expect(e.detail).toContain('very fast')
+  })
+})
+
+describe('seller metrics', () => {
+  let seller: string
+  let staff: string
+  let productId: string
+  type Metrics = { listings: { listingId: string; views: number; visitors: number; chats: number; units: number; buyers: number; salesKobo: number }[]; daily: { date: string; views: number; salesKobo: number }[] }
+  const metrics = async (who: string, days = 7) => (await asUser<{ m: Metrics }>(who, `select public.merchant_metrics($1) m`, [days]))[0].m
+
+  beforeAll(async () => {
+    seller = await newUser('metrics@example.com')
+    staff = await newUser('staff6@example.com', { role: 'admin' })
+    const [{ id: shop }] = await admin<{ id: string }>(`insert into public.merchants (kind, name, area, cac_number, verified) values ('individual', 'Stat Shop', 'Yaba', '', true) returning id`)
+    await admin(`update public.profiles set seller_id = $2 where id = $1`, [seller, shop])
+    ;[{ id: productId }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [{ title: 'Desk lamp', category: 'Home', priceKobo: 2_000_000 }])
+  })
+
+  it('counts views once per visitor per day, and never the seller’s own', async () => {
+    await asUser(null, `select public.record_listing_view($1, 'visitor-aaaa')`, [productId]) // not on sale yet: ignored
+    await asUser(staff, `select public.approve_listing($1)`, [productId])
+    const viewer = await newUser('looker@example.com')
+    for (let i = 0; i < 3; i++) await asUser(viewer, `select public.record_listing_view($1, null)`, [productId])
+    await asUser(null, `select public.record_listing_view($1, 'visitor-bbbb')`, [productId])
+    await asUser(null, `select public.record_listing_view($1, 'x')`, [productId]) // bad id: ignored
+    await asUser(seller, `select public.record_listing_view($1, 'visitor-cccc')`, [productId])
+    const [l] = (await metrics(seller)).listings
+    expect(l).toMatchObject({ listingId: productId, views: 2, visitors: 2 })
+    await expect(asUser(seller, `select * from public.listing_views`)).rejects.toThrow(/permission denied/)
+  })
+
+  it('adds chats and sales, per listing and per day', async () => {
+    const buyer = await newUser('statbuyer@example.com')
+    await asUser(buyer, `select public.record_listing_view($1, null)`, [productId])
+    await asUser(buyer, `select public.start_conversation($1)`, [productId])
+    await asUser(buyer, `select public.buy_now($1, '15 Awolowo Road, Ikoyi', '0803 123 4567')`, [productId])
+    const m = await metrics(seller, 30)
+    expect(m.listings[0]).toMatchObject({ views: 3, visitors: 3, chats: 1, units: 1, buyers: 1, salesKobo: 2_000_000 })
+    expect(m.daily).toEqual([{ date: expect.any(String), views: 3, salesKobo: 2_000_000 }])
+  })
+
+  it('is only for sellers, over 7 or 30 days', async () => {
+    const plain = await newUser('nostats@example.com')
+    await expectFail(metrics(plain), 'forbidden')
+    await expectFail(metrics(seller, 12), 'invalid_input')
+    expect((await metrics(staff).catch((e) => e.message))).toBe('forbidden')
+  })
+
+  it('counts ticket sales on live raffles for stores', async () => {
+    const store = await newUser('statstore@example.com', { merchantId: IKEJA })
+    const m = await metrics(store, 30)
+    const iphone = m.listings.find((l) => l.units > 0)
+    expect(iphone?.salesKobo).toBeGreaterThan(0)
+  })
+})
+
+describe('boosts', () => {
+  let store: string
+  let staff: string
+  let buyer: string
+  let products: string[]
+  type Status = { unlocked: boolean; slotsLeft: number; packages: { id: string; priceKobo: number }[]; admin: { activeBuyers: number } | null }
+  const status = async (who: string) => (await asUser<{ s: Status }>(who, `select public.boost_status() s`))[0].s
+  const start = async (listing: string, pkg = '3d', who = store) => (await asUser<{ c: { txRef: string; amountKobo: number } }>(who, `select public.start_boost($1, $2) c`, [listing, pkg]))[0].c
+  const complete = async (txRef: string, amount: number, st = 'successful') =>
+    (await asService<{ s: string }>(`select public.complete_boost($1, $2, $3, 'NGN', 'FLW-9') s`, [txRef, st, amount]))[0].s
+  const boostedUntil = async (id: string) => (await asUser<{ b: string | null }>(buyer, `select boosted_until b from public.listings where id = $1`, [id]))[0].b
+
+  beforeAll(async () => {
+    store = await newUser('booster@example.com', { merchantId: IKEJA })
+    staff = await newUser('staff7@example.com', { role: 'admin' })
+    buyer = await newUser('scroller@example.com')
+    products = (await admin<{ id: string }>(`select id from public.listings where merchant_id = $1 and status in ('live', 'for_sale') order by id`, [IKEJA])).map((r) => r.id)
+  })
+
+  it('stays locked until enough active buyers, unless an admin opens it', async () => {
+    expect(await status(store)).toMatchObject({ unlocked: false, admin: null, packages: [{ id: '3d', priceKobo: 250000 }, { id: '7d' }, { id: '14d' }] })
+    await expectFail(start(products[0]), 'forbidden')
+    expect((await status(staff)).admin?.activeBuyers).toBeGreaterThan(0)
+    await expectFail(asUser(store, `select public.set_boost_settings(0, true, 2)`), 'forbidden')
+    await asUser(staff, `select public.set_boost_settings(1000, true, 2)`)
+    expect(await status(store)).toMatchObject({ unlocked: true, slotsLeft: 2 })
+  })
+
+  it('only boosts the shop’s own live or on-sale listings', async () => {
+    const [other] = await admin<{ id: string }>(`select id from public.listings where merchant_id <> $1 and status = 'live' limit 1`, [IKEJA])
+    await expectFail(start(other.id), 'not_found')
+    const [pending] = await admin<{ id: string }>(`select id from public.listings where merchant_id = $1 and status = 'pending_review' limit 1`, [IKEJA])
+    await expectFail(start(pending.id), 'invalid_input')
+    await expectFail(start(products[0], 'nope'), 'invalid_input')
+    await expectFail(start(products[0], '3d', buyer), 'forbidden')
+  })
+
+  it('starts once Flutterwave confirms a full naira payment, and only from the service role', async () => {
+    const short = await start(products[0])
+    expect(await complete(short.txRef, 100)).toBe('failed')
+    expect(await boostedUntil(products[0])).toBeNull()
+
+    const c = await start(products[0])
+    await expect(asUser(store, `select public.complete_boost($1, 'successful', 250000, 'NGN', 'x')`, [c.txRef])).rejects.toThrow(/permission denied/)
+    expect(await complete(c.txRef, 250000)).toBe('successful')
+    expect(await complete(c.txRef, 250000)).toBe('successful') // webhook and confirm both arrive
+    const until = Date.parse((await boostedUntil(products[0]))!)
+    expect(until - Date.now()).toBeGreaterThan(2.9 * 86_400_000)
+
+    // A second boost runs on after the first.
+    const more = await start(products[0], '7d')
+    await asUser(store, `select public.test_pay_boost($1)`, [more.txRef])
+    expect(Date.parse((await boostedUntil(products[0]))!) - until).toBeGreaterThan(6.9 * 86_400_000)
+  })
+
+  it('caps how many run at once', async () => {
+    expect((await status(store)).slotsLeft).toBe(0)
+    const e = await expectFail(start(products[1]), 'invalid_input')
+    expect(e.detail).toContain('slots are taken')
+  })
+
+  it('keeps boosts private to the shop and admins, and pretend payments to test mode', async () => {
+    expect(await asUser(buyer, `select * from public.boosts`)).toEqual([])
+    expect((await asUser(staff, `select id from public.boosts`)).length).toBeGreaterThanOrEqual(3)
+    await asUser(staff, `select public.set_boost_settings(1000, true, 12)`)
+    const c = await start(products[1])
+    await admin(`update public.app_settings set test_mode = false`)
+    try {
+      await expectFail(asUser(store, `select public.test_pay_boost($1)`, [c.txRef]), 'forbidden')
+    } finally {
+      await admin(`update public.app_settings set test_mode = true`)
+      await asUser(staff, `select public.set_boost_settings(1000, false, 12)`)
+    }
+  })
+})
+
+describe('boost results', () => {
+  it('compares the boost days with the same number of days before, for the shop only', async () => {
+    const seller = await newUser('boostresults@example.com')
+    const staff = await newUser('staff8@example.com', { role: 'admin' })
+    const [{ id: shop }] = await admin<{ id: string }>(`insert into public.merchants (kind, name, area, cac_number, verified) values ('individual', 'Result Shop', 'Ikeja', '', true) returning id`)
+    await admin(`update public.profiles set seller_id = $2 where id = $1`, [seller, shop])
+    const [{ id }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [{ title: 'Rug', category: 'Home', priceKobo: 3_000_000 }])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    // Two visitors yesterday, three today.
+    await admin(`insert into public.listing_views (listing_id, visitor, day) select $1, 'v:old-' || n, (now() at time zone 'Africa/Lagos')::date - 1 from generate_series(1, 2) n`, [id])
+    for (const v of ['visitor-aa01', 'visitor-aa02', 'visitor-aa03']) await asUser(null, `select public.record_listing_view($1, $2)`, [id, v])
+
+    await asUser(staff, `select public.set_boost_settings(1000, true, 12)`)
+    try {
+      const [{ c }] = await asUser<{ c: { txRef: string } }>(seller, `select public.start_boost($1, '3d') c`, [id])
+      const [{ boost }] = await admin<{ boost: string }>(`select id boost from public.boosts where tx_ref = $1`, [c.txRef])
+      await expectFail(asUser(seller, `select public.boost_insights($1)`, [boost]), 'invalid_input') // not paid yet
+      await asUser(seller, `select public.test_pay_boost($1)`, [c.txRef])
+
+      type R = { window: { days: number }; during: { views: number }; before: { views: number }; daily: { views: number }[] }
+      const [{ r }] = await asUser<{ r: R }>(seller, `select public.boost_insights($1) r`, [boost])
+      expect(r.window.days).toBe(1)
+      expect(r.during.views).toBe(3)
+      expect(r.before.views).toBe(2)
+      expect(r.daily.map((d) => d.views)).toEqual([2, 3])
+
+      const other = await newUser('otherseller@example.com', { merchantId: IKEJA })
+      await expectFail(asUser(other, `select public.boost_insights($1)`, [boost]), 'not_found')
+      expect((await asUser(staff, `select public.boost_insights($1) r`, [boost])).length).toBe(1)
+    } finally {
+      await asUser(staff, `select public.set_boost_settings(1000, false, 12)`)
+    }
   })
 })
 

@@ -60,13 +60,13 @@ describe('validateListingEconomics', () => {
 
 describe('platformFeeBps', () => {
   it('sets the rate from the item value', () => {
-    expect(platformFeeBps(k(100))).toBe(1500)
-    expect(platformFeeBps(k(49_999))).toBe(1500)
-    expect(platformFeeBps(k(50_000))).toBe(1300)
-    expect(platformFeeBps(k(500_000))).toBe(1150)
-    expect(platformFeeBps(k(4_999_999))).toBe(1150)
-    expect(platformFeeBps(k(5_000_000))).toBe(1000)
-    expect(platformFeeBps(k(300_000_000))).toBe(1000)
+    expect(platformFeeBps(k(100))).toBe(750)
+    expect(platformFeeBps(k(49_999))).toBe(750)
+    expect(platformFeeBps(k(50_000))).toBe(500)
+    expect(platformFeeBps(k(500_000))).toBe(300)
+    expect(platformFeeBps(k(4_999_999))).toBe(300)
+    expect(platformFeeBps(k(5_000_000))).toBe(250)
+    expect(platformFeeBps(k(300_000_000))).toBe(250)
   })
 
   it('stays between 10% and 30%, and never pays a seller less for a pricier item', () => {

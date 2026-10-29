@@ -34,6 +34,8 @@ import {
 } from '@/domain/rules'
 import { DELIVERY_ERROR_TEXT, ORDER_ERROR_TEXT, PRODUCT_ERROR_TEXT, checkOrder, saleEconomics, salePriceKobo, validateDelivery, validateProduct } from '@/domain/orders'
 import { MAX_MESSAGES_PER_MINUTE, messageError } from '@/domain/messages'
+import { fillDays, lagosDay } from '@/domain/metrics'
+import { BOOST_DEFAULTS, BOOST_ERROR_TEXT, DEFAULT_BOOST_PACKAGES, boostEndsAt, boostWindow, boostsUnlocked, canBoost } from '@/domain/boosts'
 import { SELLER_APPLICATION_ERROR_TEXT, normalizeNin, validateSellerApplication } from '@/domain/sellers'
 import type { Category, DrawResult, LedgerEntry, Listing, ListingStatus, Merchant, Order, Ticket, UnsoldPolicy, User } from '@/domain/types'
 import {
@@ -49,12 +51,17 @@ import {
   type ChatMessage,
   type ChatSide,
   type ConversationView,
+  type ListingMetrics,
+  type BoostSettings,
+  type BoostView,
+  type BoostInsightsView,
+  type MerchantMetricsView,
   type OrderView,
   type AuthAdapter,
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v6' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v8' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session'
 const ME = 'u-me'
 const MY_MERCHANT = 'm-ikeja'
@@ -80,6 +87,10 @@ interface Db {
   messages: ChatMessage[]
   /** Opt-in call numbers by merchant id. */
   callPhones: Record<string, string>
+  /** One per visitor per listing per Lagos day. */
+  views: { listingId: string; visitor: string; day: string }[]
+  boosts: (Omit<BoostView, 'listingTitle' | 'merchantName'> & { merchantId: string })[]
+  boostSettings: BoostSettings
 }
 
 interface MockConversation {
@@ -229,7 +240,7 @@ function productListing(input: NewProductInput & { merchantId: string; status: L
     id: uid('L'), kind: 'product', merchantId: input.merchantId, title: input.title.trim(), description: input.description.trim(), category: input.category,
     images: input.images ?? [], priceKobo: input.priceKobo, ticketPriceKobo: 0, buyerTicketPriceKobo: 0, ticketCount: 0, ticketsSold: 0,
     feeMode: 'seller', feeBps: platformFeeBps(input.priceKobo), unsoldPolicy: 'refund', fallbackPriceKobo: null, durationDays: 0, extended: false,
-    status: input.status, handover: null, cautionFee: { amountKobo: 0, status: 'none' }, commitment: '', createdAt: iso(at), closesAt: iso(at),
+    status: input.status, handover: null, cautionFee: { amountKobo: 0, status: 'none' }, commitment: '', createdAt: iso(at), closesAt: iso(at), boostedUntil: null,
   }
 }
 
@@ -272,6 +283,7 @@ async function makeListing(s: SeedListing, now: number, seeds: Record<string, st
     commitment: await commitmentFor(seed),
     createdAt: iso(now - 2 * DAY),
     closesAt: iso(now + s.closesInHours * 60 * 60 * 1000),
+    boostedUntil: null,
   }
 }
 
@@ -305,13 +317,22 @@ async function freshDb(): Promise<Db> {
     conversations: [],
     messages: [],
     callPhones: { 'm-surulere': '0803 000 1234' },
+    views: [],
+    boosts: [],
+    // The demo never reaches the real threshold, so boosts start switched on.
+    boostSettings: { minActiveBuyers: BOOST_DEFAULTS.minActiveBuyers, forcedOn: true, maxActive: BOOST_DEFAULTS.maxActiveBoosts },
   }
   for (const p of SEED_PRODUCTS) {
     db.listings.push(productListing({ ...p, priceKobo: nairaToKobo(p.price) }, now - DAY))
   }
   for (const s of SEED_LISTINGS) {
     const l = await makeListing(s, now, db.seeds)
-    if (s.sold) crowdBuys(db, l, s.sold, iso(now - DAY))
+    // Spread seeded sales over the last fortnight so seller insights have a shape.
+    if (s.sold) for (let day = 13, left = s.sold; left > 0; day = Math.max(0, day - 1)) {
+      const n = day === 0 ? left : Math.min(left, Math.ceil((s.sold / 14) * (0.4 + Math.random() * 1.2)))
+      crowdBuys(db, l, n, iso(now - day * DAY - 2 * 60 * 60 * 1000))
+      left -= n
+    }
     db.listings.push(l)
   }
   // Finished draws so the results page isn't empty.
@@ -327,7 +348,36 @@ async function freshDb(): Promise<Db> {
     await runDraw(db, l, ref, at)
   }
   seedChats(db, now)
+  seedViews(db, now)
+  seedBoosts(db, now)
   return db
+}
+
+/** Two other stores already paid for boosts, so Sponsored shows on the home page. */
+function seedBoosts(db: Db, now: number) {
+  const picks = [
+    db.listings.find((l) => l.merchantId === 'm-vi' && l.status === 'live'),
+    db.listings.find((l) => l.merchantId === 'm-surulere' && l.kind === 'product' && l.status === 'for_sale'),
+  ]
+  for (const l of picks) {
+    if (!l) continue
+    const pkg = DEFAULT_BOOST_PACKAGES[1]
+    l.boostedUntil = iso(now + 4 * DAY)
+    db.boosts.push({ id: uid('B'), txRef: `BST-${randomHex(8).toUpperCase()}`, listingId: l.id, merchantId: l.merchantId, days: pkg.days, priceKobo: pkg.priceKobo, status: 'paid', startsAt: iso(now - 3 * DAY), endsAt: l.boostedUntil, createdAt: iso(now - 3 * DAY) })
+  }
+}
+
+/** A month of made-up visits to the demo store's listings, so its insights aren't empty. */
+function seedViews(db: Db, now: number) {
+  for (const l of db.listings) {
+    if (l.merchantId !== MY_MERCHANT || !['live', 'for_sale', 'drawn'].includes(l.status)) continue
+    const popularity = 2 + Math.random() * 10
+    for (let d = 29; d >= 0; d--) {
+      const day = lagosDay(now - d * DAY)
+      const n = Math.round(popularity * (0.5 + Math.random()) * (d < 10 ? 1.4 : 1))
+      for (let i = 0; i < n; i++) db.views.push({ listingId: l.id, visitor: `v:seed-${i}`, day })
+    }
+  }
 }
 
 /** A chat the demo buyer started, and one waiting for the demo store, so both inboxes have something. */
@@ -452,6 +502,27 @@ function conversationView(db: Db, c: MockConversation, me: ChatSide): Conversati
   }
 }
 
+/** One listing's numbers between two Lagos days, inclusive (metrics.ts ListingMetricsInput). */
+function statsBetween(db: Db, l: Listing, from: string, to: string) {
+  const inRange = (at: string) => {
+    const day = lagosDay(at)
+    return day >= from && day <= to
+  }
+  const views = db.views.filter((v) => v.listingId === l.id && v.day >= from && v.day <= to)
+  // A refunded draw's tickets were paid back, so they aren't sales.
+  const tickets = l.kind === 'raffle' && (l.status === 'live' || l.status === 'drawn') ? db.tickets.filter((t) => t.listingId === l.id && inRange(t.purchasedAt)) : []
+  const orders = db.orders.filter((o) => o.listingId === l.id && inRange(o.createdAt))
+  return {
+    views: views.length,
+    visitors: new Set(views.map((v) => v.visitor)).size,
+    chats: db.conversations.filter((c) => c.listingId === l.id && inRange(c.lastMessageAt)).length,
+    units: tickets.length + orders.length,
+    // Demo crowd buyers count once per purchase.
+    buyers: new Set(tickets.map((t) => (t.userId === CROWD ? t.purchaseId : t.userId))).size + new Set(orders.map((o) => o.buyerId)).size,
+    salesKobo: tickets.length * l.buyerTicketPriceKobo + orders.reduce((s, o) => s + o.priceKobo, 0),
+  }
+}
+
 function orderView(db: Db, o: Order): OrderView {
   const l = db.listings.find((x) => x.id === o.listingId)!
   const merchant = db.merchants.find((m) => m.id === o.merchantId)!
@@ -560,6 +631,11 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     if ((role === 'buyer' || role === undefined) && c.buyerId === ME) return 'buyer'
     if (c.merchantId === myShop(db)) return 'seller'
     return null
+  }
+  /** Buyers who bought a ticket or an item in the last 30 days. */
+  const activeBuyerCount = (db: Db) => {
+    const monthAgo = iso(now() - 30 * DAY)
+    return new Set(db.ledger.filter((e) => (e.kind === 'ticket_purchase' || e.kind === 'order_payment') && e.createdAt > monthAgo).map((e) => e.userId)).size
   }
   const conversationOr404 = (db: Db, id: string) => {
     const c = db.conversations.find((x) => x.id === id)
@@ -750,7 +826,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           handover: { ...input.handover, address: input.handover.address.trim(), method: handoverMethodFor(input.category) },
           // In test mode the fee is recorded, not charged. A real backend takes it before booking the pickup.
           cautionFee: { amountKobo: cautionFeeFor(input.category), status: 'held' },
-          commitment: await commitmentFor(seed), createdAt: iso(at), closesAt: iso(at + input.durationDays * DAY),
+          commitment: await commitmentFor(seed), createdAt: iso(at), closesAt: iso(at + input.durationDays * DAY), boostedUntil: null,
         }
         db.listings.push(listing)
         return listingView(db, listing, 'full')
@@ -829,6 +905,109 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const { c, side } = conversationOr404(db, conversationId)
         if (side === 'buyer') c.buyerReadAt = iso(now())
         else c.sellerReadAt = iso(now())
+      }),
+
+    recordListingView: (listingId, visitorId) =>
+      tx((db) => {
+        const l = db.listings.find((x) => x.id === listingId)
+        if (!l || !['live', 'drawn', 'refunded', 'for_sale', 'sold'].includes(l.status)) return
+        const role = readSession()?.role
+        if (role && l.merchantId === myShop(db)) return // a seller looking at their own item
+        const visitor = role ? `u:${role === 'buyer' ? ME : role}` : /^[A-Za-z0-9-]{8,64}$/.test(visitorId) ? `v:${visitorId}` : null
+        if (!visitor) return
+        const day = lagosDay(now())
+        if (!db.views.some((v) => v.listingId === l.id && v.visitor === visitor && v.day === day)) db.views.push({ listingId: l.id, visitor, day })
+      }),
+
+    getMerchantMetrics: (days) =>
+      tx((db): MerchantMetricsView => {
+        const shop = readSession() ? myShop(db) : null
+        if (!shop) throw new ApiError('forbidden', 'Only sellers have insights.')
+        const range = fillDays([], days, lagosDay(now()))
+        const from = range[0].date
+        const daily = new Map(range.map((d) => [d.date, { ...d }]))
+        const today = range[range.length - 1].date
+        const listings = db.listings
+          .filter((l) => l.merchantId === shop && l.status !== 'rejected')
+          .map((l): ListingMetrics => {
+            for (const d of range) {
+              const day = statsBetween(db, l, d.date, d.date)
+              daily.get(d.date)!.views += day.views
+              daily.get(d.date)!.salesKobo += day.salesKobo
+            }
+            return { listingId: l.id, title: l.title, image: l.images[0] ?? null, category: l.category, kind: l.kind, status: l.status, ...statsBetween(db, l, from, today) }
+          })
+          .sort((a, b) => b.views - a.views)
+        return { days, listings, daily: [...daily.values()] }
+      }),
+
+    getBoostStatus: () =>
+      tx((db) => {
+        const s = db.boostSettings
+        const running = db.boosts.filter((b) => b.status === 'paid' && b.endsAt! > iso(now())).length
+        const activeBuyers = activeBuyerCount(db)
+        return {
+          unlocked: boostsUnlocked(activeBuyers, s.minActiveBuyers, s.forcedOn),
+          slotsLeft: Math.max(0, s.maxActive - running),
+          packages: DEFAULT_BOOST_PACKAGES,
+          admin: readSession()?.role === 'admin' ? { ...s, activeBuyers } : null,
+        }
+      }),
+
+    buyBoost: (listingId, packageId) =>
+      tx((db) => {
+        const shop = readSession() ? myShop(db) : null
+        if (!shop) throw new ApiError('forbidden', 'Only sellers can boost listings.')
+        const s = db.boostSettings
+        if (!boostsUnlocked(activeBuyerCount(db), s.minActiveBuyers, s.forcedOn)) throw new ApiError('forbidden', BOOST_ERROR_TEXT.locked)
+        const l = db.listings.find((x) => x.id === listingId && x.merchantId === shop)
+        if (!l) throw new ApiError('not_found', 'That listing isn’t yours.')
+        if (!canBoost(l)) throw new ApiError('invalid_input', BOOST_ERROR_TEXT.not_boostable)
+        const pkg = DEFAULT_BOOST_PACKAGES.find((p) => p.id === packageId)
+        if (!pkg) throw new ApiError('invalid_input', BOOST_ERROR_TEXT.no_package)
+        if (db.boosts.filter((b) => b.status === 'paid' && b.endsAt! > iso(now())).length >= s.maxActive) throw new ApiError('invalid_input', BOOST_ERROR_TEXT.slots_full)
+        // Test money: paid at once.
+        const startsAt = l.boostedUntil && l.boostedUntil > iso(now()) ? l.boostedUntil : iso(now())
+        l.boostedUntil = boostEndsAt(l.boostedUntil, pkg.days, now())
+        db.boosts.push({ id: uid('B'), txRef: `BST-${randomHex(8).toUpperCase()}`, listingId: l.id, merchantId: shop, days: pkg.days, priceKobo: pkg.priceKobo, status: 'paid', startsAt, endsAt: l.boostedUntil, createdAt: iso(now()) })
+        return 'successful'
+      }),
+
+    listBoosts: () =>
+      tx((db) => {
+        const role = readSession()?.role
+        const shop = role && role !== 'admin' ? myShop(db) : null
+        return db.boosts
+          .filter((b) => role === 'admin' || b.merchantId === shop)
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .map(({ merchantId, ...b }) => ({
+            ...b,
+            listingTitle: db.listings.find((l) => l.id === b.listingId)?.title ?? '',
+            merchantName: db.merchants.find((m) => m.id === merchantId)?.name ?? '',
+          }))
+      }),
+
+    getBoostInsights: (boostId) =>
+      tx((db): BoostInsightsView => {
+        const role = readSession()?.role
+        const shop = role && role !== 'admin' ? myShop(db) : null
+        const b = db.boosts.find((x) => x.id === boostId && (role === 'admin' || x.merchantId === shop))
+        if (!b) throw new ApiError('not_found', 'That boost doesn’t exist.')
+        if (b.status !== 'paid' || !b.startsAt || !b.endsAt) throw new ApiError('invalid_input', 'Results show once the boost has started.')
+        const l = getListingOr404(db, b.listingId)
+        const w = boostWindow(b.startsAt, b.endsAt, now())
+        const daily = fillDays([], w.days * 2, w.to).map((d) => {
+          const day = statsBetween(db, l, d.date, d.date)
+          return { date: d.date, views: day.views, salesKobo: day.salesKobo }
+        })
+        return { window: w, before: statsBetween(db, l, w.beforeFrom, w.beforeTo), during: statsBetween(db, l, w.from, w.to), daily }
+      }),
+
+    setBoostSettings: (settings) =>
+      tx((db) => {
+        if (readSession()?.role !== 'admin') throw new ApiError('forbidden', 'Admins only.')
+        if (settings.minActiveBuyers < 0 || settings.maxActive < 1) throw new ApiError('invalid_input', 'Check the boost settings.')
+        db.boostSettings = { ...settings }
       }),
 
     getCallPhone: () =>

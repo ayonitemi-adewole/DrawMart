@@ -10,6 +10,7 @@ import { EmptyState, ErrorState, buttonClass } from '@/components/ui'
 import { AuthLayout } from '@/layouts/AuthLayout'
 import { BackOfficeLayout } from '@/layouts/BackOfficeLayout'
 import { BuyerLayout } from '@/layouts/BuyerLayout'
+import { AdminBoostsPage } from '@/pages/admin/AdminBoostsPage'
 import { AdminDrawsPage } from '@/pages/admin/AdminDrawsPage'
 import { AdminPage } from '@/pages/admin/AdminPage'
 import { AdminSellersPage } from '@/pages/admin/AdminSellersPage'
@@ -19,6 +20,7 @@ import { ListingPage } from '@/pages/ListingPage'
 import { MerchantPage } from '@/pages/merchant/MerchantPage'
 import { ResultPage } from '@/pages/ResultPage'
 import { ConversationPage, MessagesPage } from '@/pages/MessagesPage'
+import { InsightsPage } from '@/pages/merchant/InsightsPage'
 import { SellPage } from '@/pages/SellPage'
 import { SignInPage } from '@/pages/SignInPage'
 import { TicketsPage } from '@/pages/TicketsPage'
@@ -107,6 +109,7 @@ const router = createBrowserRouter([
     errorElement: <RouteError />,
     children: [
       { index: true, element: <MerchantPage /> },
+      { path: 'insights', element: <InsightsPage /> },
       { path: 'messages', element: <MessagesPage basePath="/store/messages" /> },
       { path: 'messages/:id', element: <ConversationPage basePath="/store/messages" /> },
       { path: '*', element: <NotFound /> },
@@ -119,6 +122,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <AdminPage /> },
       { path: 'draws', element: <AdminDrawsPage /> },
+      { path: 'boosts', element: <AdminBoostsPage /> },
       { path: 'sellers', element: <AdminSellersPage /> },
       { path: '*', element: <NotFound /> },
     ],

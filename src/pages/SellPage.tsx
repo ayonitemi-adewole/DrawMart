@@ -2,10 +2,11 @@ import { useRef, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router'
 import { useMe, useMerchant, useMySellerApplication, useSubmitSellerApplication } from '@/api/hooks'
 import type { SellerApplicationView } from '@/api/types'
-import { CameraIcon, CheckIcon, ClockIcon, IdCardIcon, LayoutIcon, PlusIcon, ShieldIcon, StoreIcon, TruckIcon, XIcon, type IconComponent } from '@/components/icons'
+import { CameraIcon, ChartIcon, CheckIcon, ClockIcon, IdCardIcon, LayoutIcon, PlusIcon, ShieldIcon, StoreIcon, TruckIcon, XIcon, type IconComponent } from '@/components/icons'
 import { useToast } from '@/components/toast'
 import { Badge, Button, Card, ErrorState, Field, Notice, PageTitle, Segmented, Skeleton, cx, errorMessage, inputCls } from '@/components/ui'
 import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication, type SellerApplicationError, type SellerApplicationInput } from '@/domain/sellers'
+import { SellerInsights } from '@/components/SellerInsights'
 import { photoToDataUrl } from '@/lib/image'
 import { MerchantListings } from './merchant/MerchantPage'
 import { MerchantOrders, NewProduct } from './merchant/NewProduct'
@@ -274,13 +275,14 @@ function IdPhoto({
   )
 }
 
-type SellTab = 'items' | 'orders' | 'new'
+type SellTab = 'items' | 'orders' | 'insights' | 'new'
+const SELL_TABS: SellTab[] = ['items', 'orders', 'insights', 'new']
 
 /** Once approved: the seller's own items, orders to send, and a regular-product form. */
 function SellerDashboard() {
   const shop = useMerchant()
   const [params, setParams] = useSearchParams()
-  const tab: SellTab = params.get('tab') === 'orders' ? 'orders' : params.get('tab') === 'new' ? 'new' : 'items'
+  const tab: SellTab = SELL_TABS.find((t) => t === params.get('tab')) ?? 'items'
   const setTab = (t: SellTab) => setParams(t === 'items' ? {} : { tab: t }, { replace: true })
 
   return (
@@ -311,12 +313,15 @@ function SellerDashboard() {
         options={[
           { value: 'items', label: <><LayoutIcon size={16} /> Your items</> },
           { value: 'orders', label: <><TruckIcon size={16} /> Orders</> },
+          { value: 'insights', label: <><ChartIcon size={16} /> Insights</> },
           { value: 'new', label: <><PlusIcon size={16} /> New item</> },
         ]}
       />
       <div key={tab} className="animate-fade-in">
         {tab === 'orders' ? (
           <MerchantOrders />
+        ) : tab === 'insights' ? (
+          <SellerInsights />
         ) : tab === 'new' ? (
           <NewProduct onBack={() => setTab('items')} onDone={() => setTab('items')} />
         ) : (

@@ -1,8 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect } from 'react'
 import type { Delivery, Kobo } from '@/domain/types'
 import { api } from './index'
+import type { MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput } from '@/domain/sellers'
-import type { AccountRole, ListingFilter, NewListingInput, NewProductInput } from './types'
+import { visitorId } from '@/lib/visitor'
+import type { AccountRole, BoostSettings, ListingFilter, NewListingInput, NewProductInput } from './types'
 
 export const keys = {
   session: ['session'] as const,
@@ -22,6 +25,9 @@ export const keys = {
   conversations: ['conversations'] as const,
   messages: (id: string) => ['messages', id] as const,
   callPhone: ['call-phone'] as const,
+  metrics: (days: MetricRange) => ['metrics', days] as const,
+  boostStatus: ['boost-status'] as const,
+  boosts: ['boosts'] as const,
 }
 
 /** The signed-in account, or null. Kept fresh by SessionSync in App.tsx. */
@@ -96,6 +102,48 @@ export function useSetCallPhone() {
     mutationFn: (phone: string | null) => api.setCallPhone(phone),
     onSettled: () => Promise.all([qc.invalidateQueries({ queryKey: keys.callPhone }), qc.invalidateQueries({ queryKey: keys.conversations })]),
   })
+}
+
+// Boosts (paid promotion)
+const useCanSeeBoosts = () => {
+  const hasShop = useHasShop()
+  const role = useAccess().role // always call both hooks, in the same order
+  return hasShop || role === 'admin'
+}
+export const useBoostStatus = () => useQuery({ queryKey: keys.boostStatus, queryFn: () => api.getBoostStatus(), enabled: useCanSeeBoosts() })
+/** While a payment waits on Flutterwave, keep checking so the card flips to "active" on its own. */
+export const useBoosts = () =>
+  useQuery({
+    queryKey: keys.boosts,
+    queryFn: () => api.listBoosts(),
+    enabled: useCanSeeBoosts(),
+    refetchInterval: (q) => (q.state.data?.some((b) => b.status === 'pending' && isRecentPending(b.createdAt)) ? 15_000 : false),
+  })
+export const useBoostInsights = (boostId: string | null) =>
+  useQuery({ queryKey: ['boost-insights', boostId], queryFn: () => api.getBoostInsights(boostId!), enabled: !!boostId })
+
+/** Pending boosts older than a day were abandoned; stop showing them. */
+export const isRecentPending = (createdAt: string) => Date.now() - Date.parse(createdAt) < 24 * 60 * 60 * 1000
+
+export function useBuyBoost() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: ({ listingId, packageId }: { listingId: string; packageId: string }) => api.buyBoost(listingId, packageId), onSettled: invalidate })
+}
+
+export function useSetBoostSettings() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: (s: BoostSettings) => api.setBoostSettings(s), onSettled: invalidate })
+}
+
+// Seller insights
+export const useMerchantMetrics = (days: MetricRange) =>
+  useQuery({ queryKey: keys.metrics(days), queryFn: () => api.getMerchantMetrics(days), enabled: useHasShop() })
+
+/** Counts one view of a listing page for its seller's insights. Failures are ignored: it's only a counter. */
+export function useRecordListingView(listingId: string | undefined) {
+  useEffect(() => {
+    if (listingId) api.recordListingView(listingId, visitorId()).catch(() => undefined)
+  }, [listingId])
 }
 
 // Auth. SessionSync (App.tsx) clears the cache when the account changes.

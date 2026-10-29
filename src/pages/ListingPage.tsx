@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router";
 import {
   useBuyTickets,
   useListing,
+  useRecordListingView,
   useAccess,
   useMe,
   useWallet,
@@ -61,6 +62,7 @@ import { ticketNo } from "@/lib/time";
 export function ListingPage() {
   const { id = "" } = useParams();
   const listing = useListing(id);
+  useRecordListingView(listing.data?.id);
 
   if (listing.isPending)
     return (

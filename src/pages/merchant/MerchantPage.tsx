@@ -21,6 +21,7 @@ import {
   TicketIcon,
   TruckIcon,
 } from '@/components/icons'
+import { BoostRow } from '@/components/BoostControl'
 import { useToast } from '@/components/toast'
 import { Badge, Button, Card, EmptyState, ErrorState, Field, Notice, ProductImage, ProgressBar, Segmented, Skeleton, StatTile, cx, errorMessage, inputCls, type Tone } from '@/components/ui'
 import { LISTING_ERROR_TEXT, computeListingEconomics, platformFeeBps, validateListingEconomics, type ListingValidationError } from '@/domain/fees'
@@ -859,6 +860,7 @@ export function MerchantListings({ onNew, emptyBody }: { onNew: () => void; empt
                     </dd>
                   </div>
                 </dl>
+                <BoostRow listing={l} />
               </Card>
             )
           })}
@@ -896,6 +898,7 @@ function ProductCard({ listing: l }: { listing: ListingView }) {
           <dd className="font-semibold tabular-nums">{formatNaira(payoutKobo)}</dd>
         </div>
       </dl>
+      <BoostRow listing={l} />
     </Card>
   )
 }

@@ -1,7 +1,7 @@
 import { NavLink, Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router'
 import { api } from '@/api'
 import { useAccess, useMerchant, usePendingListings, useSellerApplications, useSignOut, useUnreadMessages } from '@/api/hooks'
-import { ChatIcon, CheckIcon, ClipboardIcon, DiceIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
+import { ChartIcon, ChatIcon, SparklesIcon, CheckIcon, ClipboardIcon, DiceIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { cx } from '@/components/ui'
 import { APP_HOME } from '@/lib/apps'
@@ -31,11 +31,13 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
     app === 'store'
       ? [
           { to: '/store', label: 'Dashboard', icon: LayoutIcon },
+          { to: '/store/insights', label: 'Insights', icon: ChartIcon },
           { to: '/store/messages', label: 'Messages', icon: ChatIcon, count: unread },
         ]
       : [
           { to: '/admin', label: 'Review queue', icon: ClipboardIcon, count: pending.data?.length ?? 0 },
           { to: '/admin/sellers', label: 'Seller ID checks', icon: IdCardIcon, count: sellers.data?.length ?? 0 },
+          { to: '/admin/boosts', label: 'Boosts', icon: SparklesIcon },
           { to: '/admin/draws', label: api.testMode ? 'Live draws & demo' : 'Live draws', icon: DiceIcon },
         ]
 

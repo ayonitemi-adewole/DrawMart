@@ -202,7 +202,7 @@ describe('mock api', () => {
     await expect(api.buyNow(p.id, { address: 'Ikoyi', contactPhone: '1' })).rejects.toThrow(/full delivery address/)
     const before = (await api.getWallet()).balance.cashKobo
     const order = await api.buyNow(p.id, delivery)
-    expect(order).toMatchObject({ status: 'paid', priceKobo: k(20_000), feeKobo: k(3_000), // 15% under ₦50,000
+    expect(order).toMatchObject({ status: 'paid', priceKobo: k(20_000), feeKobo: k(1_500), // 7.5% under ₦50,000
       listingTitle: 'Office chair', merchantName: 'Ikeja Partner Store' })
     expect((await api.getWallet()).balance.cashKobo).toBe(before - k(20_000))
     expect((await api.getListing(p.id)).status).toBe('sold')
@@ -281,5 +281,77 @@ describe('mock api', () => {
     await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
     expect((await api.listConversations()).find((x) => x.id === c.id)).toMatchObject({ unread: 1, callPhone: '0803 555 0000' })
     expect((await api.listMessages(c.id)).map((m) => m.sender)).toEqual(['buyer', 'seller'])
+  })
+
+  it('counts listing views for seller insights, but not the seller’s own', async () => {
+    const store = memoryStore()
+    const api = createMockApi({ store, latencyMs: 0 })
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const before = await api.getMerchantMetrics(7)
+    expect(before.daily).toHaveLength(7)
+    expect(before.listings.length).toBeGreaterThan(0)
+    expect(before.listings.some((l) => l.views > 0 && l.salesKobo > 0)).toBe(true)
+    const own = before.listings.find((l) => l.status === 'live')!
+    await api.recordListingView(own.listingId, 'visitor-1234')
+    expect((await api.getMerchantMetrics(7)).listings.find((l) => l.listingId === own.listingId)!.views).toBe(own.views)
+
+    await api.auth.signOut()
+    await api.recordListingView(own.listingId, 'visitor-1234')
+    await api.recordListingView(own.listingId, 'visitor-1234') // same visitor, same day
+    await api.recordListingView(own.listingId, 'x') // not a visitor id
+    await expect(api.getMerchantMetrics(7)).rejects.toMatchObject({ code: 'forbidden' })
+
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const after = await api.getMerchantMetrics(30)
+    expect(after.daily).toHaveLength(30)
+    expect(after.listings.find((l) => l.listingId === own.listingId)!.views).toBeGreaterThan(own.views)
+    expect((await api.getMerchantMetrics(7)).listings.find((l) => l.listingId === own.listingId)!.views).toBe(own.views + 1)
+  })
+
+  it('lets sellers boost live listings, within the slot limit an admin sets', async () => {
+    const api = make()
+    const listings = await api.listListings()
+    expect(listings.some((l) => l.boostedUntil && l.boostedUntil > new Date().toISOString())).toBe(true) // seeded sponsors
+
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const status = await api.getBoostStatus()
+    expect(status).toMatchObject({ unlocked: true, admin: null })
+    const mine = (await api.listMerchantListings()).filter((l) => l.status === 'live')
+    await expect(api.buyBoost(mine[0].id, 'nope')).rejects.toThrow(/Pick a boost package/)
+    expect(await api.buyBoost(mine[0].id, '3d')).toBe('successful')
+    const first = (await api.getListing(mine[0].id)).boostedUntil!
+    await api.buyBoost(mine[0].id, '7d') // runs on after the first
+    expect(Date.parse((await api.getListing(mine[0].id)).boostedUntil!) - Date.parse(first)).toBe(7 * 86_400_000)
+    expect((await api.listBoosts()).map((b) => b.days)).toEqual([7, 3])
+
+    await api.auth.signInWithPassword('admin@drawmart.test', 'drawmart-demo')
+    expect((await api.getBoostStatus()).admin).toMatchObject({ forcedOn: true })
+    expect((await api.listBoosts()).length).toBe(4)
+    await api.setBoostSettings({ minActiveBuyers: 1000, forcedOn: false, maxActive: 12 })
+
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    expect((await api.getBoostStatus()).unlocked).toBe(false)
+    await expect(api.buyBoost(mine[1].id, '3d')).rejects.toMatchObject({ code: 'forbidden' })
+    await expect(api.setBoostSettings({ minActiveBuyers: 0, forcedOn: true, maxActive: 1 })).rejects.toMatchObject({ code: 'forbidden' })
+  })
+
+  it('shows a boost’s results against the days before it', async () => {
+    const api = make()
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const live = (await api.listMerchantListings()).find((l) => l.status === 'live')!
+    await api.buyBoost(live.id, '3d')
+    const [boost] = await api.listBoosts()
+    expect(boost.txRef).toMatch(/^BST-/)
+    await api.auth.signOut()
+    await api.recordListingView(live.id, 'visitor-during-1')
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const r = await api.getBoostInsights(boost.id)
+    expect(r.window.days).toBe(1)
+    expect(r.daily).toHaveLength(2)
+    expect(r.during.views).toBeGreaterThan(0) // seeded views today, plus ours
+    expect(r.before.views).toBeGreaterThan(0) // seeded views yesterday
+
+    await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
+    await expect(api.getBoostInsights(boost.id)).rejects.toMatchObject({ code: 'not_found' })
   })
 })

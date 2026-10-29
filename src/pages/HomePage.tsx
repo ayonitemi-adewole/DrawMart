@@ -10,6 +10,7 @@ import { ListingCard, isAlmostGone, valueMultiple } from '@/components/ListingCa
 import { EmptyState, ErrorState, LiveDot, ProductImage, ProgressBar, Skeleton, buttonClass, cx, inputCls } from '@/components/ui'
 import { formatNaira } from '@/domain/money'
 import { RULES } from '@/domain/rules'
+import { withSponsoredFirst } from '@/domain/boosts'
 import { CATEGORIES, type Category } from '@/domain/types'
 
 type Sort = 'popular' | 'ending' | 'cheapest' | 'value'
@@ -54,8 +55,14 @@ export function HomePage() {
     const filtered = q
       ? listings.data.filter((l) => [l.title, l.description, l.merchant.name, l.merchant.area, l.category].some((s) => s.toLowerCase().includes(q)))
       : listings.data
-    return sortListings(filtered, sort)
+    // Paid boosts sit on top whatever the sort, a few at a time.
+    const { sponsored, rest } = withSponsoredFirst(sortListings(filtered, sort), Date.now())
+    return [...sponsored, ...rest]
   }, [listings.data, query, sort])
+  const shop = useMemo(() => {
+    const { sponsored, rest } = withSponsoredFirst(forSale.data ?? [], Date.now())
+    return [...sponsored, ...rest]
+  }, [forSale.data])
 
   return (
     <div className="flex flex-col gap-8">
@@ -152,7 +159,7 @@ export function HomePage() {
             <p className="text-sm text-muted">Regular products from verified stores, plus draws that ended without selling out. Pay from your wallet; the store delivers.</p>
           </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {forSale.data.map((l) => (
+            {shop.map((l) => (
               <ListingCard key={l.id} listing={l} />
             ))}
           </div>

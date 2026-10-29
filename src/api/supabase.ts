@@ -8,6 +8,7 @@
 import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js'
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
+import { fillDays, lagosDay, type DayMetrics } from '@/domain/metrics'
 import { ORDER_ERROR_TEXT } from '@/domain/orders'
 import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication } from '@/domain/sellers'
 import type { Category, FeeMode, Handover, LedgerEntry, LedgerKind, ListingKind, ListingStatus, Merchant, OrderStatus, UnsoldPolicy, User } from '@/domain/types'
@@ -30,6 +31,11 @@ import {
   type SellerApplicationView,
   type ChatMessage,
   type ConversationView,
+  type ListingMetrics,
+  type BoostStatus,
+  type BoostView,
+  type BoostInsightsView,
+  type MerchantMetricsView,
   type PurchaseReceipt,
   type WalletView,
 } from './types'
@@ -87,6 +93,7 @@ interface ListingRow {
   commitment: string
   created_at: string
   closes_at: string
+  boosted_until: string | null
   merchant: MerchantRow
   result: DrawResultRow | null
   handover: HandoverRow | null
@@ -262,6 +269,7 @@ function toListingView(l: ListingRow, me: string | null, mine: Mine): ListingVie
     commitment: l.commitment,
     createdAt: l.created_at,
     closesAt: l.closes_at,
+    boostedUntil: l.boosted_until,
     handover: l.handover
       ? { method: l.handover.method, address: l.handover.address, contactPhone: l.handover.contact_phone, date: l.handover.date, slot: l.handover.slot }
       : null,
@@ -563,6 +571,64 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     },
 
     markConversationRead: (conversationId) => rpc('mark_conversation_read', { p_conversation_id: conversationId }),
+
+    recordListingView: async (listingId, visitorId) => {
+      await rpc('record_listing_view', { p_listing_id: listingId, p_visitor: visitorId })
+    },
+
+    getMerchantMetrics: async (days) => {
+      const m = await rpc<{ listings: ListingMetrics[]; daily: DayMetrics[] }>('merchant_metrics', { p_days: days })
+      return {
+        days,
+        listings: m.listings.map((l) => ({ ...l, salesKobo: num(l.salesKobo) })),
+        daily: fillDays(m.daily.map((d) => ({ ...d, salesKobo: num(d.salesKobo) })), days, lagosDay(Date.now())),
+      } satisfies MerchantMetricsView
+    },
+
+    getBoostStatus: async () => {
+      const s = await rpc<BoostStatus>('boost_status')
+      return { ...s, packages: s.packages.map((p) => ({ ...p, priceKobo: num(p.priceKobo) })) }
+    },
+
+    buyBoost: async (listingId, packageId) => {
+      const c = await rpc<{ txRef: string; amountKobo: number; email: string; name: string }>('start_boost', { p_listing_id: listingId, p_package_id: packageId })
+      if (!publicKey) {
+        // No Flutterwave keys: only possible in test mode, where pretend money pays for it.
+        if (!opts.testMode) throw new ApiError('invalid_input', 'Payments aren’t set up yet.')
+        await rpc('test_pay_boost', { p_tx_ref: c.txRef })
+        return 'successful'
+      }
+      const result = await openFlutterwaveCheckout({ publicKey, ...c, amountKobo: num(c.amountKobo), description: 'Boost a listing' })
+      const status = await checkDeposit(c.txRef).catch((): DepositStatus => 'pending')
+      if (result === 'closed' && status === 'pending') {
+        await rpc('cancel_boost', { p_tx_ref: c.txRef })
+        return 'cancelled'
+      }
+      return status
+    },
+
+    listBoosts: async () => {
+      const rows = unwrap(
+        await client
+          .from('boosts')
+          .select('id, tx_ref, listing_id, days, price_kobo, status, starts_at, ends_at, created_at, listing:listings(title), merchant:merchants(name)')
+          .order('created_at', { ascending: false })
+          .limit(200)
+          .returns<{ id: string; tx_ref: string; listing_id: string; days: number; price_kobo: number; status: BoostView['status']; starts_at: string | null; ends_at: string | null; created_at: string; listing: { title: string }; merchant: { name: string } }[]>(),
+      )
+      return rows.map((b) => ({
+        id: b.id, txRef: b.tx_ref, listingId: b.listing_id, listingTitle: b.listing.title, merchantName: b.merchant.name, days: b.days, priceKobo: num(b.price_kobo),
+        status: b.status, startsAt: b.starts_at, endsAt: b.ends_at, createdAt: b.created_at,
+      }))
+    },
+
+    getBoostInsights: async (boostId) => {
+      const r = await rpc<BoostInsightsView>('boost_insights', { p_boost_id: boostId })
+      const stats = (m: BoostInsightsView['before']) => ({ ...m, salesKobo: num(m.salesKobo) })
+      return { ...r, before: stats(r.before), during: stats(r.during), daily: r.daily.map((d) => ({ ...d, salesKobo: num(d.salesKobo) })) }
+    },
+
+    setBoostSettings: (s) => rpc('set_boost_settings', { p_min_active_buyers: s.minActiveBuyers, p_forced_on: s.forcedOn, p_max_active: s.maxActive }),
 
     getCallPhone: async () => {
       const shop = await myMerchantId().catch(() => null)

@@ -101,6 +101,8 @@ export interface Listing {
   commitment: string
   createdAt: ISODate
   closesAt: ISODate
+  /** Shown first, marked Sponsored, until then (a paid boost). */
+  boostedUntil: ISODate | null
 }
 
 export interface Ticket {

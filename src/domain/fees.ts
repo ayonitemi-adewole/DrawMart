@@ -22,7 +22,7 @@ export interface ListingEconomics {
 
 export const MIN_TICKET_KOBO = 100_00 // ₦100
 export const MAX_TICKETS_PER_LISTING = 10_000
-/** Platform fee bounds in basis points. The floor is 10%. */
+/** Platform fee bounds in basis points. The floor is 2.5%. */
 export const MIN_FEE_BPS = 250
 export const MAX_FEE_BPS = 2000
 

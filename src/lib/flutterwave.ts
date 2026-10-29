@@ -55,6 +55,8 @@ export interface CheckoutInput {
   amountKobo: Kobo
   email: string
   name: string
+  /** What the payment is for, shown in the checkout. */
+  description?: string
 }
 
 /** 'paid' when Flutterwave reports a payment, 'closed' when the buyer leaves without one. */
@@ -75,7 +77,7 @@ export async function openFlutterwaveCheckout(input: CheckoutInput): Promise<'pa
       currency: 'NGN',
       payment_options: 'card, banktransfer, ussd',
       customer: { email: input.email, name: input.name },
-      customizations: { title: 'DrawMart', description: 'Wallet top-up', logo: `${window.location.origin}/favicon.svg` },
+      customizations: { title: 'DrawMart', description: input.description ?? 'Wallet top-up', logo: `${window.location.origin}/favicon.svg` },
       callback: (data) => {
         finish(data.status === 'successful' || data.status === 'completed' ? 'paid' : 'closed')
         modal?.close()

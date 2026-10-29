@@ -1,6 +1,7 @@
-// POST { txRef } from the app after Flutterwave's checkout closes.
-// Checks the payment with Flutterwave and credits the wallet if it went through.
-import { corsHeaders, json, serviceClient, settleDeposit } from '../_shared/deposits.ts'
+// POST { txRef } from the app after Flutterwave's checkout closes, for a wallet
+// top-up (DM-) or a paid boost (BST-). Checks the payment with Flutterwave and
+// credits the wallet or starts the boost if it went through.
+import { corsHeaders, json, paymentOwner, serviceClient, settlePayment } from '../_shared/deposits.ts'
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
@@ -14,14 +15,13 @@ Deno.serve(async (req) => {
   const { txRef } = (await req.json().catch(() => ({}))) as { txRef?: unknown }
   if (typeof txRef !== 'string') return json({ error: 'txRef is required.' }, 400)
 
-  // Only the buyer who started a deposit may ask about it.
-  const { data: deposit } = await db.from('deposits').select('user_id').eq('tx_ref', txRef).maybeSingle()
-  if (!deposit || deposit.user_id !== auth.user.id) return json({ error: 'No such top-up.' }, 404)
+  // Only the person who started a payment may ask about it.
+  if ((await paymentOwner(db, txRef)) !== auth.user.id) return json({ error: 'No such payment.' }, 404)
 
   try {
-    return json({ status: await settleDeposit(db, txRef) })
+    return json({ status: await settlePayment(db, txRef) })
   } catch (e) {
     console.error('confirm-deposit', txRef, e)
-    return json({ error: 'We couldn’t reach Flutterwave. Your top-up will be checked again shortly.' }, 502)
+    return json({ error: 'We couldn’t reach Flutterwave. Your payment will be checked again shortly.' }, 502)
   }
 })
