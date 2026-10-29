@@ -156,7 +156,7 @@ function Slide({
           className="absolute inset-0 -z-20 size-full rounded-none"
         />
       )}
-      <div className="absolute inset-0 -z-10 bg-linear-to-t from-hero via-hero/70 to-hero/10 sm:bg-linear-to-r sm:from-hero sm:via-hero/80 sm:to-transparent" />
+      <div className="absolute inset-0 -z-10 bg-linear-to-t from-hero via-hero/30 to-transparent sm:bg-linear-to-r sm:from-hero sm:via-hero/30 sm:to-transparent" />
       <span className="flex w-fit items-center gap-1.5 rounded-full bg-ticket px-2.5 py-1 text-[11px] font-extrabold text-on-ticket shadow-card">
         <SparklesIcon size={12} /> Sponsored
       </span>

@@ -187,9 +187,12 @@ export function BuyerLayout() {
               Play responsibly
             </span>
           </div>
-          {access.signedIn ? null : (
-            <Link to="/login">Store or DrawMart team? Sign in</Link>
-          )}
+          <div className="flex gap-4">
+            <Link to="/credits">Photo credits</Link>
+            {access.signedIn ? null : (
+              <Link to="/login">Store or DrawMart team? Sign in</Link>
+            )}
+          </div>
         </div>
       </footer>
 

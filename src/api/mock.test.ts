@@ -30,8 +30,8 @@ describe('mock api', () => {
     const api = make()
     const [phone] = await api.listListings({ category: 'Phones' })
     expect(phone.images[0]).toMatch(/^\/assets\/.+\.jpg$/)
-    const [inverter] = await api.listListings({ category: 'Home' })
-    expect(inverter.images).toEqual([])
+    // Every sample draw has a photo now.
+    expect((await api.listListings()).filter((l) => l.images.length === 0)).toEqual([])
     expect((await api.createListing(newListing())).images).toEqual([])
   })
 

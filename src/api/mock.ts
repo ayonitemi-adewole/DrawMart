@@ -61,7 +61,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v9' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v10' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -188,7 +188,7 @@ const SEED_LISTINGS: SeedListing[] = [
     price: 48_000_000, ticket: 20_000, sold: 760, closesInHours: 288,
   },
   {
-    merchantId: 'm-vi', title: 'Mercedes-AMG GLE 63 S Coupé 2025', category: 'Cars', images: img('mercedesBenzGle63s2025.jpg'),
+    merchantId: 'm-vi', title: 'Mercedes-AMG GLE 63 S Coupé 2025', category: 'Cars', images: img('mercedes-amg-gle-63-s-coupe.jpg'),
     description: 'Foreign-used, inspected, papers complete. Registration in the winner’s name.',
     price: 210_000_000, ticket: 50_000, sold: 1_130, closesInHours: 480,
   },
@@ -198,77 +198,77 @@ const SEED_LISTINGS: SeedListing[] = [
     price: 330_000_000, ticket: 50_000, sold: 540, closesInHours: 600,
   },
   {
-    merchantId: 'm-yaba', title: '5kVA inverter + battery', category: 'Home',
+    merchantId: 'm-yaba', title: '5kVA inverter + battery', category: 'Home', images: img('inverter-and-batteries.jpg'),
     description: 'Inverter with two batteries, installed by the store.',
     price: 1_800_000, ticket: 6_000, sold: 122, closesInHours: 96,
   },
   {
-    merchantId: 'm-lekki', title: 'Samsung Galaxy S26, 256GB', category: 'Phones',
+    merchantId: 'm-lekki', title: 'Samsung Galaxy S26, 256GB', category: 'Phones', images: img('samsung-galaxy-s-series.jpg'),
     description: 'Brand new and sealed, with local warranty.',
     price: 1_350_000, ticket: 2_500, sold: 120, closesInHours: 72,
   },
   {
-    merchantId: 'm-yaba', title: 'Google Pixel 10 Pro, 256GB', category: 'Phones',
+    merchantId: 'm-yaba', title: 'Google Pixel 10 Pro, 256GB', category: 'Phones', images: img('google-pixel-pro.jpg'),
     description: 'Brand new, unlocked, with a one-year warranty.',
     price: 1_500_000, ticket: 5_000, sold: 60, closesInHours: 120, unsold: 'extend_once',
   },
   {
-    merchantId: 'm-surulere', title: 'Tecno Phantom V Fold 2', category: 'Phones',
+    merchantId: 'm-surulere', title: 'Tecno Phantom V Fold 2', category: 'Phones', images: img('foldable-phones.jpg'),
     description: 'Brand new foldable with charger and case.',
     price: 950_000, ticket: 2_000, sold: 300, closesInHours: 30,
   },
   {
-    merchantId: 'm-yaba', title: 'PlayStation 5 Pro bundle', category: 'Electronics',
+    merchantId: 'm-yaba', title: 'PlayStation 5 Pro bundle', category: 'Electronics', images: img('playstation-5-home.jpg'),
     description: 'Console, two controllers and three games.',
     price: 1_200_000, ticket: 2_000, sold: 410, closesInHours: 20,
   },
   {
-    merchantId: 'm-surulere', title: 'Sony 65-inch Bravia 7', category: 'Electronics',
+    merchantId: 'm-surulere', title: 'Sony 65-inch Bravia 7', category: 'Electronics', images: img('sony-bravia.jpg'),
     description: '4K mini-LED TV. Delivery and wall mounting included.',
     price: 1_650_000, ticket: 5_000, sold: 90, closesInHours: 150, unsold: 'convert_to_sale', fallback: 1_700_000,
   },
   {
-    merchantId: MY_MERCHANT, title: 'Apple Watch Ultra 3', category: 'Electronics',
+    merchantId: MY_MERCHANT, title: 'Apple Watch Ultra 3', category: 'Electronics', images: img('apple-watch-ultra.jpg'),
     description: 'Titanium, GPS + cellular, brand new.',
     price: 1_050_000, ticket: 2_500, sold: 200, closesInHours: 60,
   },
   {
-    merchantId: 'm-yaba', title: '10kVA solar system, installed', category: 'Home',
+    merchantId: 'm-yaba', title: '10kVA solar system, installed', category: 'Home', images: img('rooftop-solar.jpg'),
     description: 'Inverter, lithium batteries and 12 panels, installed by the store.',
     price: 6_500_000, ticket: 10_000, sold: 230, closesInHours: 400, unsold: 'extend_once',
   },
   {
-    merchantId: 'm-lekki', title: 'Samsung 2-door fridge, 450L', category: 'Home',
+    merchantId: 'm-lekki', title: 'Samsung 2-door fridge, 450L', category: 'Home', images: img('side-by-side-fridge.jpg'),
     description: 'Frost-free, inverter compressor, brand new.',
     price: 1_100_000, ticket: 2_500, sold: 150, closesInHours: 90,
   },
   {
-    merchantId: 'm-surulere', title: 'LG front-load washer, 9kg', category: 'Home',
+    merchantId: 'm-surulere', title: 'LG front-load washer, 9kg', category: 'Home', images: img('lg-front-load-washer.jpg'),
     description: 'Inverter direct drive, brand new with warranty.',
     price: 780_000, ticket: 2_000, sold: 80, closesInHours: 110, unsold: 'convert_to_sale', fallback: 800_000,
   },
   {
-    merchantId: 'm-vi', title: 'Lexus RX 350 2023', category: 'Cars',
+    merchantId: 'm-vi', title: 'Lexus RX 350 2023', category: 'Cars', images: img('lexus-rx-2023.jpg'),
     description: 'Foreign-used, inspected, papers complete. Registration in the winner’s name.',
     price: 95_000_000, ticket: 20_000, sold: 1_500, closesInHours: 500, unsold: 'extend_once',
   },
   {
-    merchantId: 'm-vi', title: 'Honda Accord 2022', category: 'Cars',
+    merchantId: 'm-vi', title: 'Honda Accord 2022', category: 'Cars', images: img('honda-accord.jpg'),
     description: 'Foreign-used, low mileage, inspected.',
     price: 38_000_000, ticket: 10_000, sold: 900, closesInHours: 350,
   },
   {
-    merchantId: 'm-lekki', title: 'Rolex Datejust 41', category: 'Fashion',
+    merchantId: 'm-lekki', title: 'Rolex Datejust 41', category: 'Fashion', images: img('rolex-datejust-41.jpg'),
     description: 'Brand new with box and papers.',
     price: 18_000_000, ticket: 10_000, sold: 420, closesInHours: 300,
   },
   {
-    merchantId: MY_MERCHANT, title: 'Louis Vuitton Keepall 50', category: 'Fashion',
+    merchantId: MY_MERCHANT, title: 'Louis Vuitton Keepall 50', category: 'Fashion', images: img('louis-vuitton-monogram-bags.jpg'),
     description: 'Authentic, with receipt and dust bag.',
     price: 4_200_000, ticket: 5_000, sold: 260, closesInHours: 180, unsold: 'convert_to_sale', fallback: 4_000_000,
   },
   {
-    merchantId: 'm-yaba', title: 'Air Jordan 1 bundle, 3 pairs', category: 'Fashion',
+    merchantId: 'm-yaba', title: 'Air Jordan 1 bundle, 3 pairs', category: 'Fashion', images: img('air-jordan-1.jpg'),
     description: 'Three colourways, any size from 40 to 46.',
     price: 650_000, ticket: 1_000, sold: 380, closesInHours: 40,
   },
@@ -309,11 +309,11 @@ const SEED_PRODUCTS: { merchantId: string; title: string; description: string; c
     merchantId: 'm-vi', title: 'Mercedes-AMG G 63 2025, Night Black', category: 'Cars', images: img('mercedesBenzG632025.jpg'),
     description: 'Brand new, dealer warranty, registration in the buyer’s name. View at our VI showroom.', price: 345_000_000, status: 'pending_review',
   },  {
-    merchantId: MY_MERCHANT, title: 'AirPods Pro 3', category: 'Electronics', images: [],
+    merchantId: MY_MERCHANT, title: 'AirPods Pro 3', category: 'Electronics', images: img('airpods-pro.jpg'),
     description: 'Brand new and sealed.', price: 420_000, status: 'for_sale',
   },
   {
-    merchantId: MY_MERCHANT, title: 'Samsung Galaxy Watch 8', category: 'Electronics', images: [],
+    merchantId: MY_MERCHANT, title: 'Samsung Galaxy Watch 8', category: 'Electronics', images: img('samsung-galaxy-watch.jpg'),
     description: 'Brand new, 44mm, with charger.', price: 380_000, status: 'for_sale',
   },
   {
@@ -325,11 +325,11 @@ const SEED_PRODUCTS: { merchantId: string; title: string; description: string; c
     description: 'Brand new and sealed, with S Pen.', price: 2_450_000, status: 'for_sale',
   },
   {
-    merchantId: 'm-lekki', title: 'Dyson V15 cordless vacuum', category: 'Home', images: [],
+    merchantId: 'm-lekki', title: 'Dyson V15 cordless vacuum', category: 'Home', images: img('dyson-cordless-vacuum.jpg'),
     description: 'Brand new with all attachments.', price: 1_250_000, status: 'for_sale',
   },
   {
-    merchantId: 'm-lekki', title: 'Gucci horsebit loafers', category: 'Fashion', images: [],
+    merchantId: 'm-lekki', title: 'Gucci horsebit loafers', category: 'Fashion', images: img('leather-loafer.jpg'),
     description: 'Authentic, sizes 41 to 45.', price: 1_100_000, status: 'for_sale',
   },
   {
@@ -337,7 +337,7 @@ const SEED_PRODUCTS: { merchantId: string; title: string; description: string; c
     description: 'With wall bracket. Delivery anywhere in Lagos.', price: 690_000, status: 'for_sale',
   },
   {
-    merchantId: 'm-surulere', title: 'Hisense 1.5HP inverter AC', category: 'Home', images: [],
+    merchantId: 'm-surulere', title: 'Hisense 1.5HP inverter AC', category: 'Home', images: img('split-air-conditioner.jpg'),
     description: 'Installation in Lagos included.', price: 520_000, status: 'for_sale',
   },
   {
@@ -345,47 +345,47 @@ const SEED_PRODUCTS: { merchantId: string; title: string; description: string; c
     description: 'Solid wood desk with an ergonomic mesh chair.', price: 350_000, status: 'for_sale',
   },
   {
-    merchantId: 'm-yaba', title: 'MacBook Air 13-inch, M4', category: 'Electronics', images: [],
+    merchantId: 'm-yaba', title: 'MacBook Air 13-inch, M4', category: 'Electronics', images: img('macbook-air.jpg'),
     description: '16GB, 512GB SSD, brand new.', price: 1_650_000, status: 'for_sale',
   },
   {
-    merchantId: 'm-yaba', title: 'HP LaserJet Pro printer', category: 'Electronics', images: [],
+    merchantId: 'm-yaba', title: 'HP LaserJet Pro printer', category: 'Electronics', images: img('hp-laserjet.jpg'),
     description: 'Wireless, prints and scans.', price: 285_000, status: 'for_sale',
   },
   {
-    merchantId: 'm-yaba', title: 'JBL Charge 6 speaker', category: 'Electronics', images: [],
+    merchantId: 'm-yaba', title: 'JBL Charge 6 speaker', category: 'Electronics', images: img('jbl-charge.jpg'),
     description: 'Waterproof Bluetooth speaker, brand new.', price: 240_000, status: 'for_sale',
   },
   {
-    merchantId: 'm-yaba', title: 'Ankara fabric bundle, 5 × 6 yards', category: 'Fashion', images: [],
+    merchantId: 'm-yaba', title: 'Ankara fabric bundle, 5 × 6 yards', category: 'Fashion', images: img('ankara-fabric.jpg'),
     description: 'Assorted prints, 100% cotton.', price: 85_000, status: 'for_sale',
   },
   {
-    merchantId: 'm-vi', title: 'Toyota Camry 2018, Nigerian-used', category: 'Cars', images: img('toyotaCamry2018.jpg'),
+    merchantId: 'm-vi', title: 'Toyota Camry 2018, Nigerian-used', category: 'Cars', images: img('toyota-camry-2018-1.jpg', 'toyota-camry-2018-2.jpg', 'toyota-camry-2018-3.jpg'),
     description: 'One owner, inspected, papers complete. View at our VI showroom.', price: 13_500_000, status: 'for_sale',
   },
   {
-    merchantId: 'm-vi', title: 'Mercedes-Benz GLE 450 2021', category: 'Cars', images: img('mercedesBenzGle63s2025.jpg'),
+    merchantId: 'm-vi', title: 'Mercedes-Benz GLE 350 2021', category: 'Cars', images: img('mercedes-gle-350-1.jpg', 'mercedes-gle-350-2.jpg', 'mercedes-gle-350-3.jpg'),
     description: 'Foreign-used, full service history.', price: 78_000_000, status: 'for_sale',
   },
   {
-    merchantId: 'm-vi', title: 'Front and rear dashcam', category: 'Electronics', images: [],
+    merchantId: 'm-vi', title: 'Front and rear dashcam', category: 'Electronics', images: img('dashcam.jpg'),
     description: 'Installed while you wait at our VI showroom.', price: 120_000, status: 'for_sale',
   },
   {
-    merchantId: TOLU_SHOP, title: 'PS5 Slim, barely used', category: 'Electronics', images: [],
+    merchantId: TOLU_SHOP, title: 'PS5 Slim, barely used', category: 'Electronics', images: img('playstation-5-black.jpg'),
     description: 'With two controllers. Pickup in Yaba or delivery.', price: 650_000, status: 'for_sale',
   },
   {
-    merchantId: TOLU_SHOP, title: 'iPad 10th gen, 64GB', category: 'Electronics', images: [],
+    merchantId: TOLU_SHOP, title: 'iPad 10th gen, 64GB', category: 'Electronics', images: img('ipad-10th-gen.jpg'),
     description: 'Like new, with case and charger.', price: 420_000, status: 'for_sale',
   },
   {
-    merchantId: TOLU_SHOP, title: 'Nintendo Switch 2', category: 'Electronics', images: [],
+    merchantId: TOLU_SHOP, title: 'Nintendo Switch 2', category: 'Electronics', images: img('nintendo-switch-2.jpg'),
     description: 'Sealed. Bought abroad.', price: 520_000, status: 'pending_review',
   },
   {
-    merchantId: 'm-lekki', title: 'Samsung soundbar Q800', category: 'Electronics', images: [],
+    merchantId: 'm-lekki', title: 'Samsung soundbar Q800', category: 'Electronics', images: img('samsung-soundbar.jpg'),
     description: 'With wireless subwoofer.', price: 560_000, status: 'pending_review',
   },
 ]
@@ -509,7 +509,7 @@ async function freshDb(): Promise<Db> {
   for (const [i, s] of ([
     { merchantId: MY_MERCHANT, title: 'MacBook Pro 13-inch, M1', description: 'UK-used, 8GB RAM, 256GB SSD.', category: 'Electronics', images: img('macbookProM1.jpg'), price: 900_000, ticket: 2_500, sold: 0, closesInHours: 1 },
     { merchantId: 'm-lekki', title: 'Samsung 50-inch smart TV', description: 'Crystal UHD smart TV with wall bracket.', category: 'Electronics', images: img('samsung50inchTV.jpg'), price: 420_000, ticket: 1_500, sold: 0, closesInHours: 1 },
-    { merchantId: 'm-vi', title: 'Toyota Camry 2018', description: 'Foreign-used, inspected, papers complete.', category: 'Cars', images: img('toyotaCamry2018.jpg'), price: 14_000_000, ticket: 10_000, sold: 0, closesInHours: 1 },
+    { merchantId: 'm-vi', title: 'Toyota Camry 2018', description: 'Foreign-used, inspected, papers complete.', category: 'Cars', images: img('toyota-camry-2018-1.jpg', 'toyota-camry-2018-2.jpg', 'toyota-camry-2018-3.jpg'), price: 14_000_000, ticket: 10_000, sold: 0, closesInHours: 1 },
   ] satisfies SeedListing[]).entries()) {
     const l = await makeListing(s, now - (2 + i * 2) * DAY, db.seeds)
     const at = iso(now - (2 + i * 2) * DAY)
