@@ -8,6 +8,7 @@ import {
   useWallet,
 } from "@/api/hooks";
 import type { ListingView, PurchaseReceipt } from "@/api/types";
+import { BuyNowPanel } from "@/components/BuyNowPanel";
 import { CopyButton } from "@/components/CopyButton";
 import { Countdown } from "@/components/Countdown";
 import {
@@ -76,7 +77,97 @@ export function ListingPage() {
     return (
       <ErrorState error={listing.error} onRetry={() => listing.refetch()} />
     );
-  return <ListingDetail listing={listing.data} />;
+  return listing.data.kind === "product" ? (
+    <ProductDetail listing={listing.data} />
+  ) : (
+    <ListingDetail listing={listing.data} />
+  );
+}
+
+/** A regular product: no tickets or draw, just the item and a fixed-price checkout. */
+function ProductDetail({ listing: l }: { listing: ListingView }) {
+  const navigate = useNavigate();
+  return (
+    <div className="flex flex-col gap-5">
+      <button
+        onClick={() => navigate(-1)}
+        className="-ml-2 flex min-h-11 w-fit items-center gap-1 rounded-xl px-2 text-sm font-bold text-muted hover:bg-sunken hover:text-ink"
+      >
+        <BackIcon size={18} /> Back
+      </button>
+      <div className="grid gap-6 md:grid-cols-[1fr_380px] md:items-start">
+        <div className="flex min-w-0 flex-col gap-5">
+          <div className="relative animate-fade-up">
+            <Gallery listing={l} />
+            <div className="pointer-events-none absolute top-4 left-4 flex flex-wrap gap-1.5">
+              <Badge tone="neutral" className="bg-surface/85 backdrop-blur">
+                {l.category}
+              </Badge>
+              {l.status === "sold" ? <Badge tone="hot">SOLD</Badge> : null}
+            </div>
+          </div>
+          <div className="flex animate-fade-up flex-col gap-3 [animation-delay:60ms]">
+            <div className="flex flex-wrap gap-1.5">
+              {l.merchant.verified ? (
+                <Badge>
+                  <CheckIcon size={12} />{" "}
+                  {l.merchant.kind === "individual"
+                    ? "ID-verified seller"
+                    : "Verified store"}
+                </Badge>
+              ) : null}
+              <Badge tone="sky">
+                <TruckIcon size={12} /> Delivered in Lagos
+              </Badge>
+            </div>
+            <h1 className="font-display text-3xl leading-tight font-extrabold tracking-tight md:text-4xl">
+              {l.title}
+            </h1>
+            <div className="flex items-center gap-3">
+              <span className="flex size-10 items-center justify-center rounded-xl bg-brand-soft font-display font-extrabold text-brand-ink">
+                {l.merchant.name.charAt(0)}
+              </span>
+              <div className="flex flex-col text-sm leading-tight">
+                <strong>{l.merchant.name}</strong>
+                <span className="flex items-center gap-1 text-xs text-subtle">
+                  <MapPinIcon size={12} /> {l.merchant.area}, Lagos
+                </span>
+              </div>
+            </div>
+          </div>
+          <Card className="flex flex-col gap-3 p-5 text-sm leading-relaxed text-muted">
+            <strong className="text-ink">About the item</strong>
+            <p>{l.description || "No description from the store yet."}</p>
+            <p className="text-xs text-subtle">
+              {l.merchant.kind === "individual"
+                ? `Listed by ${l.merchant.name}, an individual seller whose ID DrawMart has checked. Reviewed by DrawMart before going on sale.`
+                : `Listed by ${l.merchant.name} (${l.merchant.cacNumber}) and reviewed by DrawMart before going on sale.`}
+            </p>
+          </Card>
+          <Card className="p-5 text-sm text-muted">
+            <ul className="flex flex-col gap-3">
+              <li className="flex gap-3">
+                <TruckIcon size={20} className="shrink-0 text-brand" /> The
+                store sends it to the address you give at checkout.
+              </li>
+              <li className="flex gap-3">
+                <ShieldIcon size={20} className="shrink-0 text-brand" /> You
+                pay from your wallet; the store is only paid after you confirm
+                delivery.
+              </li>
+              <li className="flex gap-3">
+                <CoinIcon size={20} className="shrink-0 text-brand" /> Store
+                credit from past draws is spent first.
+              </li>
+            </ul>
+          </Card>
+        </div>
+        <div className="md:sticky md:top-24">
+          <BuyNowPanel listing={l} />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function ListingDetail({ listing: l }: { listing: ListingView }) {
@@ -371,12 +462,14 @@ function Gallery({ listing: l }: { listing: ListingView }) {
             </span>
           </>
         ) : null}
-        <span className="absolute right-4 bottom-4 flex items-center gap-1 rounded-full bg-surface/90 px-2.5 py-1 text-[11px] font-bold text-brand-ink shadow-card backdrop-blur">
-          <CheckIcon size={12} />{" "}
-          {handoverMethodFor(l.category) === "inspection"
-            ? "Photographed at inspection"
-            : "Photographed at escrow"}
-        </span>
+        {l.kind === "raffle" ? (
+          <span className="absolute right-4 bottom-4 flex items-center gap-1 rounded-full bg-surface/90 px-2.5 py-1 text-[11px] font-bold text-brand-ink shadow-card backdrop-blur">
+            <CheckIcon size={12} />{" "}
+            {handoverMethodFor(l.category) === "inspection"
+              ? "Photographed at inspection"
+              : "Photographed at escrow"}
+          </span>
+        ) : null}
       </div>
       {count > 1 ? (
         <div
@@ -417,6 +510,7 @@ const STATUS_TEXT: Record<ListingView["status"], string> = {
   drawn: "Drawn",
   refunded: "Refunded",
   for_sale: "Buy now",
+  sold: "Sold",
   rejected: "Not on sale",
 };
 
@@ -585,41 +679,8 @@ function BuyPanel({
       </Card>
     );
   }
-  if (l.status === "for_sale" && l.fallbackPriceKobo) {
-    return (
-      <Card className="flex flex-col gap-4 p-5">
-        <div className="flex flex-col gap-1">
-          <span className="text-xs font-extrabold tracking-[0.14em] text-brand uppercase">
-            Draw ended · now for sale
-          </span>
-          <span className="font-display text-4xl font-extrabold tabular-nums">
-            {formatNaira(l.fallbackPriceKobo)}
-          </span>
-          <span className="text-sm text-muted">
-            The draw didn’t sell out, so everyone was refunded.{" "}
-            {l.merchant.name} is selling it at a fixed price instead.
-          </span>
-        </div>
-        <Button
-          size="lg"
-          onClick={() =>
-            toast(
-              "Buy-now checkout is coming next: pay the full price and the store delivers.",
-              "info",
-            )
-          }
-        >
-          Buy now for {formatNaira(l.fallbackPriceKobo)}
-        </Button>
-        <Notice icon={LockIcon}>
-          {handoverMethodFor(l.category) === "inspection"
-            ? "Inspected by DrawMart."
-            : "Still held in DrawMart escrow."}{" "}
-          The store is paid only after you confirm delivery.
-        </Notice>
-      </Card>
-    );
-  }
+  if (l.status === "for_sale" || l.status === "sold")
+    return <BuyNowPanel listing={l} />;
   if (l.status !== "live") {
     return (
       <Card className="p-5">

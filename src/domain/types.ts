@@ -20,12 +20,19 @@ export type FeeMode = 'seller' | 'buyer' | 'split'
  */
 export type UnsoldPolicy = 'refund' | 'extend_once' | 'convert_to_sale'
 
+/**
+ * A raffle sells numbered tickets and draws a winner. A product is a regular
+ * item sold outright at a fixed price: no tickets, no escrow, no caution fee.
+ */
+export type ListingKind = 'raffle' | 'product'
+
 export type ListingStatus =
-  | 'pending_review' // submitted by a merchant, waiting for admin + escrow check
-  | 'live' // tickets on sale
-  | 'drawn' // sold out, winner picked
-  | 'refunded' // deadline passed without selling out, buyers refunded
-  | 'for_sale' // draw ended unsold, buyers refunded, item now sold at a fixed price
+  | 'pending_review' // submitted by a merchant, waiting for admin (+ escrow check for raffles)
+  | 'live' // raffle: tickets on sale
+  | 'drawn' // raffle: sold out, winner picked
+  | 'refunded' // raffle: deadline passed without selling out, buyers refunded
+  | 'for_sale' // on sale at a fixed price: an approved product, or a raffle that ended unsold
+  | 'sold' // a fixed-price item was bought
   | 'rejected'
 
 /** How the item reaches DrawMart for checking: big items are inspected where they are. */
@@ -47,29 +54,36 @@ export interface Handover {
  */
 export interface CautionFee {
   amountKobo: Kobo
-  status: 'held' | 'refunded' | 'kept'
+  /** 'none': regular products stay with the store, so there's no fee. */
+  status: 'held' | 'refunded' | 'kept' | 'none'
 }
+
+/** A CAC-registered store, or an ID-verified individual (regular products only, never raffles). */
+export type MerchantKind = 'store' | 'individual'
 
 export interface Merchant {
   id: string
+  kind: MerchantKind
   name: string
   area: string // e.g. "Ikeja"
+  /** Empty for individual sellers. */
   cacNumber: string
   verified: boolean
 }
 
 export interface Listing {
   id: string
+  kind: ListingKind
   merchantId: string
   title: string
   description: string
   category: Category
   /** Photo URLs, first is the cover. Empty until escrow photographs the item. */
   images: string[]
-  priceKobo: Kobo // what the merchant asked for the item
-  ticketPriceKobo: Kobo // base ticket price before any buyer-side fee
-  buyerTicketPriceKobo: Kobo // what a buyer actually pays per ticket
-  ticketCount: number
+  priceKobo: Kobo // raffle: what the merchant asked for the item; product: the sale price
+  ticketPriceKobo: Kobo // base ticket price before any buyer-side fee (0 for products)
+  buyerTicketPriceKobo: Kobo // what a buyer actually pays per ticket (0 for products)
+  ticketCount: number // 0 for products
   ticketsSold: number
   feeMode: FeeMode
   feeBps: number // platform fee in basis points (1000 = 10%)
@@ -80,9 +94,10 @@ export interface Listing {
   durationDays: number
   extended: boolean
   status: ListingStatus
-  handover: Handover
+  /** Raffles only: products stay with the store until they're sold. */
+  handover: Handover | null
   cautionFee: CautionFee
-  /** SHA-256 of the secret draw seed, published before any ticket is sold. */
+  /** SHA-256 of the secret draw seed, published before any ticket is sold. Empty for products. */
   commitment: string
   createdAt: ISODate
   closesAt: ISODate
@@ -112,6 +127,7 @@ export type LedgerKind =
   | 'ticket_purchase'
   | 'refund'
   | 'store_credit' // consolation credit after losing a draw
+  | 'order_payment' // bought a fixed-price item
   | 'adjustment'
 
 /** Append-only wallet ledger. Balances are always derived, never stored. */
@@ -124,6 +140,31 @@ export interface LedgerEntry {
   memo: string
   listingId?: string
   createdAt: ISODate
+}
+
+/** paid → the store dispatches it → the buyer confirms it arrived. */
+export type OrderStatus = 'paid' | 'dispatched' | 'delivered'
+
+/** Where the buyer wants a fixed-price item sent. Seen only by the buyer, the store and admins. */
+export interface Delivery {
+  address: string
+  contactPhone: string
+}
+
+/** One fixed-price item bought from the wallet. */
+export interface Order {
+  id: string
+  listingId: string
+  buyerId: string
+  merchantId: string
+  priceKobo: Kobo
+  /** Platform fee, taken from the store's payout. */
+  feeKobo: Kobo
+  delivery: Delivery
+  status: OrderStatus
+  createdAt: ISODate
+  dispatchedAt: ISODate | null
+  deliveredAt: ISODate | null
 }
 
 export interface User {

@@ -9,7 +9,7 @@ const make = (now = () => Date.now()) => createMockApi({ store: memoryStore(), l
 
 const newListing = (patch: Partial<NewListingInput> = {}): NewListingInput => ({
   title: 'Blender', description: '', category: 'Home', priceKobo: k(60_000), ticketPriceKobo: k(500),
-  feeMode: 'seller', feeBps: 1000, durationDays: 7, unsoldPolicy: 'refund',
+  feeMode: 'seller', durationDays: 7, unsoldPolicy: 'refund',
   handover: { address: '12 Allen Avenue, Ikeja', contactPhone: '0803 123 4567', date: addDays(localDate(new Date()), 2), slot: 'morning' },
   ...patch,
 })
@@ -162,7 +162,7 @@ describe('mock api', () => {
   it('refuses listings that break the submission rules', async () => {
     const api = make()
     const bad = (patch: Partial<NewListingInput>) => expect(api.createListing(newListing(patch))).rejects.toMatchObject({ code: 'invalid_input' })
-    await bad({ feeBps: 500 })
+    await bad({ ticketPriceKobo: k(50) })
     await bad({ durationDays: 90 })
     await bad({ unsoldPolicy: 'convert_to_sale' })
     await bad({ handover: { address: '', contactPhone: '123', date: '2020-01-01', slot: 'morning' } })
@@ -188,5 +188,64 @@ describe('mock api', () => {
     expect((await api.getWallet()).weeklyLimitKobo).toBe(k(10_000))
     t += 25 * 60 * 60 * 1000
     expect((await api.getWallet()).weeklyLimitKobo).toBe(k(80_000))
+  })
+
+  it('reviews regular products, then sells them once from the wallet', async () => {
+    const api = make()
+    await expect(api.createProduct({ title: ' ', description: '', category: 'Home', priceKobo: k(50) })).rejects.toThrow(/Give the item a name/)
+    const p = await api.createProduct({ title: 'Office chair', description: 'Mesh back', category: 'Home', priceKobo: k(20_000) })
+    expect(p).toMatchObject({ kind: 'product', status: 'pending_review', ticketCount: 0, handover: null, cautionFee: { amountKobo: 0, status: 'none' } })
+    await api.approveListing(p.id)
+    expect((await api.getListing(p.id)).status).toBe('for_sale')
+
+    const delivery = { address: '15 Awolowo Road, Ikoyi', contactPhone: '0803 123 4567' }
+    await expect(api.buyNow(p.id, { address: 'Ikoyi', contactPhone: '1' })).rejects.toThrow(/full delivery address/)
+    const before = (await api.getWallet()).balance.cashKobo
+    const order = await api.buyNow(p.id, delivery)
+    expect(order).toMatchObject({ status: 'paid', priceKobo: k(20_000), feeKobo: k(4_000), // 20% under ₦50,000
+      listingTitle: 'Office chair', merchantName: 'Ikeja Partner Store' })
+    expect((await api.getWallet()).balance.cashKobo).toBe(before - k(20_000))
+    expect((await api.getListing(p.id)).status).toBe('sold')
+    await expect(api.buyNow(p.id, delivery)).rejects.toMatchObject({ code: 'not_for_sale' })
+
+    expect((await api.listMerchantOrders()).map((o) => o.id)).toEqual([order.id])
+    await api.dispatchOrder(order.id)
+    await api.confirmOrder(order.id)
+    expect((await api.listMyOrders())[0]).toMatchObject({ status: 'delivered' })
+    await expect(api.dispatchOrder(order.id)).rejects.toThrow(ApiError)
+  })
+
+  it('needs enough in the wallet to buy now', async () => {
+    const api = make()
+    const [mac] = (await api.listListings({ status: ['for_sale'] })).filter((l) => l.kind === 'product' && l.title.startsWith('MacBook'))
+    await expect(api.buyNow(mac.id, { address: '15 Awolowo Road, Ikoyi', contactPhone: '0803 123 4567' })).rejects.toMatchObject({ code: 'insufficient_funds' })
+  })
+
+  it('verifies individual sellers, who sell products but never raffles', async () => {
+    const api = make()
+    await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
+    const input = {
+      shopName: 'Tolu’s Gadgets', legalName: 'Toluwani Adebayo', nin: '12345678901', phone: '0803 123 4567',
+      address: '12 Herbert Macaulay Way, Yaba', area: 'Yaba', idPhoto: 'data:image/jpeg;base64,x', selfie: 'data:image/jpeg;base64,y',
+    }
+    await expect(api.createProduct({ title: 'PS5', description: '', category: 'Electronics', priceKobo: k(150_000) })).rejects.toMatchObject({ code: 'forbidden' })
+    await expect(api.submitSellerApplication({ ...input, nin: '12' })).rejects.toThrow(/11-digit NIN/)
+    const a = await api.submitSellerApplication(input)
+    expect(a.status).toBe('pending')
+    await expect(api.submitSellerApplication(input)).rejects.toThrow(/already being reviewed/)
+
+    await expect(api.rejectSeller(a.id, '')).rejects.toThrow(/what to fix/)
+    await api.rejectSeller(a.id, 'The selfie is blurry.')
+    expect(await api.getMySellerApplication()).toMatchObject({ status: 'rejected', reviewNote: 'The selfie is blurry.' })
+    await api.submitSellerApplication(input)
+    expect((await api.listSellerApplications()).map((x) => x.id)).toEqual([a.id])
+    await api.approveSeller(a.id)
+
+    expect(await api.getMyMerchant()).toMatchObject({ kind: 'individual', name: 'Tolu’s Gadgets', cacNumber: '' })
+    await expect(api.createListing(newListing())).rejects.toMatchObject({ code: 'forbidden' })
+    const p = await api.createProduct({ title: 'PS5', description: '', category: 'Electronics', priceKobo: k(15_000) })
+    expect((await api.listMerchantListings()).map((l) => l.id)).toEqual([p.id])
+    await api.approveListing(p.id)
+    await expect(api.buyNow(p.id, { address: '12 Herbert Macaulay Way, Yaba', contactPhone: '0803 123 4567' })).rejects.toThrow(/your own item/)
   })
 })

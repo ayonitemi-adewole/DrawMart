@@ -12,6 +12,7 @@ import { IntroSheet } from "@/components/HowItWorks";
 import {
   HomeIcon,
   ShieldIcon,
+  StoreIcon,
   TicketIcon,
   TrophyIcon,
   WalletIcon,
@@ -26,6 +27,7 @@ const NAV = [
   { to: "/tickets", label: "Tickets", icon: TicketIcon },
   { to: "/draws", label: "Results", icon: TrophyIcon },
   { to: "/wallet", label: "Wallet", icon: WalletIcon },
+  { to: "/sell", label: "Sell", icon: StoreIcon },
 ];
 
 export function Logo({ suffix, to = "/" }: { suffix?: string; to?: string }) {
@@ -171,7 +173,7 @@ export function BuyerLayout() {
       </footer>
 
       <nav
-        className="fixed inset-x-3 bottom-[max(env(safe-area-inset-bottom),12px)] z-30 grid grid-cols-4 gap-1 rounded-3xl border border-line bg-raised/90 p-1.5 shadow-lift backdrop-blur-xl md:hidden"
+        className="fixed inset-x-3 bottom-[max(env(safe-area-inset-bottom),12px)] z-30 grid grid-cols-5 gap-1 rounded-3xl border border-line bg-raised/90 p-1.5 shadow-lift backdrop-blur-xl md:hidden"
         aria-label="Main"
       >
         {NAV.map((n) => (

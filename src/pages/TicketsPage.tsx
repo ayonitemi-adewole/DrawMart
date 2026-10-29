@@ -1,14 +1,16 @@
 import { useState } from "react";
-import { Link } from "react-router";
-import { useMyListings } from "@/api/hooks";
+import { Link, useSearchParams } from "react-router";
+import { useMyListings, useMyOrders } from "@/api/hooks";
 import type { ListingView } from "@/api/types";
 import { Countdown } from "@/components/Countdown";
 import {
   ChevronRightIcon,
   CoinIcon,
+  StoreIcon,
   TicketIcon,
   TrophyIcon,
 } from "@/components/icons";
+import { OrderCard } from "@/components/OrderCard";
 import { TicketStub } from "@/components/TicketStub";
 import {
   Badge,
@@ -45,6 +47,12 @@ function status(l: ListingView): { tone: Tone; label: string; detail: string } {
       label: "Refunded",
       detail: `Didn’t sell out; you were refunded. Now for sale at ${formatNaira(l.fallbackPriceKobo ?? l.priceKobo)}`,
     };
+  if (l.status === "sold")
+    return {
+      tone: "neutral",
+      label: "Refunded",
+      detail: "Didn’t sell out; you were refunded. The item has since been sold",
+    };
   if (l.status === "refunded")
     return {
       tone: "neutral",
@@ -60,7 +68,69 @@ function status(l: ListingView): { tone: Tone; label: string; detail: string } {
 
 type Tab = "active" | "finished";
 
+type View = "draws" | "orders";
+
+/** /tickets: draw tickets, and orders for fixed-price items (?view=orders). */
 export function TicketsPage() {
+  const [params, setParams] = useSearchParams();
+  const view: View = params.get("view") === "orders" ? "orders" : "draws";
+  const orders = useMyOrders();
+  const open = orders.data?.filter((o) => o.status !== "delivered").length;
+
+  return (
+    <div className="flex flex-col gap-6">
+      <PageTitle
+        eyebrow={view === "orders" ? "My orders" : "My tickets"}
+        sub={
+          view === "orders"
+            ? "Items you bought at a fixed price. Confirm when they arrive so the store gets paid."
+            : "Every ticket you hold, and how each draw turned out."
+        }
+      >
+        {view === "orders" ? "Your orders" : "Your draws"}
+      </PageTitle>
+      <Segmented<View>
+        label="Show"
+        value={view}
+        onChange={(v) => setParams(v === "orders" ? { view: "orders" } : {}, { replace: true })}
+        className="w-full sm:w-auto sm:self-start"
+        options={[
+          { value: "draws", label: "Draw tickets" },
+          { value: "orders", label: "Orders", count: open || undefined },
+        ]}
+      />
+      {view === "orders" ? <MyOrders /> : <DrawTickets />}
+    </div>
+  );
+}
+
+function MyOrders() {
+  const q = useMyOrders();
+  if (q.isPending) return <Skeleton className="h-40" />;
+  if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
+  if (q.data.length === 0)
+    return (
+      <EmptyState
+        icon={StoreIcon}
+        title="No orders yet"
+        body="Skip the draw: products from verified stores can be bought outright, paid from your wallet."
+        action={
+          <Link to="/#buy-now-heading" className={buttonClass("primary")}>
+            <span className="text-on-brand">Shop fixed-price items</span>
+          </Link>
+        }
+      />
+    );
+  return (
+    <div className="grid gap-3 lg:grid-cols-2">
+      {q.data.map((o) => (
+        <OrderCard key={o.id} order={o} audience="buyer" />
+      ))}
+    </div>
+  );
+}
+
+function DrawTickets() {
   const q = useMyListings();
   const live = q.data?.filter((l) => l.status === "live") ?? [];
   const past = q.data?.filter((l) => l.status !== "live") ?? [];
@@ -72,13 +142,6 @@ export function TicketsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <PageTitle
-        eyebrow="My tickets"
-        sub="Every ticket you hold, and how each draw turned out."
-      >
-        Your draws
-      </PageTitle>
-
       {q.isPending ? (
         <div className="flex flex-col gap-3">
           <Skeleton className="h-28" />

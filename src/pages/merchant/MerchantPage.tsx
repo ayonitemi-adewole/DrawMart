@@ -1,9 +1,8 @@
-import { useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useRef, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router'
 import { api } from '@/api'
-import { useCreateListing, useMerchant, useMerchantListings } from '@/api/hooks'
+import { useCreateListing, useMerchant, useMerchantListings, useMerchantOrders } from '@/api/hooks'
 import type { ListingView } from '@/api/types'
-import { CATEGORY_STYLE } from '@/components/category'
 import { Countdown } from '@/components/Countdown'
 import {
   BackIcon,
@@ -18,14 +17,13 @@ import {
   MapPinIcon,
   PlusIcon,
   ShieldIcon,
+  StoreIcon,
   TicketIcon,
-  TrophyIcon,
   TruckIcon,
-  XIcon,
 } from '@/components/icons'
 import { useToast } from '@/components/toast'
 import { Badge, Button, Card, EmptyState, ErrorState, Field, Notice, ProductImage, ProgressBar, Segmented, Skeleton, StatTile, cx, errorMessage, inputCls, type Tone } from '@/components/ui'
-import { LISTING_ERROR_TEXT, MAX_FEE_BPS, MIN_FEE_BPS, computeListingEconomics, validateListingEconomics, type ListingValidationError } from '@/domain/fees'
+import { LISTING_ERROR_TEXT, computeListingEconomics, platformFeeBps, validateListingEconomics, type ListingValidationError } from '@/domain/fees'
 import {
   HANDOVER_ERROR_TEXT,
   LISTING_TERMS_ERROR_TEXT,
@@ -42,10 +40,12 @@ import {
   type ListingTermsError,
 } from '@/domain/listing'
 import { formatNaira, nairaToKobo, parseNairaInput } from '@/domain/money'
+import { saleEconomics, salePriceKobo } from '@/domain/orders'
 import { RULES } from '@/domain/rules'
-import { CATEGORIES, type Category, type FeeMode, type TimeSlot, type UnsoldPolicy } from '@/domain/types'
-import { photoToDataUrl } from '@/lib/image'
+import { type Category, type FeeMode, type TimeSlot, type UnsoldPolicy } from '@/domain/types'
 import { calendarDay } from '@/lib/time'
+import { ListingKindChooser, MerchantOrders, NewProduct } from './NewProduct'
+import { CategoryPicker, PhotoPicker, Section } from './parts'
 
 const FEE_MODES: { id: FeeMode; label: string; hint: string }[] = [
   { id: 'seller', label: 'Store pays', hint: 'Recommended for launch: buyers see exactly the ticket price, and the fee comes out of your payout.' },
@@ -59,23 +59,33 @@ const UNSOLD_OPTIONS: { id: UnsoldPolicy; title: string; body: string }[] = [
   { id: 'convert_to_sale', title: 'Keep selling it', body: 'Buyers are refunded and the item stays on DrawMart at a fixed price you set.' },
 ]
 
-type Tab = 'draws' | 'new'
+type Tab = 'draws' | 'orders' | 'new'
+const TABS: Tab[] = ['draws', 'orders', 'new']
+
+/** Taking tickets or on sale at a fixed price. */
+const isActive = (l: ListingView) => l.status === 'live' || l.status === 'for_sale'
 
 export function MerchantPage() {
   const merchant = useMerchant()
   const listings = useMerchantListings()
+  const orders = useMerchantOrders()
   const [params, setParams] = useSearchParams()
-  const tab: Tab = params.get('tab') === 'new' ? 'new' : 'draws'
-  const setTab = (t: Tab) => setParams(t === 'new' ? { tab: 'new' } : {}, { replace: true })
+  const tab: Tab = TABS.find((t) => t === params.get('tab')) ?? 'draws'
+  const kindParam = params.get('kind')
+  const kind = kindParam === 'raffle' || kindParam === 'product' ? kindParam : null
+  const setTab = (t: Tab, k?: string) => setParams(t === 'draws' ? {} : k ? { tab: t, kind: k } : { tab: t }, { replace: true })
 
   const data = listings.data ?? []
-  const live = data.filter((l) => l.status === 'live')
+  const active = data.filter(isActive)
   const review = data.filter((l) => l.status === 'pending_review')
-  const sold = data.filter((l) => l.status === 'live' || l.status === 'drawn').reduce((s, l) => s + l.ticketsSold, 0)
-  // Drawn listings pay out the price plus the caution fee back once the winner confirms delivery.
-  const awaiting = data
-    .filter((l) => l.status === 'drawn')
-    .reduce((s, l) => s + computeListingEconomics(l).sellerPayoutKobo + (l.cautionFee.status === 'refunded' ? l.cautionFee.amountKobo : 0), 0)
+  const toSend = orders.data?.filter((o) => o.status === 'paid').length ?? 0
+  // Drawn raffles pay out the price plus the caution fee back once the winner confirms delivery;
+  // orders pay out the price less the fee once the buyer confirms.
+  const awaiting =
+    data
+      .filter((l) => l.status === 'drawn')
+      .reduce((s, l) => s + computeListingEconomics(l).sellerPayoutKobo + (l.cautionFee.status === 'refunded' ? l.cautionFee.amountKobo : 0), 0) +
+    (orders.data ?? []).filter((o) => o.status !== 'delivered').reduce((s, o) => s + o.priceKobo - o.feeKobo, 0)
 
   return (
     <div className="flex flex-col gap-6">
@@ -99,17 +109,17 @@ export function MerchantPage() {
             </p>
           ) : null}
         </div>
-        {tab === 'draws' ? (
+        {tab !== 'new' ? (
           <Button onClick={() => setTab('new')}>
-            <PlusIcon size={18} /> New draw listing
+            <PlusIcon size={18} /> New listing
           </Button>
         ) : null}
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatTile icon={TicketIcon} label="Live draws" value={live.length} />
-        <StatTile icon={ClipboardIcon} tone="ticket" label="In review" value={review.length} hint="Waiting on pickup or inspection" />
-        <StatTile icon={TrophyIcon} tone="sky" label="Tickets sold" value={sold.toLocaleString('en-NG')} />
+        <StatTile icon={TicketIcon} label="Live & on sale" value={active.length} hint={`${active.filter((l) => l.kind === 'raffle').length} draws`} />
+        <StatTile icon={ClipboardIcon} tone="ticket" label="In review" value={review.length} hint="Waiting on review, pickup or inspection" />
+        <StatTile icon={TruckIcon} tone="sky" label="Orders to send" value={toSend} hint={`${orders.data?.length ?? 0} orders in all`} />
         <StatTile icon={CoinIcon} tone="violet" label="Payout after delivery" value={formatNaira(awaiting)} hint="Includes caution fees back" />
       </div>
 
@@ -119,13 +129,24 @@ export function MerchantPage() {
         onChange={setTab}
         className="w-full sm:w-auto sm:self-start"
         options={[
-          { value: 'draws', label: <><LayoutIcon size={16} /> Your draws</>, count: data.length },
+          { value: 'draws', label: <><LayoutIcon size={16} /> Your listings</>, count: data.length },
+          { value: 'orders', label: <><TruckIcon size={16} /> Orders</>, count: toSend || undefined },
           { value: 'new', label: <><PlusIcon size={16} /> New listing</> },
         ]}
       />
 
       <div key={tab} className="animate-fade-in">
-        {tab === 'new' ? <NewListing onDone={() => setTab('draws')} /> : <MerchantListings onNew={() => setTab('new')} />}
+        {tab === 'orders' ? (
+          <MerchantOrders />
+        ) : tab !== 'new' ? (
+          <MerchantListings onNew={() => setTab('new')} />
+        ) : kind === 'product' ? (
+          <NewProduct onBack={() => setTab('new')} onDone={() => setTab('draws')} />
+        ) : kind === 'raffle' ? (
+          <NewListing onDone={() => setTab('draws')} />
+        ) : (
+          <ListingKindChooser onPick={(k) => setTab('new', k)} />
+        )}
       </div>
     </div>
   )
@@ -133,7 +154,7 @@ export function MerchantPage() {
 
 // ------------------------------------------------------------ new listing
 
-type DetailsField = 'title' | 'price' | 'ticket' | 'fee' | 'duration' | 'fallback'
+type DetailsField = 'title' | 'price' | 'ticket' | 'duration' | 'fallback'
 
 const ERROR_FIELD: Record<ListingValidationError | ListingTermsError, DetailsField> = {
   title_required: 'title',
@@ -141,7 +162,6 @@ const ERROR_FIELD: Record<ListingValidationError | ListingTermsError, DetailsFie
   ticket_too_cheap: 'ticket',
   ticket_above_price: 'ticket',
   too_many_tickets: 'ticket',
-  fee_out_of_range: 'fee',
   duration_out_of_range: 'duration',
   fallback_price_required: 'fallback',
 }
@@ -168,7 +188,6 @@ function NewListing({ onDone }: { onDone: () => void }) {
   const [price, setPrice] = useState('')
   const [ticket, setTicket] = useState('')
   const [feeMode, setFeeMode] = useState<FeeMode>('seller')
-  const [feePct, setFeePct] = useState(Math.max(RULES.defaultFeeBps, MIN_FEE_BPS) / 100)
   const [durationDays, setDurationDays] = useState(14)
   const [customDeadline, setCustomDeadline] = useState(false)
   const [unsoldPolicy, setUnsoldPolicy] = useState<UnsoldPolicy>('refund')
@@ -184,10 +203,11 @@ function NewListing({ onDone }: { onDone: () => void }) {
   const [showHandoverErrors, setShowHandoverErrors] = useState(false)
   const [created, setCreated] = useState<ListingView | null>(null)
 
-  const economics = { title, priceKobo: parseNairaInput(price), ticketPriceKobo: parseNairaInput(ticket), feeBps: feePct * 100, feeMode }
+  const economics = { title, priceKobo: parseNairaInput(price), ticketPriceKobo: parseNairaInput(ticket), feeMode }
   const fallbackPriceKobo = parseNairaInput(fallbackPrice)
   const terms = { durationDays, unsoldPolicy, fallbackPriceKobo }
-  const econ = computeListingEconomics(economics)
+  // DrawMart sets the rate from the item's value; the store only picks who carries it.
+  const econ = computeListingEconomics({ ...economics, feeBps: platformFeeBps(economics.priceKobo) })
   const errors = [...validateListingEconomics(economics), ...validateListingTerms(terms)]
   const fieldError = (f: DetailsField) => {
     if (!showErrors) return undefined
@@ -273,31 +293,7 @@ function NewListing({ onDone }: { onDone: () => void }) {
                     placeholder="Condition, warranty, what’s in the box"
                   />
                 </Field>
-                <fieldset className="flex flex-col gap-2">
-                  <legend className="mb-1.5 text-sm font-bold">Category</legend>
-                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
-                    {CATEGORIES.map((c) => {
-                      const Icon = CATEGORY_STYLE[c].icon
-                      const active = c === category
-                      return (
-                        <button
-                          type="button"
-                          key={c}
-                          aria-pressed={active}
-                          onClick={() => setCategory(c)}
-                          className={cx(
-                            'flex min-h-16 flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-bold transition active:scale-95',
-                            active ? 'border-brand bg-brand-soft text-brand-ink' : 'border-line bg-surface text-muted hover:border-line-strong',
-                          )}
-                        >
-                          <Icon size={20} />
-                          {c}
-                        </button>
-                      )
-                    })}
-                  </div>
-                  <span className="text-xs text-subtle">Perishable goods like food can’t be listed: items may wait in escrow for weeks.</span>
-                </fieldset>
+                <CategoryPicker value={category} onChange={setCategory} />
                 <PhotoPicker photos={photos} onChange={setPhotos} />
               </Section>
 
@@ -332,26 +328,10 @@ function NewListing({ onDone }: { onDone: () => void }) {
                 <fieldset className="flex flex-col gap-2">
                   <legend className="mb-1.5 text-sm font-bold">Who pays the platform fee?</legend>
                   <Segmented<FeeMode> label="Who pays the platform fee" value={feeMode} onChange={setFeeMode} options={FEE_MODES.map((m) => ({ value: m.id, label: m.label }))} />
-                  <p className="text-xs text-subtle">{FEE_MODES.find((m) => m.id === feeMode)!.hint}</p>
+                  <p className="text-xs text-subtle">
+                    {FEE_MODES.find((m) => m.id === feeMode)!.hint} DrawMart sets the fee from the item’s value; you’ll see exactly what you receive on the right.
+                  </p>
                 </fieldset>
-
-                <Field
-                  label={`Platform fee: ${feePct}%`}
-                  htmlFor="fee"
-                  hint={`Minimum ${MIN_FEE_BPS / 100}%. Set by DrawMart per category; shown here so you can see the effect.`}
-                  error={fieldError('fee')}
-                >
-                  <input
-                    id="fee"
-                    type="range"
-                    min={MIN_FEE_BPS / 100}
-                    max={MAX_FEE_BPS / 100}
-                    value={feePct}
-                    onChange={(e) => setFeePct(Number(e.target.value))}
-                    className="range w-full"
-                    style={{ '--fill': `${((feePct - MIN_FEE_BPS / 100) / ((MAX_FEE_BPS - MIN_FEE_BPS) / 100)) * 100}%` } as React.CSSProperties}
-                  />
-                </Field>
               </Section>
 
               <Section n={3} title="Draw rules" sub="How long tickets are on sale, and what happens if they don’t sell out.">
@@ -767,80 +747,6 @@ function SentForReview({ listing: l, onDone }: { listing: ListingView; onDone: (
   )
 }
 
-const MAX_PHOTOS = 4
-
-function PhotoPicker({ photos, onChange }: { photos: string[]; onChange: (p: string[]) => void }) {
-  const input = useRef<HTMLInputElement>(null)
-  const toast = useToast()
-  const [busy, setBusy] = useState(false)
-
-  async function add(files: FileList | null) {
-    if (!files?.length) return
-    setBusy(true)
-    try {
-      const picked = [...files].filter((f) => f.type.startsWith('image/')).slice(0, MAX_PHOTOS - photos.length)
-      onChange([...photos, ...(await Promise.all(picked.map((f) => photoToDataUrl(f))))])
-    } catch (e) {
-      toast(errorMessage(e), 'error')
-    } finally {
-      setBusy(false)
-      if (input.current) input.current.value = ''
-    }
-  }
-
-  return (
-    <div className="flex flex-col gap-2">
-      <span className="text-sm font-bold">Photos</span>
-      <div className="flex flex-wrap gap-2">
-        {photos.map((src, i) => (
-          <div key={i} className="relative">
-            <img src={src} alt={`Photo ${i + 1}`} className="size-24 rounded-2xl border border-line bg-photo object-cover" />
-            {i === 0 ? <span className="absolute bottom-1.5 left-1.5 rounded-full bg-ink/75 px-2 py-0.5 text-[10px] font-bold text-ground">Cover</span> : null}
-            <button
-              type="button"
-              onClick={() => onChange(photos.filter((_, j) => j !== i))}
-              aria-label={`Remove photo ${i + 1}`}
-              className="absolute -top-2 -right-2 flex size-11 items-center justify-center"
-            >
-              <span className="flex size-7 items-center justify-center rounded-full bg-ink text-ground shadow-card">
-                <XIcon size={14} />
-              </span>
-            </button>
-          </div>
-        ))}
-        {photos.length < MAX_PHOTOS ? (
-          <label
-            className={cx(
-              'flex size-24 cursor-pointer flex-col items-center justify-center gap-1 rounded-2xl border-2 border-dashed border-line-strong text-xs font-bold text-muted transition hover:border-brand hover:text-brand',
-              busy && 'pointer-events-none opacity-60',
-            )}
-          >
-            <PlusIcon size={20} />
-            {busy ? 'Adding…' : 'Add photo'}
-            <input ref={input} type="file" accept="image/*" multiple className="sr-only" onChange={(e) => add(e.target.files)} />
-          </label>
-        ) : null}
-      </div>
-      <span className="text-xs text-subtle">Up to {MAX_PHOTOS}. The first is the cover. DrawMart adds its own photos at escrow or inspection.</span>
-    </div>
-  )
-}
-
-function Section({ n, title, sub, children }: { n: number; title: string; sub: string; children: ReactNode }) {
-  return (
-    <Card className="flex flex-col gap-5 p-5 sm:p-6">
-      <div className="flex gap-3">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-ink font-display font-extrabold text-ground">{n}</span>
-        <div className="flex flex-col">
-          <h2 className="font-display text-lg font-extrabold">{title}</h2>
-          <p className="text-xs text-subtle">{sub}</p>
-        </div>
-      </div>
-      {children}
-    </Card>
-  )
-}
-
 // ----------------------------------------------------------- your draws
 
 const STATUS: Record<ListingView['status'], { label: string; tone: Tone }> = {
@@ -849,25 +755,31 @@ const STATUS: Record<ListingView['status'], { label: string; tone: Tone }> = {
   drawn: { label: 'Drawn · awaiting delivery', tone: 'sky' },
   refunded: { label: 'Refunded', tone: 'neutral' },
   for_sale: { label: 'On sale · draw ended', tone: 'violet' },
+  sold: { label: 'Sold · see orders', tone: 'sky' },
   rejected: { label: 'Rejected', tone: 'hot' },
 }
+
+const statusFor = (l: ListingView) => (l.kind === 'product' && l.status === 'for_sale' ? { label: 'On sale', tone: 'brand' as Tone } : STATUS[l.status])
 
 const CAUTION_TEXT: Record<ListingView['cautionFee']['status'], string> = {
   held: 'held',
   refunded: 'back with payout',
   kept: 'kept for delivery',
+  none: '',
 }
 
 type StatusFilter = 'all' | 'live' | 'pending_review' | 'done'
 
-function MerchantListings({ onNew }: { onNew: () => void }) {
+export function MerchantListings({ onNew, emptyBody }: { onNew: () => void; emptyBody?: string }) {
   const q = useMerchantListings()
   const [filter, setFilter] = useState<StatusFilter>('all')
   if (q.isPending) return <Skeleton className="h-60" />
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />
 
-  const items = q.data.filter((l) => (filter === 'all' ? true : filter === 'done' ? !['live', 'pending_review'].includes(l.status) : l.status === filter))
-  const count = (f: StatusFilter) => q.data.filter((l) => (f === 'done' ? !['live', 'pending_review'].includes(l.status) : l.status === f)).length
+  const inFilter = (l: ListingView, f: StatusFilter) =>
+    f === 'all' ? true : f === 'live' ? isActive(l) : f === 'pending_review' ? l.status === 'pending_review' : !isActive(l) && l.status !== 'pending_review'
+  const items = q.data.filter((l) => inFilter(l, filter))
+  const count = (f: StatusFilter) => q.data.filter((l) => inFilter(l, f)).length
 
   return (
     <section className="flex flex-col gap-4">
@@ -879,7 +791,7 @@ function MerchantListings({ onNew }: { onNew: () => void }) {
           size="sm"
           options={[
             { value: 'all', label: 'All', count: q.data.length },
-            { value: 'live', label: 'Live', count: count('live') },
+            { value: 'live', label: 'Live & on sale', count: count('live') },
             { value: 'pending_review', label: 'In review', count: count('pending_review') },
             { value: 'done', label: 'Finished', count: count('done') },
           ]}
@@ -888,19 +800,20 @@ function MerchantListings({ onNew }: { onNew: () => void }) {
       {items.length === 0 ? (
         <EmptyState
           icon={TicketIcon}
-          title="No draws here"
-          body="Create a listing, book a pickup or inspection, and we’ll publish it once it’s checked."
+          title="Nothing here"
+          body={emptyBody ?? "List a raffle draw or a regular product. We publish it once it’s been checked."}
           action={
             <Button onClick={onNew}>
-              <PlusIcon size={18} /> New draw listing
+              <PlusIcon size={18} /> New listing
             </Button>
           }
         />
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
           {items.map((l) => {
+            if (l.kind === 'product') return <ProductCard key={l.id} listing={l} />
             const econ = computeListingEconomics(l)
-            const s = STATUS[l.status]
+            const s = statusFor(l)
             const h = l.handover
             return (
               <Card key={l.id} className="flex animate-fade-up flex-col gap-4 p-4">
@@ -937,7 +850,7 @@ function MerchantListings({ onNew }: { onNew: () => void }) {
                 <dl className="flex flex-col gap-1 border-t border-dashed border-line pt-3 text-sm">
                   <div className="flex items-center justify-between">
                     <dt className="text-subtle">{l.status === 'for_sale' ? 'Fixed price' : 'Your payout'}</dt>
-                    <dd className="font-bold tabular-nums">{formatNaira(l.status === 'for_sale' && l.fallbackPriceKobo ? l.fallbackPriceKobo : econ.sellerPayoutKobo)}</dd>
+                    <dd className="font-bold tabular-nums">{formatNaira(salePriceKobo(l) ?? econ.sellerPayoutKobo)}</dd>
                   </div>
                   <div className="flex items-center justify-between text-xs">
                     <dt className="text-subtle">Caution fee</dt>
@@ -955,3 +868,34 @@ function MerchantListings({ onNew }: { onNew: () => void }) {
   )
 }
 
+/** A regular product: no tickets, so just its price, payout and status. */
+function ProductCard({ listing: l }: { listing: ListingView }) {
+  const s = statusFor(l)
+  const { payoutKobo } = saleEconomics(l.priceKobo, l.feeBps)
+  return (
+    <Card className="flex animate-fade-up flex-col gap-4 p-4">
+      <div className="flex items-start gap-3">
+        <ProductImage category={l.category} src={l.images[0]} alt={l.title} size="sm" className="size-16 shrink-0" />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="flex items-start justify-between gap-2">
+            <strong className="leading-tight">{l.title}</strong>
+            <Badge tone={s.tone}>{s.label}</Badge>
+          </div>
+          <span className="flex items-center gap-1 text-xs text-subtle">
+            <StoreIcon size={12} /> Regular product · no draw
+          </span>
+        </div>
+      </div>
+      <dl className="flex flex-col gap-1 border-t border-dashed border-line pt-3 text-sm">
+        <div className="flex items-center justify-between">
+          <dt className="text-subtle">Price</dt>
+          <dd className="font-bold tabular-nums">{formatNaira(l.priceKobo)}</dd>
+        </div>
+        <div className="flex items-center justify-between text-xs">
+          <dt className="text-subtle">Your payout after the platform fee</dt>
+          <dd className="font-semibold tabular-nums">{formatNaira(payoutKobo)}</dd>
+        </div>
+      </dl>
+    </Card>
+  )
+}

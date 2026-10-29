@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { Kobo } from '@/domain/types'
+import type { Delivery, Kobo } from '@/domain/types'
 import { api } from './index'
-import type { AccountRole, ListingFilter, NewListingInput } from './types'
+import type { SellerApplicationInput } from '@/domain/sellers'
+import type { AccountRole, ListingFilter, NewListingInput, NewProductInput } from './types'
 
 export const keys = {
   session: ['session'] as const,
@@ -14,6 +15,10 @@ export const keys = {
   merchant: ['merchant'] as const,
   merchantListings: ['merchant-listings'] as const,
   pending: ['pending'] as const,
+  myOrders: ['my-orders'] as const,
+  merchantOrders: ['merchant-orders'] as const,
+  sellerApplication: ['seller-application'] as const,
+  sellerApplications: ['seller-applications'] as const,
 }
 
 /** The signed-in account, or null. Kept fresh by SessionSync in App.tsx. */
@@ -35,9 +40,21 @@ const useIs = (role: AccountRole) => useAccess().role === role
 export const useMe = () => useQuery({ queryKey: keys.me, queryFn: () => api.getCurrentUser(), enabled: useIs('buyer') })
 export const useMyListings = () => useQuery({ queryKey: keys.myListings, queryFn: () => api.listMyListings(), enabled: useIs('buyer') })
 export const useWallet = () => useQuery({ queryKey: keys.wallet, queryFn: () => api.getWallet(), enabled: useIs('buyer') })
-export const useMerchant = () => useQuery({ queryKey: keys.merchant, queryFn: () => api.getMyMerchant(), enabled: useIs('store') })
+export const useMySellerApplication = () =>
+  useQuery({ queryKey: keys.sellerApplication, queryFn: () => api.getMySellerApplication(), enabled: useIs('buyer') })
+/** Store accounts, and buyers who passed the seller check, manage a shop. */
+export function useHasShop() {
+  const role = useAccess().role
+  const application = useMySellerApplication()
+  return role === 'store' || (role === 'buyer' && application.data?.status === 'approved')
+}
+export const useMerchant = () => useQuery({ queryKey: keys.merchant, queryFn: () => api.getMyMerchant(), enabled: useHasShop() })
 export const useMerchantListings = () =>
-  useQuery({ queryKey: keys.merchantListings, queryFn: () => api.listMerchantListings(), enabled: useIs('store') })
+  useQuery({ queryKey: keys.merchantListings, queryFn: () => api.listMerchantListings(), enabled: useHasShop() })
+export const useMyOrders = () => useQuery({ queryKey: keys.myOrders, queryFn: () => api.listMyOrders(), enabled: useIs('buyer') })
+export const useMerchantOrders = () => useQuery({ queryKey: keys.merchantOrders, queryFn: () => api.listMerchantOrders(), enabled: useHasShop() })
+export const useSellerApplications = () =>
+  useQuery({ queryKey: keys.sellerApplications, queryFn: () => api.listSellerApplications(), enabled: useIs('admin') })
 export const usePendingListings = () => useQuery({ queryKey: keys.pending, queryFn: () => api.listPendingListings(), enabled: useIs('admin') })
 
 // Auth. SessionSync (App.tsx) clears the cache when the account changes.
@@ -65,6 +82,42 @@ export function useBuyTickets() {
   const invalidate = useInvalidateAll()
   return useMutation({
     mutationFn: ({ listingId, quantity }: { listingId: string; quantity: number }) => api.buyTickets(listingId, quantity),
+    onSettled: invalidate,
+  })
+}
+
+export function useBuyNow() {
+  const invalidate = useInvalidateAll()
+  return useMutation({
+    mutationFn: ({ listingId, delivery }: { listingId: string; delivery: Delivery }) => api.buyNow(listingId, delivery),
+    onSettled: invalidate,
+  })
+}
+
+export function useConfirmOrder() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: (orderId: string) => api.confirmOrder(orderId), onSettled: invalidate })
+}
+
+export function useDispatchOrder() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: (orderId: string) => api.dispatchOrder(orderId), onSettled: invalidate })
+}
+
+export function useCreateProduct() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: (input: NewProductInput) => api.createProduct(input), onSettled: invalidate })
+}
+
+export function useSubmitSellerApplication() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: (input: SellerApplicationInput) => api.submitSellerApplication(input), onSettled: invalidate })
+}
+
+export function useReviewSeller() {
+  const invalidate = useInvalidateAll()
+  return useMutation({
+    mutationFn: ({ id, approve, note }: { id: string; approve: boolean; note?: string }) => (approve ? api.approveSeller(id) : api.rejectSeller(id, note ?? '')),
     onSettled: invalidate,
   })
 }

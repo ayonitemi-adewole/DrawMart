@@ -11,7 +11,6 @@ export const RULES = {
   defaultWeeklyLimitKobo: 50_000_00,
   /** Raising a weekly limit only takes effect after this delay. */
   limitIncreaseDelayHours: 24,
-  defaultFeeBps: 1000,
   /** Draws run for a store-chosen number of days, counted from approval. */
   minDurationDays: 3,
   maxDurationDays: 60,

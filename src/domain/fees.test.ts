@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeListingEconomics, validateListingEconomics } from './fees'
+import { FEE_TIERS, MAX_FEE_BPS, MIN_FEE_BPS, computeListingEconomics, platformFeeBps, validateListingEconomics } from './fees'
 import { nairaToKobo as k } from './money'
 
 describe('computeListingEconomics', () => {
@@ -49,17 +49,30 @@ describe('computeListingEconomics', () => {
 
 describe('validateListingEconomics', () => {
   it('accepts a sensible listing', () => {
-    expect(validateListingEconomics({ title: 'Phone', priceKobo: k(1_000_000), ticketPriceKobo: k(5_000), feeBps: 1000, feeMode: 'seller' })).toEqual([])
+    expect(validateListingEconomics({ title: 'Phone', priceKobo: k(1_000_000), ticketPriceKobo: k(5_000), feeMode: 'seller' })).toEqual([])
   })
   it('flags tickets that are too cheap, too many or pricier than the item', () => {
-    expect(validateListingEconomics({ title: 'x', priceKobo: k(1_000), ticketPriceKobo: k(50), feeBps: 1000, feeMode: 'seller' })).toContain('ticket_too_cheap')
-    expect(validateListingEconomics({ title: 'x', priceKobo: k(10_000_000), ticketPriceKobo: k(100), feeBps: 1000, feeMode: 'seller' })).toContain('too_many_tickets')
-    expect(validateListingEconomics({ title: 'x', priceKobo: k(1_000), ticketPriceKobo: k(2_000), feeBps: 1000, feeMode: 'seller' })).toContain('ticket_above_price')
+    expect(validateListingEconomics({ title: 'x', priceKobo: k(1_000), ticketPriceKobo: k(50), feeMode: 'seller' })).toContain('ticket_too_cheap')
+    expect(validateListingEconomics({ title: 'x', priceKobo: k(10_000_000), ticketPriceKobo: k(100), feeMode: 'seller' })).toContain('too_many_tickets')
+    expect(validateListingEconomics({ title: 'x', priceKobo: k(1_000), ticketPriceKobo: k(2_000), feeMode: 'seller' })).toContain('ticket_above_price')
   })
-  it('enforces a 10% minimum platform fee', () => {
-    const base = { title: 'x', priceKobo: k(1_000_000), ticketPriceKobo: k(5_000), feeMode: 'seller' as const }
-    expect(validateListingEconomics({ ...base, feeBps: 999 })).toContain('fee_out_of_range')
-    expect(validateListingEconomics({ ...base, feeBps: 1000 })).toEqual([])
-    expect(validateListingEconomics({ ...base, feeBps: 3001 })).toContain('fee_out_of_range')
+})
+
+describe('platformFeeBps', () => {
+  it('sets the rate from the item value', () => {
+    expect(platformFeeBps(k(100))).toBe(2000)
+    expect(platformFeeBps(k(49_999))).toBe(2000)
+    expect(platformFeeBps(k(50_000))).toBe(1500)
+    expect(platformFeeBps(k(500_000))).toBe(1250)
+    expect(platformFeeBps(k(4_999_999))).toBe(1250)
+    expect(platformFeeBps(k(5_000_000))).toBe(1000)
+    expect(platformFeeBps(k(300_000_000))).toBe(1000)
+  })
+
+  it('stays between 10% and 30%, and never pays a seller less for a pricier item', () => {
+    for (const t of FEE_TIERS) expect(t.bps).toBeGreaterThanOrEqual(MIN_FEE_BPS)
+    for (const t of FEE_TIERS) expect(t.bps).toBeLessThanOrEqual(MAX_FEE_BPS)
+    const payout = (p: number) => p - Math.round((p * platformFeeBps(p)) / 10_000)
+    for (const t of FEE_TIERS.slice(1)) expect(payout(t.fromKobo)).toBeGreaterThan(payout(t.fromKobo - 1))
   })
 })

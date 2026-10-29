@@ -29,7 +29,7 @@ export function cautionFeeFor(category: Category): Kobo {
  * returned with the payout on a sell-out, kept to cover delivery otherwise.
  */
 export function settleCautionFee(fee: CautionFee, status: ListingStatus): CautionFee {
-  if (fee.status !== 'held') return fee
+  if (fee.status !== 'held') return fee // includes 'none' for products
   if (status === 'drawn') return { ...fee, status: 'refunded' }
   if (status === 'refunded' || status === 'for_sale' || status === 'rejected') return { ...fee, status: 'kept' }
   return fee

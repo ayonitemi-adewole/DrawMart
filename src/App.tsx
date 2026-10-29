@@ -12,11 +12,13 @@ import { BackOfficeLayout } from '@/layouts/BackOfficeLayout'
 import { BuyerLayout } from '@/layouts/BuyerLayout'
 import { AdminDrawsPage } from '@/pages/admin/AdminDrawsPage'
 import { AdminPage } from '@/pages/admin/AdminPage'
+import { AdminSellersPage } from '@/pages/admin/AdminSellersPage'
 import { DrawsPage } from '@/pages/DrawsPage'
 import { HomePage } from '@/pages/HomePage'
 import { ListingPage } from '@/pages/ListingPage'
 import { MerchantPage } from '@/pages/merchant/MerchantPage'
 import { ResultPage } from '@/pages/ResultPage'
+import { SellPage } from '@/pages/SellPage'
 import { SignInPage } from '@/pages/SignInPage'
 import { TicketsPage } from '@/pages/TicketsPage'
 import { WalletPage } from '@/pages/WalletPage'
@@ -92,6 +94,7 @@ const router = createBrowserRouter([
       { path: 'draws', element: <DrawsPage /> },
       { path: 'draws/:id', element: <ResultPage /> },
       { path: 'wallet', element: <RequireSignIn role="buyer"><WalletPage /></RequireSignIn> },
+      { path: 'sell', element: <RequireSignIn role="buyer"><SellPage /></RequireSignIn> },
       { path: '*', element: <NotFound /> },
     ],
   },
@@ -111,6 +114,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <AdminPage /> },
       { path: 'draws', element: <AdminDrawsPage /> },
+      { path: 'sellers', element: <AdminSellersPage /> },
       { path: '*', element: <NotFound /> },
     ],
   },

@@ -6,9 +6,12 @@
  * implements the same interface and nothing in src/pages has to change.
  */
 import type { HandoverDetails } from '@/domain/listing'
+import type { OrderError } from '@/domain/orders'
 import type { PurchaseError } from '@/domain/rules'
+import type { SellerApplicationInput, SellerApplicationStatus } from '@/domain/sellers'
 import type {
   Category,
+  Delivery,
   DrawResult,
   FeeMode,
   Handover,
@@ -17,6 +20,7 @@ import type {
   Listing,
   ListingStatus,
   Merchant,
+  Order,
   UnsoldPolicy,
   User,
   WalletBalance,
@@ -76,8 +80,8 @@ export interface NewListingInput {
   images?: string[]
   priceKobo: Kobo
   ticketPriceKobo: Kobo
+  /** Who carries the platform fee. The rate itself is set by DrawMart from the price (platformFeeBps). */
   feeMode: FeeMode
-  feeBps: number
   /** Days on sale once approved, RULES.minDurationDays..maxDurationDays. */
   durationDays: number
   unsoldPolicy: UnsoldPolicy
@@ -87,12 +91,49 @@ export interface NewListingInput {
   handover: HandoverDetails
 }
 
+/** A regular product: sold outright at `priceKobo`, after admin review. No tickets, escrow or caution fee. */
+export interface NewProductInput {
+  title: string
+  description: string
+  category: Category
+  images?: string[]
+  /** The platform fee follows from this (platformFeeBps) and comes out of the seller's payout. */
+  priceKobo: Kobo
+}
+
+export interface OrderView extends Order {
+  listingTitle: string
+  listingImage: string | null
+  category: Category
+  merchantName: string
+}
+
+/** An individual's request to sell. Only the applicant and admins ever see it. */
+export interface SellerApplicationView {
+  id: string
+  status: SellerApplicationStatus
+  shopName: string
+  legalName: string
+  nin: string
+  phone: string
+  address: string
+  area: string
+  /** Viewable image URLs (short-lived signed URLs on Supabase). */
+  idPhotoUrl: string | null
+  selfieUrl: string | null
+  /** Why it was rejected. */
+  reviewNote: string | null
+  createdAt: string
+  updatedAt: string
+  reviewedAt: string | null
+}
+
 export interface ListingFilter {
   category?: Category
   status?: ListingStatus[]
 }
 
-export type ApiErrorCode = PurchaseError | 'not_found' | 'invalid_input' | 'forbidden'
+export type ApiErrorCode = PurchaseError | OrderError | 'not_found' | 'invalid_input' | 'forbidden'
 
 export class ApiError extends Error {
   readonly code: ApiErrorCode
@@ -163,6 +204,16 @@ export interface DrawMartApi {
   buyTickets(listingId: string, quantity: number): Promise<PurchaseReceipt>
   listMyListings(): Promise<ListingView[]>
   listResults(): Promise<DrawResultView[]>
+  /** Buys a 'for_sale' item from the wallet (store credit first). */
+  buyNow(listingId: string, delivery: Delivery): Promise<OrderView>
+  listMyOrders(): Promise<OrderView[]>
+  /** The buyer confirms the item arrived. */
+  confirmOrder(orderId: string): Promise<void>
+
+  // Individual sellers (buyer accounts that sell regular products)
+  getMySellerApplication(): Promise<SellerApplicationView | null>
+  /** Uploads the ID photos and queues the application for an admin. Also used to resubmit after a rejection. */
+  submitSellerApplication(input: SellerApplicationInput): Promise<SellerApplicationView>
 
   // Wallet
   getWallet(): Promise<WalletView>
@@ -175,11 +226,22 @@ export interface DrawMartApi {
   listMerchantListings(): Promise<ListingView[]>
   /** Charges the caution fee for the category and queues the listing for pickup/inspection and review. */
   createListing(input: NewListingInput): Promise<ListingView>
+  /** Queues a regular product for admin review. */
+  createProduct(input: NewProductInput): Promise<ListingView>
+  /** Orders for this store's items, with delivery details. */
+  listMerchantOrders(): Promise<OrderView[]>
+  /** The store has sent the item. */
+  dispatchOrder(orderId: string): Promise<void>
 
   // Admin
   listPendingListings(): Promise<ListingView[]>
   approveListing(id: string): Promise<void>
   rejectListing(id: string): Promise<void>
+  /** Applications waiting for an ID check, oldest first. */
+  listSellerApplications(): Promise<SellerApplicationView[]>
+  /** Creates the seller's shop. */
+  approveSeller(applicationId: string): Promise<void>
+  rejectSeller(applicationId: string, note: string): Promise<void>
 
   // Demo-only helpers (errors outside test mode; admins only on a real backend)
   demoSellOut(listingId: string): Promise<void>

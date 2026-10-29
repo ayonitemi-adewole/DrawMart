@@ -1,12 +1,13 @@
 import { Link } from 'react-router'
 import type { ListingView } from '@/api/types'
 import { formatNaira } from '@/domain/money'
+import { salePriceKobo } from '@/domain/orders'
 import { Countdown } from './Countdown'
 import { CheckIcon, FlameIcon, MapPinIcon, TicketIcon } from './icons'
 import { Badge, ProductImage, ProgressBar, cx } from './ui'
 
 export function isAlmostGone(l: ListingView) {
-  return l.status === 'live' && l.ticketsSold / l.ticketCount >= 0.85
+  return l.status === 'live' && l.ticketCount > 0 && l.ticketsSold / l.ticketCount >= 0.85
 }
 
 /** "60×" — how many times cheaper a ticket is than the item. */
@@ -19,7 +20,9 @@ export function ListingCard({ listing: l, className, style }: { listing: Listing
   const hot = isAlmostGone(l)
   const pct = Math.round((l.ticketsSold / l.ticketCount) * 100)
   const mine = l.myNumbers.length
-  const forSale = l.status === 'for_sale' && l.fallbackPriceKobo !== null
+  const price = salePriceKobo(l)
+  // Fixed-price cards: regular products, and draws that ended unsold.
+  const forSale = l.kind === 'product' || price !== null
 
   return (
     <Link
@@ -61,7 +64,7 @@ export function ListingCard({ listing: l, className, style }: { listing: Listing
               </Badge>
             ) : null}
             {l.status === 'drawn' ? <Badge tone="neutral">DRAWN</Badge> : null}
-            {forSale ? <Badge tone="sky">BUY NOW</Badge> : null}
+            {l.status === 'sold' ? <Badge tone="hot">SOLD</Badge> : forSale ? <Badge tone="sky">BUY NOW</Badge> : null}
           </div>
         </div>
         {forSale ? null : (
@@ -83,7 +86,11 @@ export function ListingCard({ listing: l, className, style }: { listing: Listing
         </div>
 
         {forSale ? (
-          <p className="text-xs text-subtle">The draw ended unsold and everyone was refunded. The store is now selling it at a fixed price.</p>
+          <p className="text-xs text-subtle">
+            {l.kind === 'product'
+              ? 'Sold by the store at a fixed price. No tickets, no draw. Delivered in Lagos.'
+              : 'The draw ended unsold and everyone was refunded. The store is now selling it at a fixed price.'}
+          </p>
         ) : (
         <div className="flex flex-col gap-1.5">
           <div className="flex justify-between text-xs font-semibold">
@@ -97,8 +104,8 @@ export function ListingCard({ listing: l, className, style }: { listing: Listing
         <div className="mt-auto flex items-end justify-between gap-2 border-t border-dashed border-line pt-3">
           {forSale ? (
             <div className="flex flex-col">
-              <span className="text-[11px] text-subtle">Buy now</span>
-              <span className="text-lg leading-tight font-extrabold">{formatNaira(l.fallbackPriceKobo!)}</span>
+              <span className="text-[11px] text-subtle">{l.status === 'sold' ? 'Sold for' : 'Buy now'}</span>
+              <span className="text-lg leading-tight font-extrabold">{formatNaira(price ?? l.fallbackPriceKobo ?? l.priceKobo)}</span>
             </div>
           ) : (
             <div className="flex flex-col">

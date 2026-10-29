@@ -32,7 +32,7 @@ begin
     caution_fee_kobo, caution_fee_status, commitment, created_at, closes_at)
   values (
     p_merchant, p_title, p_description, p_category, p_images, v_price, v_ticket, v_ticket,
-    v_count, 'seller', 1000, p_unsold, p_fallback_naira * 100,
+    v_count, 'seller', private.platform_fee_bps(v_price), p_unsold, p_fallback_naira * 100,
     least(60, greatest(3, ceil(extract(epoch from p_closes_in) / 86400)::int)), p_status,
     (select amount_kobo from public.caution_fees where category = p_category),
     case when p_status in ('for_sale', 'refunded', 'rejected') then 'kept' else 'held' end,
@@ -133,3 +133,20 @@ begin
 end $$;
 
 drop function private.seed_listing(uuid, text, text, text[], text, bigint, bigint, int, interval, text, text, bigint);
+
+-- Regular products (no draw). Separate from the block above so it also adds
+-- them to a database seeded before products existed. Safe to run again.
+do $$
+begin
+  if not exists (select 1 from public.merchants) or exists (select 1 from public.listings where kind = 'product') then return; end if;
+  insert into public.listings (
+    kind, merchant_id, title, description, category, images, price_kobo, ticket_price_kobo, buyer_ticket_price_kobo,
+    ticket_count, fee_mode, fee_bps, unsold_policy, duration_days, status, caution_fee_kobo, caution_fee_status, commitment, closes_at)
+  select 'product', m, title, description, category, images, price * 100, 0, 0, 0, 'seller', private.platform_fee_bps(price * 100), 'refund', 0, status, 0, 'none', '', now()
+    from (values
+      ('11111111-1111-4111-8111-000000000001'::uuid, 'iPhone 18 Pro Max, 512GB, Glacier', 'Brand new and sealed, with a one-year store warranty. Ships in 2 days.', 'Phones', array['/assets/iphone18pmGlacier.jpg'], 2950000::bigint, 'for_sale'),
+      ('11111111-1111-4111-8111-000000000003'::uuid, 'Samsung 50-inch smart TV', 'Crystal UHD smart TV with wall bracket. Delivery anywhere in Lagos.', 'Electronics', array['/assets/samsung50inchTV.jpg'], 480000, 'for_sale'),
+      ('11111111-1111-4111-8111-000000000004'::uuid, 'MacBook Pro 14-inch, M5, 1TB', '24GB unified memory, 1TB SSD. Brand new with manufacturer warranty.', 'Electronics', array['/assets/macbookProM5-2.jpg'], 3850000, 'for_sale'),
+      ('11111111-1111-4111-8111-000000000005'::uuid, 'Mercedes-AMG G 63 2025, Night Black', 'Brand new, dealer warranty, registration in the buyer’s name. View at our VI showroom.', 'Cars', array['/assets/mercedesBenzG632025.jpg'], 345000000, 'pending_review')
+    ) as t(m, title, description, category, images, price, status);
+end $$;

@@ -145,11 +145,11 @@ export function HomePage() {
       {forSale.data?.length && !query ? (
         <section className="flex flex-col gap-4" aria-labelledby="buy-now-heading">
           <div className="flex flex-col gap-1">
-            <span className="text-xs font-extrabold tracking-[0.14em] text-brand uppercase">Buy now</span>
+            <span className="text-xs font-extrabold tracking-[0.14em] text-brand uppercase">Shop · buy now</span>
             <h2 id="buy-now-heading" className="font-display text-2xl font-extrabold tracking-tight">
-              Skip the draw, buy at a fixed price
+              {category ? `${category} at a fixed price` : 'Skip the draw, buy at a fixed price'}
             </h2>
-            <p className="text-sm text-muted">These draws ended without selling out. Ticket buyers were refunded, and the stores kept the items on sale.</p>
+            <p className="text-sm text-muted">Regular products from verified stores, plus draws that ended without selling out. Pay from your wallet; the store delivers.</p>
           </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {forSale.data.map((l) => (

@@ -8,7 +8,9 @@
 import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js'
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
-import type { Category, FeeMode, Handover, LedgerEntry, LedgerKind, ListingStatus, Merchant, UnsoldPolicy, User } from '@/domain/types'
+import { ORDER_ERROR_TEXT } from '@/domain/orders'
+import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication } from '@/domain/sellers'
+import type { Category, FeeMode, Handover, LedgerEntry, LedgerKind, ListingKind, ListingStatus, Merchant, OrderStatus, UnsoldPolicy, User } from '@/domain/types'
 import { DEMO_ACCOUNTS } from './demoAccounts'
 import {
   type AccountRole,
@@ -22,7 +24,10 @@ import {
   type ListingFilter,
   type ListingView,
   type NewListingInput,
+  type NewProductInput,
+  type OrderView,
   type PaymentsAdapter,
+  type SellerApplicationView,
   type PurchaseReceipt,
   type WalletView,
 } from './types'
@@ -31,6 +36,7 @@ import {
 
 interface MerchantRow {
   id: string
+  kind: Merchant['kind']
   name: string
   area: string
   cac_number: string
@@ -56,6 +62,7 @@ interface DrawResultRow {
 
 interface ListingRow {
   id: string
+  kind: ListingKind
   merchant_id: string
   title: string
   description: string
@@ -74,7 +81,7 @@ interface ListingRow {
   extended: boolean
   status: ListingStatus
   caution_fee_kobo: number
-  caution_fee_status: 'held' | 'refunded' | 'kept'
+  caution_fee_status: 'held' | 'refunded' | 'kept' | 'none'
   commitment: string
   created_at: string
   closes_at: string
@@ -91,6 +98,42 @@ interface ProfileRow {
   age_verified: boolean
   role: AccountRole
   merchant_id: string | null
+  /** An individual seller's own shop (buyer accounts only). */
+  seller_id: string | null
+}
+
+interface SellerApplicationRow {
+  id: string
+  status: SellerApplicationView['status']
+  shop_name: string
+  legal_name: string
+  nin: string
+  phone: string
+  address: string
+  area: string
+  id_photo_path: string
+  selfie_path: string
+  review_note: string | null
+  created_at: string
+  updated_at: string
+  reviewed_at: string | null
+}
+
+interface OrderRow {
+  id: string
+  listing_id: string
+  user_id: string
+  merchant_id: string
+  price_kobo: number
+  fee_kobo: number
+  delivery_address: string
+  delivery_phone: string
+  status: OrderStatus
+  created_at: string
+  dispatched_at: string | null
+  delivered_at: string | null
+  listing: { title: string; images: string[]; category: Category }
+  merchant: { name: string }
 }
 
 interface LedgerRow {
@@ -107,12 +150,16 @@ interface LedgerRow {
 // draw_results.winner_user_id isn't readable by clients, so name the columns.
 const RESULT_COLUMNS = 'listing_id, commitment, seed, closing_ref, winning_number, drawn_at'
 const LISTING_SELECT = `*, merchant:merchants(*), result:draw_results(${RESULT_COLUMNS}), handover:listing_handovers(*)`
+const ORDER_SELECT = '*, listing:listings(title, images, category), merchant:merchants(name)'
 const PHOTO_BUCKET = 'listing-photos'
+/** Private: ID photos for seller checks. */
+const ID_BUCKET = 'seller-ids'
 
 // ---------------------------------------------------------------- errors
 
 const PURCHASE_CODES = Object.keys(PURCHASE_ERROR_TEXT) as PurchaseError[]
-const OTHER_TEXT: Record<'not_found' | 'invalid_input' | 'forbidden', string> = {
+const OTHER_TEXT: Record<'not_found' | 'invalid_input' | 'forbidden' | 'not_for_sale', string> = {
+  not_for_sale: ORDER_ERROR_TEXT.not_for_sale,
   not_found: 'That doesn’t exist.',
   invalid_input: 'Check the details and try again.',
   forbidden: 'You can’t do that.',
@@ -137,7 +184,7 @@ function unwrap<T>(res: { data: T | null; error: PostgrestError | null }): T {
 const num = (v: number | string | null | undefined) => Number(v ?? 0)
 
 function toMerchant(m: MerchantRow): Merchant {
-  return { id: m.id, name: m.name, area: m.area, cacNumber: m.cac_number, verified: m.verified }
+  return { id: m.id, kind: m.kind, name: m.name, area: m.area, cacNumber: m.cac_number, verified: m.verified }
 }
 
 function toUser(p: ProfileRow): User {
@@ -191,6 +238,7 @@ export function toResultView(
 function toListingView(l: ListingRow, me: string | null, mine: Mine): ListingView {
   return {
     id: l.id,
+    kind: l.kind,
     merchantId: l.merchant_id,
     title: l.title,
     description: l.description,
@@ -221,9 +269,31 @@ function toListingView(l: ListingRow, me: string | null, mine: Mine): ListingVie
   }
 }
 
+const soldShare = (l: ListingView) => (l.ticketCount ? l.ticketsSold / l.ticketCount : 0)
+
 function sortForBrowsing(a: ListingView, b: ListingView) {
   if (a.status !== b.status) return a.status === 'live' ? -1 : 1
-  return b.ticketsSold / b.ticketCount - a.ticketsSold / a.ticketCount
+  return soldShare(b) - soldShare(a)
+}
+
+function toOrderView(o: OrderRow): OrderView {
+  return {
+    id: o.id,
+    listingId: o.listing_id,
+    buyerId: o.user_id,
+    merchantId: o.merchant_id,
+    priceKobo: num(o.price_kobo),
+    feeKobo: num(o.fee_kobo),
+    delivery: { address: o.delivery_address, contactPhone: o.delivery_phone },
+    status: o.status,
+    createdAt: o.created_at,
+    dispatchedAt: o.dispatched_at,
+    deliveredAt: o.delivered_at,
+    listingTitle: o.listing.title,
+    listingImage: o.listing.images?.[0] ?? null,
+    category: o.listing.category,
+    merchantName: o.merchant.name,
+  }
 }
 
 
@@ -257,8 +327,9 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
 
   async function myMerchantId(): Promise<string> {
     const p = await myProfile()
-    if (!p.merchant_id) throw new ApiError('forbidden', 'This account isn’t linked to a store yet.')
-    return p.merchant_id
+    const shop = p.merchant_id ?? p.seller_id
+    if (!shop) throw new ApiError('forbidden', 'This account isn’t linked to a store or a verified seller shop yet.')
+    return shop
   }
 
   /** The signed-in user's ticket numbers and consolation credit for some listings. */
@@ -307,6 +378,35 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
         return client.storage.from(PHOTO_BUCKET).getPublicUrl(path).data.publicUrl
       }),
     )
+  }
+
+  /** ID photos are private: hand out links that expire after an hour. */
+  async function toApplicationView(a: SellerApplicationRow): Promise<SellerApplicationView> {
+    const { data } = await client.storage.from(ID_BUCKET).createSignedUrls([a.id_photo_path, a.selfie_path], 60 * 60)
+    return {
+      id: a.id,
+      status: a.status,
+      shopName: a.shop_name,
+      legalName: a.legal_name,
+      nin: a.nin,
+      phone: a.phone,
+      address: a.address,
+      area: a.area,
+      idPhotoUrl: data?.[0]?.signedUrl ?? null,
+      selfieUrl: data?.[1]?.signedUrl ?? null,
+      reviewNote: a.review_note,
+      createdAt: a.created_at,
+      updatedAt: a.updated_at,
+      reviewedAt: a.reviewed_at,
+    }
+  }
+
+  async function uploadIdPhoto(userId: string, dataUrl: string, name: string): Promise<string> {
+    const blob = await (await fetch(dataUrl)).blob()
+    const path = `${userId}/${name}-${crypto.randomUUID()}.${blob.type === 'image/png' ? 'png' : blob.type === 'image/webp' ? 'webp' : 'jpg'}`
+    const { error } = await client.storage.from(ID_BUCKET).upload(path, blob, { contentType: blob.type, upsert: false })
+    if (error) throw new ApiError('invalid_input', `Couldn’t upload a photo: ${error.message}`)
+    return path
   }
 
   /** Adds which app the account belongs to (profiles.role) to the auth session. */
@@ -418,6 +518,37 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       return rows.map((r) => toResultView(r, r.listing, me, mine))
     },
 
+    buyNow: async (listingId, delivery) => {
+      const id = await rpc<string>('buy_now', { p_listing_id: listingId, p_address: delivery.address, p_phone: delivery.contactPhone })
+      return toOrderView(unwrap(await client.from('orders').select(ORDER_SELECT).eq('id', id).single<OrderRow>()))
+    },
+
+    listMyOrders: async () => {
+      const me = await requireId()
+      return unwrap(await client.from('orders').select(ORDER_SELECT).eq('user_id', me).order('created_at', { ascending: false }).returns<OrderRow[]>()).map(toOrderView)
+    },
+
+    confirmOrder: (orderId) => rpc('confirm_order', { p_order_id: orderId }),
+
+    // Individual sellers
+    getMySellerApplication: async () => {
+      const me = await requireId()
+      const row = unwrap(await client.from('seller_applications').select('*').eq('user_id', me).maybeSingle<SellerApplicationRow>())
+      return row ? toApplicationView(row) : null
+    },
+
+    submitSellerApplication: async (input) => {
+      const me = await requireId()
+      // Photos come from the browser as data: URLs. Upload them only once the rest is valid,
+      // so a typo doesn't leave stray ID photos behind.
+      const problems = validateSellerApplication(input).map((e) => SELLER_APPLICATION_ERROR_TEXT[e])
+      if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+      const [idPhoto, selfie] = await Promise.all([uploadIdPhoto(me, input.idPhoto, 'id'), uploadIdPhoto(me, input.selfie, 'selfie')])
+      await rpc('submit_seller_application', { p: { ...input, idPhoto, selfie } })
+      const row = unwrap(await client.from('seller_applications').select('*').eq('user_id', me).single<SellerApplicationRow>())
+      return toApplicationView(row)
+    },
+
     // Wallet
     getWallet: async (): Promise<WalletView> => {
       const me = await requireId()
@@ -469,6 +600,20 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       return getListing(id)
     },
 
+    createProduct: async (input: NewProductInput) => {
+      const merchantId = await myMerchantId()
+      const images = await uploadPhotos(merchantId, input.images ?? [])
+      const id = await rpc<string>('create_product', { p: { ...input, images } })
+      return getListing(id)
+    },
+
+    listMerchantOrders: async () => {
+      const id = await myMerchantId()
+      return unwrap(await client.from('orders').select(ORDER_SELECT).eq('merchant_id', id).order('created_at', { ascending: false }).returns<OrderRow[]>()).map(toOrderView)
+    },
+
+    dispatchOrder: (orderId) => rpc('dispatch_order', { p_order_id: orderId }),
+
     // Admin
     listPendingListings: async () => {
       if ((await myProfile()).role !== 'admin') throw new ApiError('forbidden', 'Admins only.')
@@ -477,6 +622,14 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     },
 
     approveListing: (id) => rpc('approve_listing', { p_listing_id: id }),
+
+    listSellerApplications: async () => {
+      const rows = unwrap(await client.from('seller_applications').select('*').eq('status', 'pending').order('updated_at').returns<SellerApplicationRow[]>())
+      return Promise.all(rows.map(toApplicationView))
+    },
+
+    approveSeller: (id) => rpc('approve_seller', { p_application_id: id }),
+    rejectSeller: (id, note) => rpc('reject_seller', { p_application_id: id, p_note: note }),
     rejectListing: (id) => rpc('reject_listing', { p_listing_id: id }),
 
     // Demo (admins only, test mode only; enforced in the database)

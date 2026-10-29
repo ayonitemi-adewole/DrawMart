@@ -10,7 +10,7 @@ import { PGlite } from '@electric-sql/pglite'
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { verifyDraw, winningTicketNumber, createSeed } from '@/domain/draw'
-import { computeListingEconomics } from '@/domain/fees'
+import { computeListingEconomics, platformFeeBps } from '@/domain/fees'
 import { addDays, localDate } from '@/domain/listing'
 
 const sql = (file: string) => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')
@@ -119,6 +119,8 @@ describe('schema and seed', () => {
     await db.exec(sql('seed.sql'))
     const [{ n }] = await admin<{ n: number }>(`select count(*)::int n from public.merchants`)
     expect(n).toBe(5)
+    const [{ products }] = await admin<{ products: number }>(`select count(*)::int products from public.listings where kind = 'product'`)
+    expect(products).toBe(4)
     const [{ results }] = await admin<{ results: number }>(`select count(*)::int results from public.draw_results`)
     expect(results).toBe(3)
   })
@@ -257,7 +259,7 @@ describe('store → admin → draw', () => {
   it('validates listings like the TypeScript rules', async () => {
     const bad = listingInput({ title: ' ', ticketPriceKobo: 5_000, feeBps: 500, durationDays: 90, unsoldPolicy: 'convert_to_sale', images: ['data:image/png;base64,xx'] })
     const e = await expectFail(asUser(store, `select public.create_listing($1)`, [bad]), 'invalid_input')
-    for (const text of ['Give the item a name.', 'at least ₦100', 'between 10% and 30%', 'between 3 and 60 days', 'if the draw doesn’t sell out', 'up to 4 photos'])
+    for (const text of ['Give the item a name.', 'at least ₦100', 'between 3 and 60 days', 'if the draw doesn’t sell out', 'up to 4 photos'])
       expect(e.detail).toContain(text)
     const badHandover = listingInput({ handover: { address: 'Ikeja', contactPhone: '12345', date: localDate(new Date()), slot: 'night' } })
     const e2 = await expectFail(asUser(store, `select public.create_listing($1)`, [badHandover]), 'invalid_input')
@@ -266,10 +268,11 @@ describe('store → admin → draw', () => {
 
   it('prices listings exactly like computeListingEconomics', async () => {
     for (const feeMode of ['seller', 'buyer', 'split'] as const) {
+      // The 1250 sent here is ignored: the fee comes from the price.
       const input = listingInput({ feeMode, priceKobo: 1_234_567, ticketPriceKobo: 33_333, feeBps: 1250 })
       const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [input])
       const [row] = await asUser<{ ticket_count: number; buyer_ticket_price_kobo: string; caution_fee_kobo: string }>(store, `select * from public.listings where id = $1`, [id])
-      const econ = computeListingEconomics({ priceKobo: 1_234_567, ticketPriceKobo: 33_333, feeBps: 1250, feeMode })
+      const econ = computeListingEconomics({ priceKobo: 1_234_567, ticketPriceKobo: 33_333, feeBps: platformFeeBps(1_234_567), feeMode })
       expect(row.ticket_count).toBe(econ.ticketCount)
       expect(Number(row.buyer_ticket_price_kobo)).toBe(econ.buyerTicketKobo)
       expect(Number(row.caution_fee_kobo)).toBe(1_000_000)
@@ -480,6 +483,200 @@ describe('one app per account', () => {
     await asUser(staff, `select public.approve_listing($1)`, [id])
     const [l] = await admin<{ status: string }>(`select status from public.listings where id = $1`, [id])
     expect(l.status).toBe('live')
+  })
+})
+
+describe('regular products and orders', () => {
+  let store: string
+  let otherStore: string
+  let staff: string
+  let buyer: string
+  let productId: string
+  const product = { title: 'Office chair', description: 'Ergonomic, mesh back.', category: 'Home', priceKobo: 4_000_000, feeBps: 1250, images: ['/assets/x.jpg'] }
+  const delivery = ['15 Awolowo Road, Ikoyi', '0803 123 4567']
+
+  beforeAll(async () => {
+    store = await newUser('chairs@example.com', { merchantId: IKEJA })
+    otherStore = await newUser('rival@example.com', { merchantId: '11111111-1111-4111-8111-000000000002' })
+    staff = await newUser('staff3@example.com', { role: 'admin' })
+    buyer = await newUser('shopper@example.com')
+  })
+
+  it('lists products for review with no tickets, handover or caution fee', async () => {
+    const e = await expectFail(asUser(store, `select public.create_product($1)`, [{ ...product, title: ' ', priceKobo: 9_999, feeBps: 900 }]), 'invalid_input')
+    for (const text of ['Give the item a name.', 'at least ₦100']) expect(e.detail).toContain(text)
+    await expectFail(asUser(buyer, `select public.create_product($1)`, [product]), 'forbidden')
+
+    ;[{ id: productId }] = await asUser<{ id: string }>(store, `select public.create_product($1) id`, [product])
+    const [row] = await admin<Record<string, unknown>>(`select * from public.listings where id = $1`, [productId])
+    expect(row).toMatchObject({ kind: 'product', status: 'pending_review', ticket_count: 0, caution_fee_status: 'none', commitment: '' })
+    expect(await admin(`select * from public.listing_handovers where listing_id = $1`, [productId])).toEqual([])
+  })
+
+  it('goes straight on sale when approved', async () => {
+    await asUser(staff, `select public.approve_listing($1)`, [productId])
+    const [row] = await asUser<{ status: string }>(buyer, `select status from public.listings where id = $1`, [productId])
+    expect(row.status).toBe('for_sale')
+  })
+
+  it('checks the delivery details and the wallet before selling', async () => {
+    const e = await expectFail(asUser(buyer, `select public.buy_now($1, 'Ikoyi', '123')`, [productId]), 'invalid_input')
+    expect(e.detail).toContain('full delivery address')
+    expect(e.detail).toContain('Nigerian mobile')
+    await expectFail(asUser(buyer, `select public.buy_now($1, $2, $3)`, [productId, ...delivery]), 'insufficient_funds') // ₦25,000 < ₦40,000
+    await expectFail(asUser(store, `select public.buy_now($1, $2, $3)`, [productId, ...delivery]), 'forbidden')
+    const [live] = await admin<{ id: string }>(`select id from public.listings where status = 'live' limit 1`)
+    await expectFail(asUser(buyer, `select public.buy_now($1, $2, $3)`, [live.id, ...delivery]), 'not_for_sale')
+  })
+
+  it('sells once, paying with credit first, and records the order', async () => {
+    await admin(`insert into public.ledger_entries (user_id, kind, credit_kobo, memo) values ($1, 'store_credit', 300000, 'credit')`, [buyer])
+    await asUser(buyer, `select public.top_up(1500000)`)
+    const [{ id }] = await asUser<{ id: string }>(buyer, `select public.buy_now($1, $2, $3) id`, [productId, ...delivery])
+    expect(await balance(buyer)).toEqual({ cash: String(2_500_000 + 1_500_000 - 3_700_000), credit: '0' })
+    const [order] = await asUser<{ status: string; price_kobo: number; fee_kobo: number; delivery_address: string }>(buyer, `select * from public.orders where id = $1`, [id])
+    expect(order).toMatchObject({ status: 'paid', price_kobo: 4_000_000, fee_kobo: 800_000, delivery_address: '15 Awolowo Road, Ikoyi' })
+    const [l] = await admin<{ status: string }>(`select status from public.listings where id = $1`, [productId])
+    expect(l.status).toBe('sold')
+    await expectFail(asUser(buyer, `select public.buy_now($1, $2, $3)`, [productId, ...delivery]), 'not_for_sale')
+    expect((await asUser(buyer, `select id from public.listings where id = $1`, [productId])).length).toBe(1) // still visible once sold
+  })
+
+  it('shows orders only to the buyer, the store and admins', async () => {
+    expect((await asUser(store, `select * from public.orders`)).length).toBe(1)
+    expect((await asUser(staff, `select * from public.orders`)).length).toBeGreaterThanOrEqual(1)
+    expect(await asUser(otherStore, `select * from public.orders`)).toEqual([])
+    expect(await asUser(null, `select * from public.orders`).catch(() => [])).toEqual([])
+  })
+
+  it('is dispatched by its store and confirmed by its buyer', async () => {
+    const [{ id }] = await admin<{ id: string }>(`select id from public.orders where listing_id = $1`, [productId])
+    await expectFail(asUser(otherStore, `select public.dispatch_order($1)`, [id]), 'invalid_input')
+    await expectFail(asUser(store, `select public.confirm_order($1)`, [id]), 'invalid_input')
+    await asUser(store, `select public.dispatch_order($1)`, [id])
+    await asUser(buyer, `select public.confirm_order($1)`, [id])
+    const [o] = await admin<{ status: string; delivered_at: string | null }>(`select * from public.orders where id = $1`, [id])
+    expect(o.status).toBe('delivered')
+    expect(o.delivered_at).not.toBeNull()
+  })
+
+  it('sells unsold raffles at their fallback price', async () => {
+    const rich = await newUser('rich@example.com')
+    await asUser(rich, `select public.top_up(50000000)`)
+    await asUser(rich, `select public.top_up(50000000)`)
+    await asUser(rich, `select public.top_up(50000000)`)
+    await asUser(rich, `select public.top_up(50000000)`)
+    const [s26] = await admin<{ id: string }>(`select id from public.listings where kind = 'raffle' and status = 'for_sale' and title like 'Samsung Galaxy S26 Ultra, 256GB'`)
+    const [{ id }] = await asUser<{ id: string }>(rich, `select public.buy_now($1, $2, $3) id`, [s26.id, ...delivery])
+    const [o] = await asUser<{ price_kobo: string }>(rich, `select price_kobo from public.orders where id = $1`, [id])
+    expect(Number(o.price_kobo)).toBe(165_000_000)
+  })
+
+  it('keeps the caution fee rules for raffles when rejecting', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
+    await asUser(staff, `select public.reject_listing($1)`, [id])
+    const [{ id: pid }] = await asUser<{ id: string }>(store, `select public.create_product($1) id`, [product])
+    await asUser(staff, `select public.reject_listing($1)`, [pid])
+    const rows = await admin<{ kind: string; caution_fee_status: string }>(`select kind, caution_fee_status from public.listings where id in ($1, $2) order by kind`, [pid, id])
+    expect(rows).toEqual([{ kind: 'product', caution_fee_status: 'none' }, { kind: 'raffle', caution_fee_status: 'kept' }])
+  })
+})
+
+describe('individual sellers', () => {
+  let seller: string
+  let staff: string
+  let shopper: string
+  const application = (who: string, patch: Record<string, unknown> = {}) => ({
+    shopName: 'Tolu’s Gadgets', legalName: 'Toluwani Adebayo', nin: '123 4567 8901', phone: '0803 123 4567',
+    address: '12 Herbert Macaulay Way, Yaba', area: 'Yaba', idPhoto: `${who}/id.jpg`, selfie: `${who}/selfie.jpg`, ...patch,
+  })
+  const product = { title: 'PS5 Slim, barely used', description: 'With two pads.', category: 'Electronics', priceKobo: 1_500_000, feeBps: 1000, images: [] }
+  const appFor = async (u: string) => (await admin<{ id: string; status: string; review_note: string | null }>(`select * from public.seller_applications where user_id = $1`, [u]))[0]
+
+  beforeAll(async () => {
+    seller = await newUser('tolu@example.com')
+    staff = await newUser('staff4@example.com', { role: 'admin' })
+    shopper = await newUser('ngozi@example.com')
+  })
+
+  it('validates applications like sellers.ts, and only own photos', async () => {
+    const e = await expectFail(asUser(seller, `select public.submit_seller_application($1)`, [application(seller, { shopName: '', legalName: 'Tolu', nin: '12', phone: '1', address: 'Yaba', area: '', idPhoto: `${shopper}/id.jpg`, selfie: '' })]), 'invalid_input')
+    for (const text of ['shop a name', 'full legal name', '11-digit NIN', 'Nigerian mobile', 'home address', 'area in Lagos', 'photo of your ID', 'selfie']) expect(e.detail).toContain(text)
+    const store = await newUser('store5@example.com', { merchantId: IKEJA })
+    await expectFail(asUser(store, `select public.submit_seller_application($1)`, [application(store)]), 'forbidden')
+  })
+
+  it('keeps applications private to the applicant and admins', async () => {
+    await asUser(seller, `select public.submit_seller_application($1)`, [application(seller)])
+    await expectFail(asUser(seller, `select public.submit_seller_application($1)`, [application(seller)]), 'invalid_input') // already pending
+    expect((await asUser(seller, `select nin from public.seller_applications`))).toEqual([{ nin: '12345678901' }])
+    expect(await asUser(shopper, `select * from public.seller_applications`)).toEqual([])
+    expect((await asUser(staff, `select * from public.seller_applications where user_id = $1`, [seller])).length).toBe(1)
+  })
+
+  it('can’t list anything before approval', async () => {
+    await expectFail(asUser(seller, `select public.create_product($1)`, [product]), 'forbidden')
+  })
+
+  it('needs a reason to reject, and lets the seller fix and resubmit', async () => {
+    const a = await appFor(seller)
+    await expectFail(asUser(seller, `select public.reject_seller($1, 'nope')`, [a.id]), 'forbidden')
+    await expectFail(asUser(staff, `select public.reject_seller($1, '')`, [a.id]), 'invalid_input')
+    await asUser(staff, `select public.reject_seller($1, 'The selfie is blurry.')`, [a.id])
+    expect(await appFor(seller)).toMatchObject({ status: 'rejected', review_note: 'The selfie is blurry.' })
+    await asUser(seller, `select public.submit_seller_application($1)`, [application(seller, { selfie: `${seller}/selfie2.jpg` })])
+    expect(await appFor(seller)).toMatchObject({ status: 'pending', review_note: null })
+  })
+
+  it('approves into an individual shop that lists products but never raffles', async () => {
+    const a = await appFor(seller)
+    await expectFail(asUser(seller, `select public.approve_seller($1)`, [a.id]), 'forbidden')
+    await asUser(staff, `select public.approve_seller($1)`, [a.id])
+    const [p] = await admin<{ role: string; seller_id: string; kind: string; name: string; cac_number: string }>(
+      `select p.role, p.seller_id, m.kind, m.name, m.cac_number from public.profiles p join public.merchants m on m.id = p.seller_id where p.id = $1`, [seller],
+    )
+    expect(p).toMatchObject({ role: 'buyer', kind: 'individual', name: 'Tolu’s Gadgets', cac_number: '' })
+
+    await expectFail(asUser(seller, `select public.create_listing($1)`, [listingInput()]), 'forbidden')
+    const [{ id }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [product])
+    expect((await asUser(seller, `select status from public.listings where id = $1`, [id]))).toEqual([{ status: 'pending_review' }])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+
+    // Still a buyer: can buy tickets, but not their own item.
+    await expectFail(asUser(seller, `select public.buy_now($1, '12 Herbert Macaulay Way, Yaba', '0803 123 4567')`, [id]), 'forbidden')
+    const [live] = await admin<{ id: string }>(`select id from public.listings where status = 'live' limit 1`)
+    await asUser(seller, `select public.buy_tickets($1, 1)`, [live.id])
+
+    // A buyer buys it; the seller sees and dispatches the order.
+    await asUser(shopper, `select public.top_up(1000000)`)
+    const [{ order }] = await asUser<{ order: string }>(shopper, `select public.buy_now($1, '4 Admiralty Way, Lekki', '0803 765 4321') "order"`, [id])
+    expect((await asUser(seller, `select id from public.orders`)).map((o) => o.id)).toEqual([order])
+    await asUser(seller, `select public.dispatch_order($1)`, [order])
+  })
+
+  it('only links buyers as individual sellers', async () => {
+    await expect(admin(`update public.profiles set role = 'admin' where id = $1`, [seller])).rejects.toThrow(/profiles_seller_is_buyer/)
+  })
+})
+
+describe('value-based platform fee', () => {
+  it('matches platformFeeBps at every tier boundary', async () => {
+    for (const price of [100, 4_999_999, 5_000_000, 49_999_999, 50_000_000, 499_999_999, 500_000_000, 33_000_000_000]) {
+      const [{ bps }] = await admin<{ bps: number }>(`select private.platform_fee_bps($1) bps`, [price])
+      expect(bps).toBe(platformFeeBps(price))
+    }
+  })
+
+  it('ignores any fee a seller sends', async () => {
+    const store = await newUser('cheeky@example.com', { merchantId: IKEJA })
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_product($1) id`, [{ title: 'Lamp', category: 'Home', priceKobo: 60_000_000, feeBps: 1000 }])
+    const [{ id: raffle }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ feeBps: 3000 })])
+    const rows = await admin<{ id: string; fee_bps: number }>(`select id, fee_bps from public.listings where id in ($1, $2)`, [id, raffle])
+    expect(Object.fromEntries(rows.map((r) => [r.id, r.fee_bps]))).toEqual({ [id]: 1250, [raffle]: 2000 })
+  })
+
+  it('can’t be read for a private function by API users', async () => {
+    await expect(asUser(null, `select private.platform_fee_bps(100)`)).rejects.toThrow(/permission denied/)
   })
 })
 

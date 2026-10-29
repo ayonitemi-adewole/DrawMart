@@ -25,6 +25,7 @@ import {
   RefreshIcon,
   SettingsIcon,
   ShieldIcon,
+  StoreIcon,
   TicketIcon,
   WalletIcon,
   type IconComponent,
@@ -530,6 +531,7 @@ const KIND: Record<LedgerKind, { icon: IconComponent; tone: string }> = {
   ticket_purchase: { icon: TicketIcon, tone: "bg-sunken text-muted" },
   refund: { icon: RefreshIcon, tone: "bg-sky-soft text-sky" },
   store_credit: { icon: GiftIcon, tone: "bg-ticket-soft text-ticket-ink" },
+  order_payment: { icon: StoreIcon, tone: "bg-sunken text-muted" },
   adjustment: { icon: ArrowUpIcon, tone: "bg-violet-soft text-violet" },
 };
 

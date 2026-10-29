@@ -5,14 +5,17 @@ Working name: DrawMart (placeholder)
 ## Decided
 - **Launch market:** Lagos only, under an LSLGA public online lottery licence. Expand state by state; restrict ticket purchases by state in the code from day one.
 - **Separate apps:** Buyer, store and admin are separate apps, entered only through one shared sign-in page that sends each account to its own app. Each account belongs to exactly one app; store and admin accounts can't buy tickets. Sign-ups are buyers; DrawMart sets up store accounts after verification. Browsing draws stays public.
-- **Sellers:** Registered stores and companies only (CAC verified, admin-approved). No individual sellers at launch.
+- **Regular products:** Stores list each item as a raffle draw or a regular product. Regular products get an admin review, then go straight on sale at a fixed price; no tickets, escrow or caution fee, and the item stays with the store. The store pays the platform fee (10–30%) out of the sale.
+- **Buy now:** Anything on sale at a fixed price (regular products, and draws that ended unsold) is bought from the wallet, store credit first. Fixed-price buys don't count towards the weekly ticket-spending limit. The buyer gives a Lagos delivery address and phone; the store marks the order sent; the buyer confirms delivery, and only then is the store due its payout. One unit per listing.
+- **Sellers:** Raffle draws: registered stores and companies only (CAC verified, admin-approved). Regular products: stores, and individuals who pass an ID check.
+- **Individual sellers:** Any buyer can apply under **Sell** in the buyer app with their legal name, NIN, phone, home address, a photo of a government ID and a selfie holding it. An admin compares them against a checklist and approves (opening a shop) or sends it back with a reason. Individuals keep their buyer account, sell regular products only (each listing still reviewed), can't buy their own items, and get paid after the buyer confirms delivery. ID photos sit in a private bucket only the applicant and admins can open.
 - **Escrow:** DrawMart collects the item from the store (the store books a pickup day and address) and verifies it in escrow before tickets go on sale. Seller is paid after the winner confirms delivery.
 - **Cars:** Too big to store, so they skip escrow. The store books an on-site inspection (car, VIN, papers, photos) instead, and the car stays with the dealer until the winner collects it.
 - **Caution fee:** Paid by the store when it sends a listing for review. Refunded with the payout if the draw sells out; kept to cover pickup/return or the inspection visit if it doesn't sell out or is rejected.
 - **Categories:** No perishable goods (Food removed), since items can sit in escrow for weeks.
 - **Deadlines:** The store picks the draw length, 3–60 days, counted from approval.
 - **Unsold draws:** The store picks one of: refund buyers; extend once by 7 days, then refund; or refund buyers and keep the item on DrawMart as a regular product at a fixed price the store sets when listing.
-- **Fees:** Platform fee is a per-listing setting: store pays / buyer pays / split. Launch default: store pays, so buyers see one clean ticket price. Minimum fee is 10%.
+- **Fees:** DrawMart sets the platform fee from the item's value; sellers (stores and individuals) never choose the rate and the form doesn't show it, only the naira fee and their payout. Under ₦50,000: 20%; ₦50,000–₦499,999: 15%; ₦500,000–₦4,999,999: 12.5%; ₦5,000,000 and up: 10% (the floor). Raffles are rated on the item price, products on the sale price. On raffles the store still picks who carries the fee: store pays (launch default, so buyers see one clean ticket price) / buyer pays / split. Products: the seller always pays it.
 - **Payments:** Users top up a wallet; tickets are bought from the wallet to avoid gateway fees on small tickets. Store credit is spent before cash.
 - **Top-up provider:** Flutterwave (card, bank transfer, USSD), test keys only until the licence is granted. A top-up is ₦100 to ₦500,000. The wallet is credited only after our server verifies the payment with Flutterwave.
 - **Draws:** Provably fair. Publish SHA-256 of a secret seed before sales; at sell-out, winner = SHA-256(seed:last-ticket-ref) mod total + 1; reveal seed after. Stream draws live.
@@ -24,13 +27,17 @@ Working name: DrawMart (placeholder)
 ## Open
 - Caution fee amounts. Placeholders in `src/domain/listing.ts`: ₦2,500 phones/fashion, ₦7,500 electronics, ₦10,000 home, ₦25,000 cars.
 - Whether the caution fee should also be kept when admin rejects a listing before pickup happens (currently: kept in every non-sell-out case).
-- Buy-now checkout for items kept on sale after an unsold draw (the button currently says "coming next").
+- Order problems: cancellations, refunds if a store can't deliver, and disputes (not built yet; admins handle them by hand).
+- Automatic NIN verification with NIMC through a KYC provider (Dojah, Prembly, Smile ID), instead of only an admin's eyes. Also: how long to keep ID photos and NINs after review (NDPA 2023), and whether to encrypt the NIN column.
+- Limits for new individual sellers (e.g. price cap or number of live items until they have good sales), and removing a seller's shop.
+- Stock: one unit per listing today. Should regular products have a quantity?
+- "Skip the draw: buy now" on a live raffle (the button still says "coming next").
 - Whether selling regular fixed-price items affects the LSLGA licence terms; check with the gaming lawyer.
 - Draw fairness: the closing reference is generated by our server; take it from a public randomness source (e.g. drand) before launch.
 - Store payouts and caution-fee charging: Flutterwave transfers too, or another provider.
 - Whether ₦500,000 is the right single top-up cap, and whether to add a daily deposit cap for responsible gaming.
 - Final name and brand.
-- Fee percentage per category.
+- The fee tier rates and boundaries above are placeholders (edit `public.fee_tiers` and `FEE_TIERS` in `src/domain/fees.ts` together).
 
 ## Status
 - Clickable prototype (buyer app + merchant dashboard) built as a design canvas in Claude.

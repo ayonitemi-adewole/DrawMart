@@ -115,8 +115,10 @@ where id = (select id from auth.users where email = 'you+admin@example.com');
 ## Step 8: Try the whole flow
 
 - **Buyer**: buy tickets on a live draw; your wallet goes down and your numbers appear under Tickets.
-- **Store** (`/store`): create a listing with a photo. The photo uploads to the `listing-photos` storage bucket.
-- **Admin** (`/admin`): approve it in the review queue; it appears on the home page. Under **Live draws & demo**, "Run the draw" sells it out and draws a winner; as the buyer, open the result and press **Verify**.
+- **Store** (`/store`): create a raffle listing with a photo (it uploads to the `listing-photos` storage bucket), and a regular product.
+- **Admin** (`/admin`): approve both in the review queue. The raffle goes live; the product goes straight on sale.
+- **Individual seller**: as a buyer, open **Sell** and apply with ID photos. As the admin, approve it under **Seller ID checks**. Back as the buyer, list a product from **Sell**; the admin approves it like any listing.
+- **Buyer**: buy the product under "Skip the draw" on the home page, with a delivery address. The store marks the order sent under **Orders**; the buyer confirms delivery under **Tickets → Orders**. Under **Live draws & demo**, "Run the draw" sells it out and draws a winner; as the buyer, open the result and press **Verify**.
 - **Wallet**: top-ups (instant test money, or Flutterwave's test checkout once Step 9 is done) and spending limits.
 
 Use a private window per account to keep several signed in at once. Sign in from a second buyer email to see another buyer's view. You won't see the first account's tickets or wallet.
