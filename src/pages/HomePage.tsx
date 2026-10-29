@@ -8,6 +8,7 @@ import { HowItWorksGrid } from '@/components/HowItWorks'
 import { ArrowRightIcon, CoinIcon, FlameIcon, LockIcon, SearchIcon, ShieldIcon, SparklesIcon, XIcon } from '@/components/icons'
 import { isAlmostGone, valueMultiple } from '@/components/ListingCard'
 import { CappedListingGrid, SeeAllLink } from '@/components/ListingGrid'
+import { SponsoredCarousel } from '@/components/SponsoredCarousel'
 import { browseHref } from '@/pages/BrowsePage'
 import { EmptyState, ErrorState, LiveDot, ProductImage, ProgressBar, Skeleton, buttonClass, cx, inputCls } from '@/components/ui'
 import { formatNaira } from '@/domain/money'
@@ -69,6 +70,8 @@ export function HomePage() {
   return (
     <div className="flex flex-col gap-8">
       <Hero listings={all.data} query={query} onQuery={(q) => update({ q: q || undefined })} />
+
+      {!category && !query ? <SponsoredCarousel /> : null}
 
       {!category && !query ? <BigPrizes listings={all.data} /> : null}
 
