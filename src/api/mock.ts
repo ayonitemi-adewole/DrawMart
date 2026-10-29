@@ -675,7 +675,8 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           .map((l) => listingView(db, l))
           .sort((a, b) => {
             if (a.status !== b.status) return a.status === 'live' ? -1 : 1
-            return b.ticketsSold / b.ticketCount - a.ticketsSold / a.ticketCount
+            const share = (l: { ticketsSold: number; ticketCount: number }) => (l.ticketCount ? l.ticketsSold / l.ticketCount : 0)
+            return share(b) - share(a)
           })
       }),
 

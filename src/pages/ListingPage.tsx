@@ -10,6 +10,7 @@ import {
 } from "@/api/hooks";
 import type { ListingView, PurchaseReceipt } from "@/api/types";
 import { BuyNowPanel } from "@/components/BuyNowPanel";
+import { RelatedListings } from "@/components/RelatedListings";
 import { CopyButton } from "@/components/CopyButton";
 import { Countdown } from "@/components/Countdown";
 import {
@@ -79,10 +80,11 @@ export function ListingPage() {
     return (
       <ErrorState error={listing.error} onRetry={() => listing.refetch()} />
     );
+  // Keyed by id: opening a related listing starts fresh (photo, quantity, sheets).
   return listing.data.kind === "product" ? (
-    <ProductDetail listing={listing.data} />
+    <ProductDetail key={listing.data.id} listing={listing.data} />
   ) : (
-    <ListingDetail listing={listing.data} />
+    <ListingDetail key={listing.data.id} listing={listing.data} />
   );
 }
 
@@ -168,6 +170,7 @@ function ProductDetail({ listing: l }: { listing: ListingView }) {
           <BuyNowPanel listing={l} />
         </div>
       </div>
+      <RelatedListings listing={l} />
     </div>
   );
 }
@@ -367,6 +370,8 @@ function ListingDetail({ listing: l }: { listing: ListingView }) {
           <BuyPanel listing={l} left={left} />
         </div>
       </div>
+
+      <RelatedListings listing={l} />
 
       {l.status === "live" && !panelVisible ? (
         <div className="fixed inset-x-3 bottom-[calc(max(env(safe-area-inset-bottom),12px)+80px)] z-20 animate-sheet-up md:hidden">
