@@ -6,10 +6,16 @@ import {
   ScrollRestoration,
   useLocation,
 } from "react-router";
-import { useAccess, useMyListings, useWallet } from "@/api/hooks";
+import {
+  useAccess,
+  useMyListings,
+  useUnreadMessages,
+  useWallet,
+} from "@/api/hooks";
 import { api } from "@/api";
 import { IntroSheet } from "@/components/HowItWorks";
 import {
+  ChatIcon,
   HomeIcon,
   ShieldIcon,
   StoreIcon,
@@ -76,6 +82,7 @@ export function BuyerLayout() {
   const access = useAccess();
   const { pathname, search } = useLocation();
   const active = useActiveTicketCount();
+  const unread = useUnreadMessages();
   const cash = wallet.data?.balance.cashKobo ?? null;
   const credit = wallet.data?.balance.creditKobo ?? 0;
 
@@ -118,6 +125,20 @@ export function BuyerLayout() {
             ))}
           </nav>
           <div className="flex items-center gap-1">
+            {access.signedIn ? (
+              <Link
+                to="/messages"
+                aria-label={unread ? `Messages, ${unread} unread` : "Messages"}
+                className="relative flex size-11 items-center justify-center rounded-xl text-muted no-underline hover:bg-sunken hover:text-ink"
+              >
+                <ChatIcon size={20} />
+                {unread ? (
+                  <span className="absolute top-1.5 right-1.5 flex size-4.5 items-center justify-center rounded-full bg-hot text-[9px] font-extrabold text-white">
+                    {unread > 9 ? "9+" : unread}
+                  </span>
+                ) : null}
+              </Link>
+            ) : null}
             <ThemeToggle />
             {access.ready && !access.signedIn ? (
               <Link

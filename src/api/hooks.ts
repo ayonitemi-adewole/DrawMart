@@ -19,6 +19,9 @@ export const keys = {
   merchantOrders: ['merchant-orders'] as const,
   sellerApplication: ['seller-application'] as const,
   sellerApplications: ['seller-applications'] as const,
+  conversations: ['conversations'] as const,
+  messages: (id: string) => ['messages', id] as const,
+  callPhone: ['call-phone'] as const,
 }
 
 /** The signed-in account, or null. Kept fresh by SessionSync in App.tsx. */
@@ -56,6 +59,44 @@ export const useMerchantOrders = () => useQuery({ queryKey: keys.merchantOrders,
 export const useSellerApplications = () =>
   useQuery({ queryKey: keys.sellerApplications, queryFn: () => api.listSellerApplications(), enabled: useIs('admin') })
 export const usePendingListings = () => useQuery({ queryKey: keys.pending, queryFn: () => api.listPendingListings(), enabled: useIs('admin') })
+
+// Messages. No push channel yet, so open chats poll every few seconds and the inbox less often.
+const useCanChat = () => {
+  const role = useAccess().role
+  return role === 'buyer' || role === 'store'
+}
+export const useConversations = () =>
+  useQuery({ queryKey: keys.conversations, queryFn: () => api.listConversations(), enabled: useCanChat(), refetchInterval: 20_000 })
+export const useUnreadMessages = () => useConversations().data?.reduce((n, c) => n + c.unread, 0) ?? 0
+export const useMessages = (conversationId: string) =>
+  useQuery({ queryKey: keys.messages(conversationId), queryFn: () => api.listMessages(conversationId), enabled: useCanChat(), refetchInterval: 4_000 })
+export const useCallPhone = () => useQuery({ queryKey: keys.callPhone, queryFn: () => api.getCallPhone(), enabled: useHasShop() })
+
+export function useStartConversation() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (listingId: string) => api.startConversation(listingId), onSettled: () => qc.invalidateQueries({ queryKey: keys.conversations }) })
+}
+
+export function useSendMessage(conversationId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: string) => api.sendMessage(conversationId, body),
+    onSettled: () => Promise.all([qc.invalidateQueries({ queryKey: keys.messages(conversationId) }), qc.invalidateQueries({ queryKey: keys.conversations })]),
+  })
+}
+
+export function useMarkConversationRead() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (conversationId: string) => api.markConversationRead(conversationId), onSettled: () => qc.invalidateQueries({ queryKey: keys.conversations }) })
+}
+
+export function useSetCallPhone() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (phone: string | null) => api.setCallPhone(phone),
+    onSettled: () => Promise.all([qc.invalidateQueries({ queryKey: keys.callPhone }), qc.invalidateQueries({ queryKey: keys.conversations })]),
+  })
+}
 
 // Auth. SessionSync (App.tsx) clears the cache when the account changes.
 export const useSendSignInLink = () => useMutation({ mutationFn: ({ email, redirectTo }: { email: string; redirectTo: string }) => api.auth.sendSignInLink(email, redirectTo) })

@@ -202,7 +202,7 @@ describe('mock api', () => {
     await expect(api.buyNow(p.id, { address: 'Ikoyi', contactPhone: '1' })).rejects.toThrow(/full delivery address/)
     const before = (await api.getWallet()).balance.cashKobo
     const order = await api.buyNow(p.id, delivery)
-    expect(order).toMatchObject({ status: 'paid', priceKobo: k(20_000), feeKobo: k(4_000), // 20% under ₦50,000
+    expect(order).toMatchObject({ status: 'paid', priceKobo: k(20_000), feeKobo: k(3_000), // 15% under ₦50,000
       listingTitle: 'Office chair', merchantName: 'Ikeja Partner Store' })
     expect((await api.getWallet()).balance.cashKobo).toBe(before - k(20_000))
     expect((await api.getListing(p.id)).status).toBe('sold')
@@ -247,5 +247,39 @@ describe('mock api', () => {
     expect((await api.listMerchantListings()).map((l) => l.id)).toEqual([p.id])
     await api.approveListing(p.id)
     await expect(api.buyNow(p.id, { address: '12 Herbert Macaulay Way, Yaba', contactPhone: '0803 123 4567' })).rejects.toThrow(/your own item/)
+  })
+
+  it('lets buyers and sellers chat about products, with unread counts and opt-in calls', async () => {
+    const store = memoryStore()
+    const api = createMockApi({ store, latencyMs: 0 })
+    await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
+    const seeded = await api.listConversations()
+    expect(seeded).toHaveLength(1) // the demo buyer's TV chat; the store's chat with Ada isn't theirs
+    expect(seeded[0]).toMatchObject({ me: 'buyer', unread: 1, callPhone: '0803 000 1234', merchantName: 'Surulere Partner Store' })
+
+    const products = await api.listListings({ status: ['for_sale'] })
+    const ikejaPhone = products.find((l) => l.kind === 'product' && l.merchant.id === 'm-ikeja')!
+    const raffle = (await api.listListings())[0]
+    await expect(api.startConversation(raffle.id)).rejects.toThrow(/no seller chat/)
+    const c = await api.startConversation(ikejaPhone.id)
+    expect((await api.startConversation(ikejaPhone.id)).id).toBe(c.id)
+    await expect(api.sendMessage(c.id, '  ')).rejects.toThrow(/Write a message/)
+    await api.sendMessage(c.id, 'Can I pick it up today?')
+    expect(c.callPhone).toBeNull() // the store hasn't shared a number
+
+    // The store sees it as unread, replies, and shares a number.
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const storeInbox = await api.listConversations()
+    expect(storeInbox.map((x) => x.buyerName).sort()).toEqual(['Ada O.', 'You'])
+    expect(storeInbox.find((x) => x.id === c.id)).toMatchObject({ me: 'seller', unread: 1, callPhone: null })
+    await api.markConversationRead(c.id)
+    await api.sendMessage(c.id, 'Yes, any time before 6pm.')
+    await expect(api.setCallPhone('123')).rejects.toThrow(/Nigerian mobile/)
+    await api.setCallPhone('0803 555 0000')
+    expect(await api.getCallPhone()).toBe('0803 555 0000')
+
+    await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
+    expect((await api.listConversations()).find((x) => x.id === c.id)).toMatchObject({ unread: 1, callPhone: '0803 555 0000' })
+    expect((await api.listMessages(c.id)).map((m) => m.sender)).toEqual(['buyer', 'seller'])
   })
 })

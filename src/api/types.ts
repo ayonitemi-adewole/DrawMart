@@ -128,6 +128,37 @@ export interface SellerApplicationView {
   reviewedAt: string | null
 }
 
+/** Which side of a conversation someone is on. */
+export type ChatSide = 'buyer' | 'seller'
+
+export interface ConversationView {
+  id: string
+  listingId: string
+  listingTitle: string
+  listingImage: string | null
+  category: Category
+  priceKobo: Kobo
+  listingStatus: ListingStatus
+  merchantName: string
+  buyerName: string
+  /** The signed-in user's side. An individual seller can be on either side in different chats. */
+  me: ChatSide
+  lastMessage: { body: string; sender: ChatSide; createdAt: string } | null
+  /** Messages from the other side since you last read the chat. */
+  unread: number
+  /** The seller's opt-in call number. Only ever sent to the buyer. */
+  callPhone: string | null
+  updatedAt: string
+}
+
+export interface ChatMessage {
+  id: string
+  conversationId: string
+  sender: ChatSide
+  body: string
+  createdAt: string
+}
+
 export interface ListingFilter {
   category?: Category
   status?: ListingStatus[]
@@ -209,6 +240,18 @@ export interface DrawMartApi {
   listMyOrders(): Promise<OrderView[]>
   /** The buyer confirms the item arrived. */
   confirmOrder(orderId: string): Promise<void>
+
+  // Messages: buyer ↔ seller chat about a regular product
+  /** Opens (or reopens) the buyer's conversation with the seller of a product. */
+  startConversation(listingId: string): Promise<ConversationView>
+  /** Every conversation the signed-in user is in, on either side, newest first. */
+  listConversations(): Promise<ConversationView[]>
+  listMessages(conversationId: string): Promise<ChatMessage[]>
+  sendMessage(conversationId: string, body: string): Promise<ChatMessage>
+  markConversationRead(conversationId: string): Promise<void>
+  /** The signed-in seller's opt-in call number (null: calls off). */
+  getCallPhone(): Promise<string | null>
+  setCallPhone(phone: string | null): Promise<void>
 
   // Individual sellers (buyer accounts that sell regular products)
   getMySellerApplication(): Promise<SellerApplicationView | null>

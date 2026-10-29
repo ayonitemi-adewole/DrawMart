@@ -60,11 +60,11 @@ describe('validateListingEconomics', () => {
 
 describe('platformFeeBps', () => {
   it('sets the rate from the item value', () => {
-    expect(platformFeeBps(k(100))).toBe(2000)
-    expect(platformFeeBps(k(49_999))).toBe(2000)
-    expect(platformFeeBps(k(50_000))).toBe(1500)
-    expect(platformFeeBps(k(500_000))).toBe(1250)
-    expect(platformFeeBps(k(4_999_999))).toBe(1250)
+    expect(platformFeeBps(k(100))).toBe(1500)
+    expect(platformFeeBps(k(49_999))).toBe(1500)
+    expect(platformFeeBps(k(50_000))).toBe(1300)
+    expect(platformFeeBps(k(500_000))).toBe(1150)
+    expect(platformFeeBps(k(4_999_999))).toBe(1150)
     expect(platformFeeBps(k(5_000_000))).toBe(1000)
     expect(platformFeeBps(k(300_000_000))).toBe(1000)
   })

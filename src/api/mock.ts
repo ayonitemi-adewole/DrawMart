@@ -14,6 +14,7 @@ import {
   addDays,
   cautionFeeFor,
   handoverMethodFor,
+  isNigerianMobile,
   localDate,
   settleCautionFee,
   validateHandover,
@@ -32,6 +33,7 @@ import {
   topUpError,
 } from '@/domain/rules'
 import { DELIVERY_ERROR_TEXT, ORDER_ERROR_TEXT, PRODUCT_ERROR_TEXT, checkOrder, saleEconomics, salePriceKobo, validateDelivery, validateProduct } from '@/domain/orders'
+import { MAX_MESSAGES_PER_MINUTE, messageError } from '@/domain/messages'
 import { SELLER_APPLICATION_ERROR_TEXT, normalizeNin, validateSellerApplication } from '@/domain/sellers'
 import type { Category, DrawResult, LedgerEntry, Listing, ListingStatus, Merchant, Order, Ticket, UnsoldPolicy, User } from '@/domain/types'
 import {
@@ -44,12 +46,15 @@ import {
   type WalletView,
   type NewProductInput,
   type SellerApplicationView,
+  type ChatMessage,
+  type ChatSide,
+  type ConversationView,
   type OrderView,
   type AuthAdapter,
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v5' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v6' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session'
 const ME = 'u-me'
 const MY_MERCHANT = 'm-ikeja'
@@ -71,6 +76,20 @@ interface Db {
   sellerApplication: SellerApplicationView | null
   /** The demo buyer's own shop once approved. */
   sellerShopId: string | null
+  conversations: MockConversation[]
+  messages: ChatMessage[]
+  /** Opt-in call numbers by merchant id. */
+  callPhones: Record<string, string>
+}
+
+interface MockConversation {
+  id: string
+  listingId: string
+  buyerId: string
+  merchantId: string
+  lastMessageAt: string
+  buyerReadAt: string
+  sellerReadAt: string
 }
 
 export interface KeyValueStore {
@@ -271,6 +290,7 @@ async function freshDb(): Promise<Db> {
     users: [
       { id: ME, displayName: 'You', state: 'Lagos', weeklyLimitKobo: RULES.defaultWeeklyLimitKobo, ageVerified: true },
       { id: CROWD, displayName: 'Other buyers', state: 'Lagos', weeklyLimitKobo: Number.MAX_SAFE_INTEGER, ageVerified: true },
+      { id: 'u-ada', displayName: 'Ada O.', state: 'Lagos', weeklyLimitKobo: RULES.defaultWeeklyLimitKobo, ageVerified: true },
     ],
     merchants: MERCHANTS.map((x) => ({ ...x })),
     listings: [],
@@ -282,6 +302,9 @@ async function freshDb(): Promise<Db> {
     orders: [],
     sellerApplication: null,
     sellerShopId: null,
+    conversations: [],
+    messages: [],
+    callPhones: { 'm-surulere': '0803 000 1234' },
   }
   for (const p of SEED_PRODUCTS) {
     db.listings.push(productListing({ ...p, priceKobo: nairaToKobo(p.price) }, now - DAY))
@@ -303,7 +326,26 @@ async function freshDb(): Promise<Db> {
     db.listings.push(l)
     await runDraw(db, l, ref, at)
   }
+  seedChats(db, now)
   return db
+}
+
+/** A chat the demo buyer started, and one waiting for the demo store, so both inboxes have something. */
+function seedChats(db: Db, now: number) {
+  const tv = db.listings.find((l) => l.kind === 'product' && l.merchantId === 'm-surulere')
+  const phone = db.listings.find((l) => l.kind === 'product' && l.merchantId === MY_MERCHANT)
+  const chat = (listing: Listing | undefined, buyerId: string, lines: [ChatSide, string, number][], readByBuyer: boolean) => {
+    if (!listing) return
+    const id = uid('C')
+    for (const [sender, body, minsAgo] of lines) db.messages.push({ id: uid('X'), conversationId: id, sender, body, createdAt: iso(now - minsAgo * 60_000) })
+    const last = iso(now - lines[lines.length - 1][2] * 60_000)
+    db.conversations.push({ id, listingId: listing.id, buyerId, merchantId: listing.merchantId, lastMessageAt: last, buyerReadAt: readByBuyer ? last : iso(now - DAY), sellerReadAt: iso(now - DAY) })
+  }
+  chat(tv, ME, [
+    ['buyer', 'Hi, does the TV come with the wall bracket?', 95],
+    ['seller', 'Yes, bracket and remote are in the box. We can deliver to Yaba tomorrow.', 80],
+  ], false)
+  chat(phone, 'u-ada', [['buyer', 'Is the Glacier colour still available? Can I see it in person in Ikeja?', 30]], true)
 }
 
 // -------------------------------------------------------------- draw engine
@@ -390,6 +432,24 @@ function listingView(db: Db, l: Listing, audience: 'buyer' | 'full' = 'buyer'): 
   const myNumbers = db.tickets.filter((t) => t.listingId === l.id && t.userId === ME).map((t) => t.number)
   const r = db.results.find((x) => x.listingId === l.id)
   return { ...l, handover: audience === 'full' ? l.handover : null, merchant, myNumbers, result: r ? resultView(db, r) : null }
+}
+
+function conversationView(db: Db, c: MockConversation, me: ChatSide): ConversationView {
+  const l = db.listings.find((x) => x.id === c.listingId)!
+  const msgs = db.messages.filter((m) => m.conversationId === c.id)
+  const last = msgs[msgs.length - 1]
+  const readAt = me === 'buyer' ? c.buyerReadAt : c.sellerReadAt
+  return {
+    id: c.id, listingId: l.id, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category,
+    priceKobo: l.kind === 'product' ? l.priceKobo : (l.fallbackPriceKobo ?? l.priceKobo), listingStatus: l.status,
+    merchantName: db.merchants.find((m) => m.id === c.merchantId)!.name,
+    buyerName: db.users.find((u) => u.id === c.buyerId)?.displayName ?? 'Buyer',
+    me,
+    lastMessage: last ? { body: last.body, sender: last.sender, createdAt: last.createdAt } : null,
+    unread: msgs.filter((m) => m.sender !== me && m.createdAt > readAt).length,
+    callPhone: me === 'buyer' ? (db.callPhones[c.merchantId] ?? null) : null,
+    updatedAt: c.lastMessageAt,
+  }
 }
 
 function orderView(db: Db, o: Order): OrderView {
@@ -489,6 +549,24 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
   }
 
   const me = (db: Db) => db.users.find((u) => u.id === ME)!
+  /** The shop whose side of chats the signed-in user sees, if any. */
+  const myShop = (db: Db): string | null => {
+    const role = readSession()?.role
+    return role === 'store' || role === undefined ? MY_MERCHANT : role === 'buyer' ? db.sellerShopId : null
+  }
+  /** As buyer if the signed-in user is the demo buyer; otherwise as the shop. */
+  const sideIn = (db: Db, c: MockConversation): ChatSide | null => {
+    const role = readSession()?.role
+    if ((role === 'buyer' || role === undefined) && c.buyerId === ME) return 'buyer'
+    if (c.merchantId === myShop(db)) return 'seller'
+    return null
+  }
+  const conversationOr404 = (db: Db, id: string) => {
+    const c = db.conversations.find((x) => x.id === id)
+    const side = c ? sideIn(db, c) : null
+    if (!c || !side) throw new ApiError('not_found', 'That conversation doesn’t exist.')
+    return { c, side }
+  }
   /** The shop being managed: the demo buyer's own once approved, otherwise the demo store. */
   const shopId = (db: Db) => {
     if (readSession()?.role !== 'buyer') return MY_MERCHANT
@@ -696,6 +774,79 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (!o) throw new ApiError('invalid_input', 'Only your store’s paid orders can be marked as sent.')
         o.status = 'dispatched'
         o.dispatchedAt = iso(now())
+      }),
+
+    startConversation: (listingId) =>
+      tx((db) => {
+        const l = getListingOr404(db, listingId)
+        if (l.kind !== 'product') throw new ApiError('invalid_input', 'Raffle items are held and checked by DrawMart, so there’s no seller chat.')
+        if (l.status !== 'for_sale' && l.status !== 'sold') throw new ApiError('not_found', 'That item isn’t on sale.')
+        if (l.merchantId === db.sellerShopId) throw new ApiError('invalid_input', 'This is your own item.')
+        let c = db.conversations.find((x) => x.listingId === l.id && x.buyerId === ME)
+        if (!c) {
+          const at = iso(now())
+          c = { id: uid('C'), listingId: l.id, buyerId: ME, merchantId: l.merchantId, lastMessageAt: at, buyerReadAt: at, sellerReadAt: iso(0) }
+          db.conversations.push(c)
+        }
+        return conversationView(db, c, 'buyer')
+      }),
+
+    listConversations: () =>
+      tx((db) =>
+        db.conversations
+          .flatMap((c) => {
+            const side = sideIn(db, c)
+            return side ? [conversationView(db, c, side)] : []
+          })
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+      ),
+
+    listMessages: (conversationId) =>
+      tx((db) => {
+        conversationOr404(db, conversationId)
+        return db.messages.filter((m) => m.conversationId === conversationId)
+      }),
+
+    sendMessage: (conversationId, body) =>
+      tx((db) => {
+        const { c, side } = conversationOr404(db, conversationId)
+        const problem = messageError(body)
+        if (problem) throw new ApiError('invalid_input', problem)
+        const minuteAgo = iso(now() - 60_000)
+        if (db.messages.filter((m) => m.conversationId === c.id && m.sender === side && m.createdAt > minuteAgo).length >= MAX_MESSAGES_PER_MINUTE)
+          throw new ApiError('invalid_input', 'You’re sending messages very fast. Wait a moment.')
+        const at = iso(now())
+        const msg: ChatMessage = { id: uid('X'), conversationId: c.id, sender: side, body: body.trim(), createdAt: at }
+        db.messages.push(msg)
+        c.lastMessageAt = at
+        if (side === 'buyer') c.buyerReadAt = at
+        else c.sellerReadAt = at
+        return msg
+      }),
+
+    markConversationRead: (conversationId) =>
+      tx((db) => {
+        const { c, side } = conversationOr404(db, conversationId)
+        if (side === 'buyer') c.buyerReadAt = iso(now())
+        else c.sellerReadAt = iso(now())
+      }),
+
+    getCallPhone: () =>
+      tx((db) => {
+        const shop = myShop(db)
+        return shop ? (db.callPhones[shop] ?? null) : null
+      }),
+
+    setCallPhone: (phone) =>
+      tx((db) => {
+        const shop = myShop(db)
+        if (!shop) throw new ApiError('forbidden', 'Only sellers can share a call number.')
+        if (!phone?.trim()) {
+          delete db.callPhones[shop]
+          return
+        }
+        if (!isNigerianMobile(phone)) throw new ApiError('invalid_input', 'Enter a Nigerian mobile number, e.g. 0803 123 4567.')
+        db.callPhones[shop] = phone.trim()
       }),
 
     getMySellerApplication: () => tx((db) => db.sellerApplication),

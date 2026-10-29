@@ -1,13 +1,13 @@
 import { useState, type FormEvent } from 'react'
-import { Link, useLocation } from 'react-router'
-import { useAccess, useBuyNow, useMyOrders, useWallet } from '@/api/hooks'
+import { Link, useLocation, useNavigate } from 'react-router'
+import { useAccess, useBuyNow, useMerchant, useMyOrders, useStartConversation, useWallet } from '@/api/hooks'
 import type { ListingView, OrderView } from '@/api/types'
 import { handoverMethodFor } from '@/domain/listing'
 import { formatNaira } from '@/domain/money'
 import { DELIVERY_ERROR_TEXT, ORDER_ERROR_TEXT, checkOrder, salePriceKobo, validateDelivery } from '@/domain/orders'
 import { splitPayment } from '@/domain/rules'
 import type { Delivery } from '@/domain/types'
-import { CheckCircleIcon, LockIcon, MapPinIcon, PhoneIcon, ShieldIcon, TruckIcon } from './icons'
+import { ChatIcon, CheckCircleIcon, LockIcon, MapPinIcon, PhoneIcon, ShieldIcon, TruckIcon } from './icons'
 import { Sheet } from './Sheet'
 import { useToast } from './toast'
 import { Button, Card, Field, Notice, buttonClass, cx, errorMessage, inputCls } from './ui'
@@ -43,7 +43,7 @@ export function BuyNowPanel({ listing: l }: { listing: ListingView }) {
   const price = salePriceKobo(l)
   const mine = placed ?? orders.data?.find((o) => o.listingId === l.id)
 
-  if (mine) return <OrderPlaced order={mine} fresh={!!placed} />
+  if (mine) return <OrderPlaced order={mine} fresh={!!placed} listing={l} />
 
   if (price === null)
     return (
@@ -76,6 +76,7 @@ export function BuyNowPanel({ listing: l }: { listing: ListingView }) {
           Buy now for {formatNaira(price)}
         </Button>
       )}
+      <MessageSellerButton listing={l} />
       <Notice icon={product ? ShieldIcon : LockIcon}>
         {product ? `Admin-reviewed listing from ${l.merchant.kind === 'individual' ? 'an ID-verified seller' : 'a verified store'}.` : handoverMethodFor(l.category) === 'inspection' ? 'Inspected by DrawMart.' : 'Still held in DrawMart escrow.'} The store is
         paid only after you confirm delivery.
@@ -202,7 +203,35 @@ const ORDER_STEP: Record<OrderView['status'], string> = {
   delivered: 'Delivered. Enjoy!',
 }
 
-function OrderPlaced({ order: o, fresh }: { order: OrderView; fresh: boolean }) {
+/** Products only: raffle items are held and checked by DrawMart, so there's nobody to ask. */
+function MessageSellerButton({ listing: l }: { listing: ListingView }) {
+  const access = useAccess()
+  const shop = useMerchant()
+  const start = useStartConversation()
+  const navigate = useNavigate()
+  const toast = useToast()
+  const { pathname } = useLocation()
+  if (l.kind !== 'product' || shop.data?.id === l.merchantId) return null
+  if (access.ready && !access.signedIn)
+    return (
+      <Link to={`/login?next=${encodeURIComponent(pathname)}`} className={buttonClass('outline', 'lg', 'w-full')}>
+        <ChatIcon size={18} /> Sign in to message the seller
+      </Link>
+    )
+  return (
+    <Button
+      variant="outline"
+      size="lg"
+      className="w-full"
+      loading={start.isPending}
+      onClick={() => start.mutate(l.id, { onSuccess: (c) => navigate(`/messages/${c.id}`), onError: (e) => toast(errorMessage(e), 'error') })}
+    >
+      <ChatIcon size={18} /> Message {l.merchant.kind === 'individual' ? 'the seller' : l.merchant.name}
+    </Button>
+  )
+}
+
+function OrderPlaced({ order: o, fresh, listing }: { order: OrderView; fresh: boolean; listing: ListingView }) {
   return (
     <Card className="flex flex-col items-center gap-4 p-6 text-center">
       <span className="flex size-16 items-center justify-center rounded-3xl bg-brand-soft text-brand-ink">
@@ -217,6 +246,7 @@ function OrderPlaced({ order: o, fresh }: { order: OrderView; fresh: boolean }) 
       <Link to="/tickets?view=orders" className={buttonClass('outline', 'lg', 'w-full')}>
         Track your order
       </Link>
+      <MessageSellerButton listing={listing} />
     </Card>
   )
 }

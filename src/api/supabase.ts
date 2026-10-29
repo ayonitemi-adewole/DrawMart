@@ -28,6 +28,8 @@ import {
   type OrderView,
   type PaymentsAdapter,
   type SellerApplicationView,
+  type ChatMessage,
+  type ConversationView,
   type PurchaseReceipt,
   type WalletView,
 } from './types'
@@ -529,6 +531,47 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     },
 
     confirmOrder: (orderId) => rpc('confirm_order', { p_order_id: orderId }),
+
+    // Messages
+    startConversation: async (listingId) => {
+      const id = await rpc<string>('start_conversation', { p_listing_id: listingId })
+      const all = await rpc<ConversationView[]>('list_conversations')
+      const c = all.find((x) => x.id === id)
+      if (!c) throw new ApiError('not_found', 'That conversation doesn’t exist.')
+      return { ...c, priceKobo: num(c.priceKobo) }
+    },
+
+    listConversations: async () => (await rpc<ConversationView[]>('list_conversations')).map((c) => ({ ...c, priceKobo: num(c.priceKobo) })),
+
+    listMessages: async (conversationId) => {
+      const rows = unwrap(
+        await client
+          .from('messages')
+          .select('id, conversation_id, sender, body, created_at')
+          .eq('conversation_id', conversationId)
+          .order('created_at')
+          .limit(500)
+          .returns<{ id: string; conversation_id: string; sender: ChatMessage['sender']; body: string; created_at: string }[]>(),
+      )
+      return rows.map((m) => ({ id: m.id, conversationId: m.conversation_id, sender: m.sender, body: m.body, createdAt: m.created_at }))
+    },
+
+    sendMessage: async (conversationId, body) => {
+      const id = await rpc<string>('send_message', { p_conversation_id: conversationId, p_body: body })
+      const m = unwrap(await client.from('messages').select('id, sender, body, created_at').eq('id', id).single<{ id: string; sender: ChatMessage['sender']; body: string; created_at: string }>())
+      return { id: m.id, conversationId, sender: m.sender, body: m.body, createdAt: m.created_at }
+    },
+
+    markConversationRead: (conversationId) => rpc('mark_conversation_read', { p_conversation_id: conversationId }),
+
+    getCallPhone: async () => {
+      const shop = await myMerchantId().catch(() => null)
+      if (!shop) return null
+      const row = unwrap(await client.from('merchant_contacts').select('call_phone').eq('merchant_id', shop).maybeSingle<{ call_phone: string }>())
+      return row?.call_phone ?? null
+    },
+
+    setCallPhone: (phone) => rpc('set_call_phone', { p_phone: phone }),
 
     // Individual sellers
     getMySellerApplication: async () => {

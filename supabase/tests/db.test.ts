@@ -535,7 +535,7 @@ describe('regular products and orders', () => {
     const [{ id }] = await asUser<{ id: string }>(buyer, `select public.buy_now($1, $2, $3) id`, [productId, ...delivery])
     expect(await balance(buyer)).toEqual({ cash: String(2_500_000 + 1_500_000 - 3_700_000), credit: '0' })
     const [order] = await asUser<{ status: string; price_kobo: number; fee_kobo: number; delivery_address: string }>(buyer, `select * from public.orders where id = $1`, [id])
-    expect(order).toMatchObject({ status: 'paid', price_kobo: 4_000_000, fee_kobo: 800_000, delivery_address: '15 Awolowo Road, Ikoyi' })
+    expect(order).toMatchObject({ status: 'paid', price_kobo: 4_000_000, fee_kobo: 600_000, delivery_address: '15 Awolowo Road, Ikoyi' })
     const [l] = await admin<{ status: string }>(`select status from public.listings where id = $1`, [productId])
     expect(l.status).toBe('sold')
     await expectFail(asUser(buyer, `select public.buy_now($1, $2, $3)`, [productId, ...delivery]), 'not_for_sale')
@@ -672,11 +672,82 @@ describe('value-based platform fee', () => {
     const [{ id }] = await asUser<{ id: string }>(store, `select public.create_product($1) id`, [{ title: 'Lamp', category: 'Home', priceKobo: 60_000_000, feeBps: 1000 }])
     const [{ id: raffle }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ feeBps: 3000 })])
     const rows = await admin<{ id: string; fee_bps: number }>(`select id, fee_bps from public.listings where id in ($1, $2)`, [id, raffle])
-    expect(Object.fromEntries(rows.map((r) => [r.id, r.fee_bps]))).toEqual({ [id]: 1250, [raffle]: 2000 })
+    expect(Object.fromEntries(rows.map((r) => [r.id, r.fee_bps]))).toEqual({ [id]: platformFeeBps(60_000_000), [raffle]: platformFeeBps(100_000) })
   })
 
   it('can’t be read for a private function by API users', async () => {
     await expect(asUser(null, `select private.platform_fee_bps(100)`)).rejects.toThrow(/permission denied/)
+  })
+})
+
+describe('buyer and seller messages', () => {
+  let store: string
+  let rival: string
+  let buyer: string
+  let nosy: string
+  let productId: string
+  let raffleId: string
+  let convo: string
+  type Convo = { id: string; me: string; unread: number; callPhone: string | null; buyerName: string; merchantName: string; lastMessage: { body: string } | null }
+  const inbox = async (who: string) => (await asUser<{ c: Convo[] }>(who, `select public.list_conversations() c`))[0].c
+
+  beforeAll(async () => {
+    store = await newUser('chatstore@example.com', { merchantId: IKEJA })
+    rival = await newUser('chatrival@example.com', { merchantId: '11111111-1111-4111-8111-000000000002' })
+    buyer = await newUser('asker@example.com')
+    nosy = await newUser('nosy2@example.com')
+    ;[{ id: productId }] = await admin<{ id: string }>(`select id from public.listings where kind = 'product' and status = 'for_sale' and merchant_id = $1 limit 1`, [IKEJA])
+    ;[{ id: raffleId }] = await admin<{ id: string }>(`select id from public.listings where kind = 'raffle' and status = 'live' limit 1`)
+  })
+
+  it('opens one conversation per buyer per product, never for raffles', async () => {
+    ;[{ id: convo }] = await asUser<{ id: string }>(buyer, `select public.start_conversation($1) id`, [productId])
+    const [{ again }] = await asUser<{ again: string }>(buyer, `select public.start_conversation($1) again`, [productId])
+    expect(again).toBe(convo)
+    await expectFail(asUser(buyer, `select public.start_conversation($1)`, [raffleId]), 'invalid_input')
+    await expectFail(asUser(store, `select public.start_conversation($1)`, [productId]), 'forbidden')
+  })
+
+  it('lets only the buyer and the seller read and write', async () => {
+    await asUser(buyer, `select public.send_message($1, 'Is it still available?')`, [convo])
+    await asUser(store, `select public.send_message($1, 'Yes! Sealed in the box.')`, [convo])
+    expect((await asUser(buyer, `select body from public.messages order by created_at`)).map((m) => m.body)).toEqual(['Is it still available?', 'Yes! Sealed in the box.'])
+    expect((await asUser(store, `select sender from public.messages where conversation_id = $1 order by created_at`, [convo])).map((m) => m.sender)).toEqual(['buyer', 'seller'])
+    for (const who of [nosy, rival]) {
+      expect(await asUser(who, `select * from public.messages`)).toEqual([])
+      expect(await asUser(who, `select * from public.conversations`)).toEqual([])
+      await expectFail(asUser(who, `select public.send_message($1, 'hi')`, [convo]), 'forbidden')
+    }
+    await expect(asUser(buyer, `insert into public.messages (conversation_id, sender, sender_user_id, body) values ($1, 'seller', $2, 'fake')`, [convo, buyer])).rejects.toThrow(/permission denied/)
+    await expectFail(asUser(buyer, `select public.send_message($1, '   ')`, [convo]), 'invalid_input')
+  })
+
+  it('counts unread messages for each side', async () => {
+    const [b] = await inbox(buyer)
+    expect(b).toMatchObject({ me: 'buyer', unread: 1, merchantName: 'Ikeja Partner Store', lastMessage: { body: 'Yes! Sealed in the box.' } })
+    await asUser(buyer, `select public.mark_conversation_read($1)`, [convo])
+    expect((await inbox(buyer))[0].unread).toBe(0)
+    const [s] = await inbox(store)
+    expect(s).toMatchObject({ me: 'seller', unread: 0, buyerName: 'asker' })
+    expect(await inbox(nosy)).toEqual([])
+  })
+
+  it('shares the seller’s call number only with buyers they’re talking to', async () => {
+    await expectFail(asUser(store, `select public.set_call_phone('123')`), 'invalid_input')
+    await expectFail(asUser(nosy, `select public.set_call_phone('0803 555 0000')`), 'forbidden')
+    await asUser(store, `select public.set_call_phone('0803 555 0000')`)
+    expect((await inbox(buyer))[0].callPhone).toBe('0803 555 0000')
+    expect((await inbox(store))[0].callPhone).toBeNull()
+    expect((await asUser(buyer, `select call_phone from public.merchant_contacts`))).toEqual([{ call_phone: '0803 555 0000' }])
+    expect(await asUser(nosy, `select * from public.merchant_contacts`)).toEqual([])
+    await asUser(store, `select public.set_call_phone(null)`)
+    expect((await inbox(buyer))[0].callPhone).toBeNull()
+  })
+
+  it('limits how fast one person can send', async () => {
+    for (let i = 0; i < 19; i++) await asUser(buyer, `select public.send_message($1, $2)`, [convo, `msg ${i}`])
+    const e = await expectFail(asUser(buyer, `select public.send_message($1, 'one too many')`, [convo]), 'invalid_input')
+    expect(e.detail).toContain('very fast')
   })
 })
 

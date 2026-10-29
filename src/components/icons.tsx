@@ -354,3 +354,17 @@ export const CameraIcon = (p: IconProps) => (
     <circle cx="12" cy="13" r="3.5" />
   </Icon>
 );
+
+export const ChatIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z" />
+    <path d="M8.5 11h.01M12 11h.01M15.5 11h.01" />
+  </Icon>
+)
+
+export const SendIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M21 3 10 14" />
+    <path d="m21 3-7 18-4-7-7-4 18-7Z" />
+  </Icon>
+)

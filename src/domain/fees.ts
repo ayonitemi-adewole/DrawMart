@@ -23,8 +23,8 @@ export interface ListingEconomics {
 export const MIN_TICKET_KOBO = 100_00 // ₦100
 export const MAX_TICKETS_PER_LISTING = 10_000
 /** Platform fee bounds in basis points. The floor is 10%. */
-export const MIN_FEE_BPS = 1000
-export const MAX_FEE_BPS = 3000
+export const MIN_FEE_BPS = 250
+export const MAX_FEE_BPS = 2000
 
 /**
  * The platform fee is set by DrawMart from the item's value, never by the
@@ -34,10 +34,10 @@ export const MAX_FEE_BPS = 3000
  * docs/product-decisions.md).
  */
 export const FEE_TIERS: readonly { fromKobo: Kobo; bps: number }[] = [
-  { fromKobo: 0, bps: 1500 }, // under ₦50,000: 15%
-  { fromKobo: 50_000_00, bps: 1300 }, // ₦50,000 – ₦499,999: 13%
-  { fromKobo: 500_000_00, bps: 1150 }, // ₦500,000 – ₦4,999,999: 11.5%
-  { fromKobo: 5_000_000_00, bps: MIN_FEE_BPS }, // ₦5,000,000 and up: 10%
+  { fromKobo: 0, bps: 750 }, // under ₦50,000: 7.5%
+  { fromKobo: 50_000_00, bps: 500 }, // ₦50,000 – ₦499,999: 5%
+  { fromKobo: 500_000_00, bps: 300 }, // ₦500,000 – ₦4,999,999: 3%
+  { fromKobo: 5_000_000_00, bps: MIN_FEE_BPS }, // ₦5,000,000 and up: 2.5%
 ]
 
 export function platformFeeBps(priceKobo: Kobo): number {
