@@ -14,6 +14,7 @@ import { AdminBoostsPage } from '@/pages/admin/AdminBoostsPage'
 import { AdminDrawsPage } from '@/pages/admin/AdminDrawsPage'
 import { AdminPage } from '@/pages/admin/AdminPage'
 import { AdminSellersPage } from '@/pages/admin/AdminSellersPage'
+import { BrowsePage } from '@/pages/BrowsePage'
 import { DrawsPage } from '@/pages/DrawsPage'
 import { HomePage } from '@/pages/HomePage'
 import { ListingPage } from '@/pages/ListingPage'
@@ -94,6 +95,7 @@ const router = createBrowserRouter([
       { index: true, element: <HomePage /> },
       { path: 'listings/:id', element: <ListingPage /> },
       { path: 'tickets', element: <RequireSignIn role="buyer"><TicketsPage /></RequireSignIn> },
+      { path: 'browse', element: <BrowsePage /> },
       { path: 'draws', element: <DrawsPage /> },
       { path: 'draws/:id', element: <ResultPage /> },
       { path: 'wallet', element: <RequireSignIn role="buyer"><WalletPage /></RequireSignIn> },

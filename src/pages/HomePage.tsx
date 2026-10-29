@@ -6,7 +6,9 @@ import { AllCategoriesIcon, CATEGORY_STYLE } from '@/components/category'
 import { Countdown } from '@/components/Countdown'
 import { HowItWorksGrid } from '@/components/HowItWorks'
 import { ArrowRightIcon, CoinIcon, FlameIcon, LockIcon, SearchIcon, ShieldIcon, SparklesIcon, XIcon } from '@/components/icons'
-import { ListingCard, isAlmostGone, valueMultiple } from '@/components/ListingCard'
+import { isAlmostGone, valueMultiple } from '@/components/ListingCard'
+import { CappedListingGrid, SeeAllLink } from '@/components/ListingGrid'
+import { browseHref } from '@/pages/BrowsePage'
 import { EmptyState, ErrorState, LiveDot, ProductImage, ProgressBar, Skeleton, buttonClass, cx, inputCls } from '@/components/ui'
 import { formatNaira } from '@/domain/money'
 import { RULES } from '@/domain/rules'
@@ -140,12 +142,10 @@ export function HomePage() {
               </button>
             }
           />
+        ) : category || query ? (
+          <CappedListingGrid listings={visible} rows={MAX_ROWS} seeAll={{ to: browseHref({ category, q: query || undefined, type: 'draws' }), label: 'See all draws' }} />
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {visible.map((l, i) => (
-              <ListingCard key={l.id} listing={l} style={{ animationDelay: `${Math.min(i, 8) * 50}ms` }} />
-            ))}
-          </div>
+          <ByCategory listings={visible} type="draws" />
         )}
       </section>
 
@@ -158,11 +158,11 @@ export function HomePage() {
             </h2>
             <p className="text-sm text-muted">Regular products from verified stores, plus draws that ended without selling out. Pay from your wallet; the store delivers.</p>
           </div>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {shop.map((l) => (
-              <ListingCard key={l.id} listing={l} />
-            ))}
-          </div>
+          {category ? (
+            <CappedListingGrid listings={shop} rows={MAX_ROWS} seeAll={{ to: browseHref({ category, type: 'buy' }), label: 'See all items' }} />
+          ) : (
+            <ByCategory listings={shop} type="buy" />
+          )}
         </section>
       ) : null}
 
@@ -178,6 +178,35 @@ export function HomePage() {
           See past results and check the maths yourself →
         </Link>
       </section>
+    </div>
+  )
+}
+
+/** Rows of cards shown per category on the explore page before "See all". */
+const MAX_ROWS = 5
+
+/** One block per category, in the usual category order, each capped at MAX_ROWS rows. */
+function ByCategory({ listings, type }: { listings: ListingView[]; type: 'draws' | 'buy' }) {
+  return (
+    <div className="flex flex-col gap-8">
+      {CATEGORIES.map((c) => {
+        const items = listings.filter((l) => l.category === c)
+        if (!items.length) return null
+        const Icon = CATEGORY_STYLE[c].icon
+        const to = browseHref({ category: c, type })
+        return (
+          <div key={c} className="flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="flex items-center gap-2 font-display text-lg font-extrabold">
+                <Icon size={18} className="text-brand" /> {c}
+                <span className="text-sm font-semibold text-subtle">({items.length})</span>
+              </h3>
+              <SeeAllLink to={to} label={`All ${c.toLowerCase()}`} />
+            </div>
+            <CappedListingGrid listings={items} rows={MAX_ROWS} seeAll={{ to, label: `See all ${c.toLowerCase()}` }} />
+          </div>
+        )
+      })}
     </div>
   )
 }
