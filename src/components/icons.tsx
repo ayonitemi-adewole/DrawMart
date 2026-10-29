@@ -100,10 +100,11 @@ export const ArrowRightIcon = (p: IconProps) => (
     <path d="M5 12h14M13 6l6 6-6 6" />
   </Icon>
 );
-export const CoinIcon = (p: IconProps) => (
+/** ₦ in a coin: money, store credit, sales. */
+export const NairaIcon = (p: IconProps) => (
   <Icon {...p}>
     <circle cx="12" cy="12" r="9" />
-    <path d="M12 7v10M9 10h4.5a1.5 1.5 0 0 1 0 3h-3a1.5 1.5 0 0 0 0 3H15" />
+    <path d="M9 16.5v-9l6 9v-9M7 10.5h10M7 13.5h10" />
   </Icon>
 );
 export const StoreIcon = (p: IconProps) => (
@@ -379,5 +380,24 @@ export const EyeIcon = (p: IconProps) => (
 export const ChartIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+  </Icon>
+)
+
+/** A rising chart: boosts. */
+export const TrendingUpIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M22 7l-8.5 8.5-5-5L2 17" />
+    <path d="M16 7h6v6" />
+  </Icon>
+)
+
+/** Two hands shaking: sponsored (paid) placement. */
+export const HandshakeIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="m11 17 2 2a1 1 0 1 0 3-3" />
+    <path d="m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4" />
+    <path d="m21 3 1 11h-2" />
+    <path d="M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3" />
+    <path d="M3 4h8" />
   </Icon>
 )

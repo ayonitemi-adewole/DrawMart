@@ -6,7 +6,7 @@ import { Confetti } from "@/components/Confetti";
 import { CopyButton } from "@/components/CopyButton";
 import {
   CheckIcon,
-  CoinIcon,
+  NairaIcon,
   HashIcon,
   LockIcon,
   PlayIcon,
@@ -247,7 +247,7 @@ function Result({
               </strong>
               {!r.iWon && r.myCreditKobo > 0 ? (
                 <span className="flex items-center gap-1 text-xs font-bold text-ticket-ink">
-                  <CoinIcon size={14} /> +{formatNaira(r.myCreditKobo)}
+                  <NairaIcon size={14} /> +{formatNaira(r.myCreditKobo)}
                 </span>
               ) : null}
             </div>

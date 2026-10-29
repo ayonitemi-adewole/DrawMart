@@ -4,7 +4,7 @@ import { formatNaira } from '@/domain/money'
 import { salePriceKobo } from '@/domain/orders'
 import { isBoosted } from '@/domain/boosts'
 import { Countdown } from './Countdown'
-import { CheckIcon, FlameIcon, MapPinIcon, SparklesIcon, TicketIcon } from './icons'
+import { CheckIcon, FlameIcon, HandshakeIcon, MapPinIcon, TicketIcon } from './icons'
 import { Badge, ProductImage, ProgressBar, cx } from './ui'
 
 export function isAlmostGone(l: ListingView) {
@@ -56,7 +56,7 @@ export function ListingCard({ listing: l, className, style }: { listing: Listing
             </Badge>
             {isBoosted(l, Date.now()) ? (
               <Badge tone="ticket" className="shadow-card">
-                <SparklesIcon size={12} /> Sponsored
+                <HandshakeIcon size={12} /> Sponsored
               </Badge>
             ) : null}
           </span>

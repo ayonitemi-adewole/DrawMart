@@ -9,7 +9,7 @@ import {
   ArrowRightIcon,
   BackIcon,
   ChevronRightIcon,
-  SparklesIcon,
+  HandshakeIcon,
 } from "./icons";
 import { ProductImage, cx } from "./ui";
 
@@ -158,7 +158,7 @@ function Slide({
       )}
       <div className="absolute inset-0 -z-10 bg-linear-to-t from-hero via-hero/30 to-transparent sm:bg-linear-to-r sm:from-hero sm:via-hero/30 sm:to-transparent" />
       <span className="flex w-fit items-center gap-1.5 rounded-full bg-ticket px-2.5 py-1 text-[11px] font-extrabold text-on-ticket shadow-card">
-        <SparklesIcon size={12} /> Sponsored
+        <HandshakeIcon size={12} /> Sponsored
       </span>
       <div className="flex max-w-lg flex-col gap-1 text-on-brand-muted">
         <span className="text-xs font-semibold">

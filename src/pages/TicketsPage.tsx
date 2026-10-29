@@ -5,7 +5,7 @@ import type { ListingView } from "@/api/types";
 import { Countdown } from "@/components/Countdown";
 import {
   ChevronRightIcon,
-  CoinIcon,
+  NairaIcon,
   StoreIcon,
   TicketIcon,
   TrophyIcon,
@@ -177,7 +177,7 @@ function DrawTickets() {
               hint={`${past.length} finished`}
             />
             <StatTile
-              icon={CoinIcon}
+              icon={NairaIcon}
               tone="hot"
               label="Credit earned"
               value={formatNaira(credit)}

@@ -4,7 +4,7 @@ import { BoostHistory } from './BoostControl'
 import type { ListingMetrics } from '@/api/types'
 import { formatNaira } from '@/domain/money'
 import { INSIGHT_TIP_TEXT, conversionBps, formatRate, insightTip, sumMetrics, type DayMetrics, type MetricRange } from '@/domain/metrics'
-import { ChartIcon, ChatIcon, CoinIcon, EyeIcon, SparklesIcon, UsersIcon } from './icons'
+import { ChartIcon, ChatIcon, NairaIcon, EyeIcon, SparklesIcon, UsersIcon } from './icons'
 import { Badge, Card, EmptyState, ErrorState, ProductImage, Segmented, Skeleton, StatTile, cx } from './ui'
 
 const STATUS_TEXT: Partial<Record<ListingMetrics['status'], string>> = {
@@ -59,7 +59,7 @@ function Report({ listings, daily, days }: { listings: ListingMetrics[]; daily: 
     <>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile icon={EyeIcon} label="Views" value={t.views.toLocaleString('en-NG')} hint={`${t.visitors.toLocaleString('en-NG')} people`} />
-        <StatTile icon={CoinIcon} tone="violet" label="Sales" value={formatNaira(t.salesKobo)} hint={`${t.units.toLocaleString('en-NG')} ${hasProducts ? 'tickets & items' : 'tickets'} sold`} />
+        <StatTile icon={NairaIcon} tone="violet" label="Sales" value={formatNaira(t.salesKobo)} hint={`${t.units.toLocaleString('en-NG')} ${hasProducts ? 'tickets & items' : 'tickets'} sold`} />
         <StatTile icon={UsersIcon} tone="sky" label="Visitors who bought" value={formatRate(conversionBps(t.buyers, t.visitors))} hint={`${t.buyers.toLocaleString('en-NG')} buyers`} />
         <StatTile icon={ChatIcon} tone="ticket" label="Buyer chats" value={t.chats.toLocaleString('en-NG')} hint={hasProducts ? 'Questions about your items' : 'Chats are for regular products'} />
       </div>

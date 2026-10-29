@@ -7,7 +7,7 @@ import { Countdown } from "@/components/Countdown";
 import { HowItWorksGrid } from "@/components/HowItWorks";
 import {
   ArrowRightIcon,
-  CoinIcon,
+  NairaIcon,
   FlameIcon,
   LockIcon,
   SearchIcon,
@@ -519,7 +519,7 @@ function Hero({
               <SparklesIcon size={16} className="text-ticket" /> Provably fair
             </li>
             <li className="flex items-center gap-1.5">
-              <CoinIcon size={16} className="text-ticket" />{" "}
+              <NairaIcon size={16} className="text-ticket" />{" "}
               {RULES.consolationCreditBps / 100}% back if you lose
             </li>
           </ul>

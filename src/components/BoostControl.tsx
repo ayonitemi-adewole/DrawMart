@@ -6,7 +6,7 @@ import { boostComparison, canBoost, isBoosted } from '@/domain/boosts'
 import { lagosDay } from '@/domain/metrics'
 import { formatNaira } from '@/domain/money'
 import { dateTime, shortDate } from '@/lib/time'
-import { ChartIcon, CheckIcon, ClockIcon, RefreshIcon, ShieldIcon, SparklesIcon, type IconComponent } from './icons'
+import { ChartIcon, CheckIcon, ClockIcon, RefreshIcon, ShieldIcon, TrendingUpIcon, type IconComponent } from './icons'
 import { Sheet } from './Sheet'
 import { useToast } from './toast'
 import { Badge, Button, ErrorState, Notice, Skeleton, cx, errorMessage } from './ui'
@@ -56,11 +56,11 @@ export function BoostRow({ listing: l }: { listing: ListingView }) {
       ) : pending ? (
         <PendingBoost boost={pending} />
       ) : isBoosted(l, now) ? (
-        <StateLine icon={SparklesIcon} tone="text-ticket-ink">
+        <StateLine icon={TrendingUpIcon} tone="text-ticket-ink">
           <strong>Boost active</strong> until {dateTime(l.boostedUntil!)}. Shown first, marked Sponsored.
         </StateLine>
       ) : last ? (
-        <StateLine icon={SparklesIcon} tone="text-muted">
+        <StateLine icon={TrendingUpIcon} tone="text-muted">
           Last boost ended {dateTime(last.endsAt!)}.
         </StateLine>
       ) : (
@@ -74,7 +74,7 @@ export function BoostRow({ listing: l }: { listing: ListingView }) {
         ) : null}
         {canBuy ? (
           <Button variant="outline" size="sm" className="ml-auto min-h-11" onClick={() => setOpen(true)}>
-            <SparklesIcon size={16} /> {isBoosted(l, now) ? 'Extend boost' : 'Boost'}
+            <TrendingUpIcon size={16} /> {isBoosted(l, now) ? 'Extend boost' : 'Boost'}
           </Button>
         ) : null}
       </div>
@@ -337,7 +337,7 @@ export function BoostHistory() {
   return (
     <section className="flex flex-col gap-3">
       <h3 className="flex items-center gap-2 font-bold">
-        <SparklesIcon size={18} className="text-brand" /> Your boosts
+        <TrendingUpIcon size={18} className="text-brand" /> Your boosts
       </h3>
       <div className="divide-y divide-line overflow-hidden rounded-3xl border border-line bg-surface">
         {boosts.map((b) => {

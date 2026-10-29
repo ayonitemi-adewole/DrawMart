@@ -18,7 +18,7 @@ import {
   BackIcon,
   CheckIcon,
   ChevronRightIcon,
-  CoinIcon,
+  NairaIcon,
   GaugeIcon,
   LockIcon,
   MapPinIcon,
@@ -160,7 +160,7 @@ function ProductDetail({ listing: l }: { listing: ListingView }) {
                 delivery.
               </li>
               <li className="flex gap-3">
-                <CoinIcon size={20} className="shrink-0 text-brand" /> Store
+                <NairaIcon size={20} className="shrink-0 text-brand" /> Store
                 credit from past draws is spent first.
               </li>
             </ul>
@@ -623,7 +623,7 @@ function InfoTabs({ listing: l }: { listing: ListingView }) {
               is only paid after the winner confirms delivery.
             </li>
             <li className="flex gap-3">
-              <CoinIcon size={20} className="shrink-0 text-brand" /> Everyone
+              <NairaIcon size={20} className="shrink-0 text-brand" /> Everyone
               else gets {RULES.consolationCreditBps / 100}% of their spend back
               as store credit.
             </li>
@@ -921,7 +921,7 @@ function BuyPanel({
 
       <Notice
         tone="ticket"
-        icon={CoinIcon}
+        icon={NairaIcon}
         title="Didn’t win? You still get something."
       >
         {RULES.consolationCreditBps / 100}% of what you spent comes back as

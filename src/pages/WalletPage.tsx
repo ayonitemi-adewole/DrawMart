@@ -17,7 +17,7 @@ import {
   ArrowDownIcon,
   ArrowUpIcon,
   ClockIcon,
-  CoinIcon,
+  NairaIcon,
   GaugeIcon,
   GiftIcon,
   MapPinIcon,
@@ -196,7 +196,7 @@ function BalanceCard({ w }: { w: WalletView }) {
         </div>
         <div className="flex flex-col rounded-2xl bg-ticket/15 p-3 ring-1 ring-ticket/30">
           <span className="flex items-center gap-1 text-[11px] font-semibold text-ticket">
-            <CoinIcon size={12} /> Store credit
+            <NairaIcon size={12} /> Store credit
           </span>
           <span className="text-lg font-extrabold text-ticket tabular-nums">
             {formatNaira(w.balance.creditKobo)}

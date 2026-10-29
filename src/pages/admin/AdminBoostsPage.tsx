@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useBoostStatus, useBoosts, useSetBoostSettings } from '@/api/hooks'
 import type { BoostSettings, BoostView } from '@/api/types'
-import { SparklesIcon, UsersIcon } from '@/components/icons'
+import { TrendingUpIcon, UsersIcon } from '@/components/icons'
 import { useToast } from '@/components/toast'
 import { Badge, Button, Card, EmptyState, ErrorState, Field, PageTitle, ProgressBar, Skeleton, errorMessage, inputCls } from '@/components/ui'
 import { formatNaira } from '@/domain/money'
@@ -105,7 +105,7 @@ function BoostList() {
   const now = new Date().toISOString()
   if (q.isPending) return <Skeleton className="h-40" />
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />
-  if (q.data.length === 0) return <EmptyState icon={SparklesIcon} title="No boosts yet" body="Paid boosts will show up here." />
+  if (q.data.length === 0) return <EmptyState icon={TrendingUpIcon} title="No boosts yet" body="Paid boosts will show up here." />
   return (
     <Card className="divide-y divide-line overflow-hidden">
       {q.data.map((b) => {

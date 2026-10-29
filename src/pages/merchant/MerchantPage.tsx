@@ -11,7 +11,7 @@ import {
   CheckCircleIcon,
   CheckIcon,
   ClipboardIcon,
-  CoinIcon,
+  NairaIcon,
   LayoutIcon,
   LockIcon,
   MapPinIcon,
@@ -121,7 +121,7 @@ export function MerchantPage() {
         <StatTile icon={TicketIcon} label="Live & on sale" value={active.length} hint={`${active.filter((l) => l.kind === 'raffle').length} draws`} />
         <StatTile icon={ClipboardIcon} tone="ticket" label="In review" value={review.length} hint="Waiting on review, pickup or inspection" />
         <StatTile icon={TruckIcon} tone="sky" label="Orders to send" value={toSend} hint={`${orders.data?.length ?? 0} orders in all`} />
-        <StatTile icon={CoinIcon} tone="violet" label="Payout after delivery" value={formatNaira(awaiting)} hint="Includes caution fees back" />
+        <StatTile icon={NairaIcon} tone="violet" label="Payout after delivery" value={formatNaira(awaiting)} hint="Includes caution fees back" />
       </div>
 
       <Segmented<Tab>
