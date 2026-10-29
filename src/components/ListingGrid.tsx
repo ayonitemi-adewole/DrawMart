@@ -33,6 +33,11 @@ export function ListingRow({ listings, label }: { listings: ListingView[]; label
     setEdges({ start: el.scrollLeft <= 4, end: el.scrollLeft + el.clientWidth >= el.scrollWidth - 4 })
   }, [])
 
+  // A new set or order of cards (a filter, sort or search) starts the row from the
+  // beginning: otherwise the browser keeps the row snapped to the card it was
+  // showing, wherever that card has moved to.
+  const order = listings.map((l) => l.id).join(',')
+
   useEffect(() => {
     measure()
     const el = scroller.current
@@ -40,7 +45,7 @@ export function ListingRow({ listings, label }: { listings: ListingView[]; label
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [measure, listings.length])
+  }, [measure, order])
 
   const page = (dir: 1 | -1) => {
     const el = scroller.current
@@ -52,6 +57,7 @@ export function ListingRow({ listings, label }: { listings: ListingView[]; label
   return (
     <div className="relative">
       <div
+        key={order}
         ref={scroller}
         onScroll={measure}
         role="list"

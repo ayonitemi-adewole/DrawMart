@@ -76,7 +76,8 @@ export function HomePage() {
       if (v) next.set(k, v);
       else next.delete(k);
     }
-    setParams(next, { replace: true });
+    // Filters, sort and search stay where you are on the page.
+    setParams(next, { replace: true, preventScrollReset: true });
   };
 
   const visible = useMemo(() => {

@@ -62,7 +62,7 @@ export function BrowsePage() {
     if (k === 'all') next.delete('type')
     else next.set('type', k)
     next.delete('page')
-    setParams(next, { replace: true })
+    setParams(next, { replace: true, preventScrollReset: true })
   }
 
   return (
