@@ -17,6 +17,7 @@ import { IntroSheet } from "@/components/HowItWorks";
 import {
   ChatIcon,
   HomeIcon,
+  LogoMark,
   ShieldIcon,
   StoreIcon,
   TicketIcon,
@@ -44,7 +45,7 @@ export function Logo({ suffix, to = "/" }: { suffix?: string; to?: string }) {
       aria-label={`DrawMart${suffix ? " " + suffix : ""} home`}
     >
       <span className="flex size-9 -rotate-6 items-center justify-center rounded-xl bg-linear-to-br from-brand to-hero text-ticket shadow-glow transition group-hover:rotate-0">
-        <TicketIcon size={20} strokeWidth={2.4} />
+        <LogoMark size={20} strokeWidth={2.4} />
       </span>
       <span className="font-display text-[21px] font-extrabold tracking-tight">
         Draw<span className="text-brand">Mart</span>

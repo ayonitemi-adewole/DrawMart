@@ -381,3 +381,17 @@ export const ChartIcon = (p: IconProps) => (
     <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
   </Icon>
 )
+
+/**
+ * The DrawMart logo mark: a lottery ticket on shopping-cart wheels.
+ * Use it only for the brand (header, sign-in, favicon); use TicketIcon for tickets.
+ */
+export const LogoMark = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M2 3h2a1 1 0 0 1 1 1v2" />
+    <path d="M5 6h15a1 1 0 0 1 1 1v1.75a1.75 1.75 0 0 0 0 3.5V14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-1.75a1.75 1.75 0 0 0 0-3.5z" />
+    <path d="M15 8.2v.8M15 11.6v.8" />
+    <circle cx="8.5" cy="19" r="1.75" />
+    <circle cx="17.5" cy="19" r="1.75" />
+  </Icon>
+)
