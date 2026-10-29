@@ -429,7 +429,9 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
   const auth: AuthAdapter = {
     emailLinks: true,
     // The demo accounts only exist on a local database (supabase/seed-local-accounts.sql).
-    demoAccounts: import.meta.env.DEV && opts.testMode ? DEMO_ACCOUNTS : [],
+    // Buyer and store test accounts exist on any test-mode project (seed_test_accounts);
+    // the admin only on a local database.
+    demoAccounts: opts.testMode ? DEMO_ACCOUNTS.filter((a) => a.role !== 'admin' || import.meta.env.DEV) : [],
     async getSession() {
       const { data } = await client.auth.getSession()
       return toSession(data.session)
@@ -743,6 +745,7 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
 
     // Demo (admins only, test mode only; enforced in the database)
     demoSellOut: (id) => rpc('demo_sell_out', { p_listing_id: id }),
+    resetTestData: () => rpc('reset_test_data'),
     demoExpire: (id) => rpc('demo_expire', { p_listing_id: id }),
   }
 }

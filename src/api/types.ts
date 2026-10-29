@@ -252,6 +252,11 @@ export interface DemoAccount {
   email: string
   password: string
   role: AccountRole
+  name: string
+  /** The mock's user id (buyers) or store id (stores). */
+  mockId: string
+  /** Shown under the name, e.g. "ID-verified seller". */
+  note?: string
 }
 
 export interface AuthAdapter {
@@ -369,4 +374,10 @@ export interface DrawMartApi {
   demoExpire(listingId: string): Promise<void>
   /** Wipes all data. Only the in-browser mock can do this. */
   demoReset?(): Promise<void>
+  /**
+   * Admins, test mode only: puts every listing, ticket, order, payment, chat,
+   * boost and view back to the sample data, and every buyer back to the
+   * starting balance. Accounts are kept.
+   */
+  resetTestData(): Promise<void>
 }

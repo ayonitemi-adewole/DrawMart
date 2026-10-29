@@ -18,7 +18,7 @@ describe('mock api', () => {
   it('seeds live listings without leaking draw seeds', async () => {
     const api = make()
     const listings = await api.listListings()
-    expect(listings.length).toBe(10)
+    expect(listings.length).toBe(24)
     for (const l of listings) {
       expect(l.status).toBe('live')
       expect(l.commitment).toMatch(/^[0-9a-f]{64}$/)
@@ -270,7 +270,7 @@ describe('mock api', () => {
     // The store sees it as unread, replies, and shares a number.
     await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
     const storeInbox = await api.listConversations()
-    expect(storeInbox.map((x) => x.buyerName).sort()).toEqual(['Ada O.', 'You'])
+    expect(storeInbox.map((x) => x.buyerName).sort()).toEqual(['Ada Okafor', 'Chidi Eze'])
     expect(storeInbox.find((x) => x.id === c.id)).toMatchObject({ me: 'seller', unread: 1, callPhone: null })
     await api.markConversationRead(c.id)
     await api.sendMessage(c.id, 'Yes, any time before 6pm.')
@@ -353,5 +353,30 @@ describe('mock api', () => {
 
     await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
     await expect(api.getBoostInsights(boost.id)).rejects.toMatchObject({ code: 'not_found' })
+  })
+
+  it('gives every demo account its own data, all starting with the same balance', async () => {
+    const api = make()
+    await api.auth.signInWithPassword('chidi@drawmart.test', 'drawmart-demo')
+    expect((await api.getWallet()).balance.cashKobo).toBe(k(25_000))
+    const [phone] = await api.listListings({ category: 'Phones' })
+    await api.buyTickets(phone.id, 1)
+    expect((await api.getWallet()).balance.cashKobo).toBe(k(25_000) - phone.buyerTicketPriceKobo)
+
+    await api.auth.signInWithPassword('ngozi@drawmart.test', 'drawmart-demo')
+    expect((await api.getWallet()).balance.cashKobo).toBe(k(25_000))
+    expect((await api.getListing(phone.id)).myNumbers).toEqual([])
+    expect((await api.getCurrentUser()).displayName).toBe('Ngozi Bello')
+
+    // Each store manages its own listings.
+    await api.auth.signInWithPassword('lekki@drawmart.test', 'drawmart-demo')
+    expect((await api.getMyMerchant()).name).toBe('Lekki Partner Store')
+    expect((await api.listMerchantListings()).every((l) => l.merchant.id === 'm-lekki')).toBe(true)
+
+    // The ID-verified seller already has a shop with items.
+    await api.auth.signInWithPassword('seller@drawmart.test', 'drawmart-demo')
+    expect(await api.getMySellerApplication()).toMatchObject({ status: 'approved' })
+    expect((await api.getMyMerchant()).kind).toBe('individual')
+    expect((await api.listMerchantListings()).length).toBe(3)
   })
 })

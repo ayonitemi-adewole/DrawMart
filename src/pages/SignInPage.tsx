@@ -31,6 +31,12 @@ const ROLE_BUTTON: Record<AccountRole, { label: string; icon: IconComponent }> =
     admin: { label: "Admin", icon: ShieldIcon },
   };
 
+const ROLE_GROUP: Record<AccountRole, string> = {
+  buyer: "Buyers (buyer app)",
+  store: "Stores (store app)",
+  admin: "Admin (admin app)",
+};
+
 const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 
 /**
@@ -168,41 +174,55 @@ export function SignInPage() {
       </Card>
 
       {demoAccounts.length ? (
-        <Card className="flex flex-col gap-3 p-4">
-          <span className="text-xs font-extrabold tracking-wider text-subtle uppercase">
-            Demo accounts
-          </span>
-          <div className="grid grid-cols-3 gap-2">
-            {demoAccounts.map((a) => {
-              const b = ROLE_BUTTON[a.role];
-              return (
-                <Button
-                  key={a.email}
-                  variant="outline"
-                  size="sm"
-                  className="min-h-11"
-                  disabled={busy}
-                  onClick={() => {
-                    setMethod("password");
-                    setEmail(a.email);
-                    setPassword(a.password);
-                    passwordSignIn.mutate({
-                      email: a.email,
-                      password: a.password,
-                    });
-                  }}
-                >
-                  <b.icon size={16} /> {b.label}
-                </Button>
-              );
-            })}
+        <Card className="flex flex-col gap-4 p-4">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-xs font-extrabold tracking-wider text-subtle uppercase">
+              Test accounts
+            </span>
+            <span className="text-xs text-subtle">
+              Tap one to sign in. Password for all: {demoAccounts[0].password}.{" "}
+              {emailLinks
+                ? "Test mode only."
+                : "Data stays in this browser."}
+            </span>
           </div>
-          <span className="text-xs text-subtle">
-            {emailLinks
-              ? "Only exist on a local database (npx supabase db reset)."
-              : "Each opens its own app. Data stays in this browser."}{" "}
-            Password: {demoAccounts[0].password}
-          </span>
+          {(["buyer", "store", "admin"] as const).map((role) => {
+            const accounts = demoAccounts.filter((a) => a.role === role);
+            if (!accounts.length) return null;
+            const b = ROLE_BUTTON[role];
+            return (
+              <div key={role} className="flex flex-col gap-2">
+                <span className="flex items-center gap-1.5 text-xs font-bold text-muted">
+                  <b.icon size={14} /> {ROLE_GROUP[role]}
+                </span>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {accounts.map((a) => (
+                    <button
+                      key={a.email}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => {
+                        setMethod("password");
+                        setEmail(a.email);
+                        setPassword(a.password);
+                        passwordSignIn.mutate({
+                          email: a.email,
+                          password: a.password,
+                        });
+                      }}
+                      className="flex min-h-11 flex-col items-start justify-center rounded-xl border border-line-strong px-3 py-2 text-left transition hover:border-ink/40 disabled:opacity-60"
+                    >
+                      <span className="text-sm font-bold">{a.name}</span>
+                      <span className="text-[11px] text-subtle">
+                        {a.note ? `${a.note} · ` : ""}
+                        {a.email}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </Card>
       ) : null}
 

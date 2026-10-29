@@ -171,7 +171,20 @@ npx supabase start      # prints a local API URL and publishable key for .env.lo
 npx supabase db reset   # re-runs migrations, seed.sql and seed-local-accounts.sql
 ```
 
-`seed-local-accounts.sql` adds three password accounts for local testing only (password `drawmart-demo`): `buyer@drawmart.test`, `store@drawmart.test` (Ikeja Partner Store) and `admin@drawmart.test`. The sign-in page has buttons that fill them in. **Never run that file on a hosted project.** It creates an admin with a published password. `db push` doesn't run seeds, so it can't happen by accident.
+`seed-local-accounts.sql` adds `admin@drawmart.test` (password `drawmart-demo`) for local testing only. **Never run that file on a hosted project.** It creates an admin with a published password. `db push` doesn't run seeds, so it can't happen by accident.
+
+## Test accounts and resetting test data
+
+While test mode is on, the database has password accounts for testing, all with the password `drawmart-demo` (listed in `src/api/demoAccounts.ts`; the sign-in page shows a button for each):
+
+- Buyers: `buyer@`, `chidi@`, `ngozi@`, `emeka@`, `funke@drawmart.test`, and `seller@drawmart.test`, a buyer who passed the ID check and has a shop (Tolu’s Gadgets).
+- Stores: `store@` (Ikeja), `lekki@`, `surulere@`, `yaba@`, `vi@drawmart.test`.
+
+To start over, sign in as an admin, open **Live draws & demo**, and press **Reset test data**. It deletes every listing, ticket, result, order, wallet entry, top-up, chat, boost, seller application and page view; puts the sample stores and listings back; creates any missing test accounts; and gives every buyer the starting ₦25,000. Accounts and their roles are kept. It refuses to run once test mode is off.
+
+On a project that's never been seeded, the same thing from the **SQL Editor**: `select private.seed_demo_data(); select private.seed_test_accounts();`
+
+The test accounts use a published password, so anyone who reads the repo can sign in as them. That's fine with test money; they're never created once test mode is off, but **delete them before going live** (Authentication → Users, search `drawmart.test`).
 
 ## Changing the database later
 

@@ -61,11 +61,15 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v8' // bump when seed data or the Db shape changes
-const SESSION_KEY = 'drawmart:mock-session'
+const STORAGE_KEY = 'drawmart:mock-db:v9' // bump when seed data or the Db shape changes
+const SESSION_KEY = 'drawmart:mock-session:v2'
+/** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
 const MY_MERCHANT = 'm-ikeja'
 const CROWD = 'u-crowd'
+/** seller@drawmart.test, an ID-verified individual seller, and their shop. */
+const TOLU = 'u-tolu'
+const TOLU_SHOP = 'm-tolu'
 const DAY = 24 * 60 * 60 * 1000
 
 interface Db {
@@ -79,10 +83,12 @@ interface Db {
   results: DrawResult[]
   pendingLimits: Record<string, { amountKobo: number; effectiveAt: string }>
   orders: Order[]
-  /** The demo buyer's application to sell, if any. */
-  sellerApplication: SellerApplicationView | null
-  /** The demo buyer's own shop once approved. */
-  sellerShopId: string | null
+  /** Buyers' applications to sell, by user id. */
+  sellerApplications: Record<string, SellerApplicationView>
+  /** Individual sellers' own shops: user id → merchant id. */
+  sellerShops: Record<string, string>
+  /** Not stored: the buyer the current call acts for, set by tx(). */
+  viewer?: string
   conversations: MockConversation[]
   messages: ChatMessage[]
   /** Opt-in call numbers by merchant id. */
@@ -196,6 +202,76 @@ const SEED_LISTINGS: SeedListing[] = [
     description: 'Inverter with two batteries, installed by the store.',
     price: 1_800_000, ticket: 6_000, sold: 122, closesInHours: 96,
   },
+  {
+    merchantId: 'm-lekki', title: 'Samsung Galaxy S26, 256GB', category: 'Phones',
+    description: 'Brand new and sealed, with local warranty.',
+    price: 1_350_000, ticket: 2_500, sold: 120, closesInHours: 72,
+  },
+  {
+    merchantId: 'm-yaba', title: 'Google Pixel 10 Pro, 256GB', category: 'Phones',
+    description: 'Brand new, unlocked, with a one-year warranty.',
+    price: 1_500_000, ticket: 5_000, sold: 60, closesInHours: 120, unsold: 'extend_once',
+  },
+  {
+    merchantId: 'm-surulere', title: 'Tecno Phantom V Fold 2', category: 'Phones',
+    description: 'Brand new foldable with charger and case.',
+    price: 950_000, ticket: 2_000, sold: 300, closesInHours: 30,
+  },
+  {
+    merchantId: 'm-yaba', title: 'PlayStation 5 Pro bundle', category: 'Electronics',
+    description: 'Console, two controllers and three games.',
+    price: 1_200_000, ticket: 2_000, sold: 410, closesInHours: 20,
+  },
+  {
+    merchantId: 'm-surulere', title: 'Sony 65-inch Bravia 7', category: 'Electronics',
+    description: '4K mini-LED TV. Delivery and wall mounting included.',
+    price: 1_650_000, ticket: 5_000, sold: 90, closesInHours: 150, unsold: 'convert_to_sale', fallback: 1_700_000,
+  },
+  {
+    merchantId: MY_MERCHANT, title: 'Apple Watch Ultra 3', category: 'Electronics',
+    description: 'Titanium, GPS + cellular, brand new.',
+    price: 1_050_000, ticket: 2_500, sold: 200, closesInHours: 60,
+  },
+  {
+    merchantId: 'm-yaba', title: '10kVA solar system, installed', category: 'Home',
+    description: 'Inverter, lithium batteries and 12 panels, installed by the store.',
+    price: 6_500_000, ticket: 10_000, sold: 230, closesInHours: 400, unsold: 'extend_once',
+  },
+  {
+    merchantId: 'm-lekki', title: 'Samsung 2-door fridge, 450L', category: 'Home',
+    description: 'Frost-free, inverter compressor, brand new.',
+    price: 1_100_000, ticket: 2_500, sold: 150, closesInHours: 90,
+  },
+  {
+    merchantId: 'm-surulere', title: 'LG front-load washer, 9kg', category: 'Home',
+    description: 'Inverter direct drive, brand new with warranty.',
+    price: 780_000, ticket: 2_000, sold: 80, closesInHours: 110, unsold: 'convert_to_sale', fallback: 800_000,
+  },
+  {
+    merchantId: 'm-vi', title: 'Lexus RX 350 2023', category: 'Cars',
+    description: 'Foreign-used, inspected, papers complete. Registration in the winner’s name.',
+    price: 95_000_000, ticket: 20_000, sold: 1_500, closesInHours: 500, unsold: 'extend_once',
+  },
+  {
+    merchantId: 'm-vi', title: 'Honda Accord 2022', category: 'Cars',
+    description: 'Foreign-used, low mileage, inspected.',
+    price: 38_000_000, ticket: 10_000, sold: 900, closesInHours: 350,
+  },
+  {
+    merchantId: 'm-lekki', title: 'Rolex Datejust 41', category: 'Fashion',
+    description: 'Brand new with box and papers.',
+    price: 18_000_000, ticket: 10_000, sold: 420, closesInHours: 300,
+  },
+  {
+    merchantId: MY_MERCHANT, title: 'Louis Vuitton Keepall 50', category: 'Fashion',
+    description: 'Authentic, with receipt and dust bag.',
+    price: 4_200_000, ticket: 5_000, sold: 260, closesInHours: 180, unsold: 'convert_to_sale', fallback: 4_000_000,
+  },
+  {
+    merchantId: 'm-yaba', title: 'Air Jordan 1 bundle, 3 pairs', category: 'Fashion',
+    description: 'Three colourways, any size from 40 to 46.',
+    price: 650_000, ticket: 1_000, sold: 380, closesInHours: 40,
+  },
   // A draw that ended unsold and stayed on as a regular product.
   {
     merchantId: 'm-lekki', title: 'Samsung Galaxy S26 Ultra, 256GB', category: 'Phones', images: img('samsungS26UltraBlack.jpg'),
@@ -232,6 +308,85 @@ const SEED_PRODUCTS: { merchantId: string; title: string; description: string; c
   {
     merchantId: 'm-vi', title: 'Mercedes-AMG G 63 2025, Night Black', category: 'Cars', images: img('mercedesBenzG632025.jpg'),
     description: 'Brand new, dealer warranty, registration in the buyer’s name. View at our VI showroom.', price: 345_000_000, status: 'pending_review',
+  },  {
+    merchantId: MY_MERCHANT, title: 'AirPods Pro 3', category: 'Electronics', images: [],
+    description: 'Brand new and sealed.', price: 420_000, status: 'for_sale',
+  },
+  {
+    merchantId: MY_MERCHANT, title: 'Samsung Galaxy Watch 8', category: 'Electronics', images: [],
+    description: 'Brand new, 44mm, with charger.', price: 380_000, status: 'for_sale',
+  },
+  {
+    merchantId: MY_MERCHANT, title: 'UK-used iPhone 18 Pro Max, 256GB', category: 'Phones', images: img('iphone18pmBlack.jpg'),
+    description: 'UK-used, battery health 96%. Comes with a 3-month store warranty.', price: 2_150_000, status: 'for_sale',
+  },
+  {
+    merchantId: 'm-lekki', title: 'Samsung Galaxy S26 Ultra, 1TB', category: 'Phones', images: img('samsungS26Ultra.jpg'),
+    description: 'Brand new and sealed, with S Pen.', price: 2_450_000, status: 'for_sale',
+  },
+  {
+    merchantId: 'm-lekki', title: 'Dyson V15 cordless vacuum', category: 'Home', images: [],
+    description: 'Brand new with all attachments.', price: 1_250_000, status: 'for_sale',
+  },
+  {
+    merchantId: 'm-lekki', title: 'Gucci horsebit loafers', category: 'Fashion', images: [],
+    description: 'Authentic, sizes 41 to 45.', price: 1_100_000, status: 'for_sale',
+  },
+  {
+    merchantId: 'm-surulere', title: 'LG UHD 55-inch smart TV', category: 'Electronics', images: img('LG55inchSmartTv.jpg'),
+    description: 'With wall bracket. Delivery anywhere in Lagos.', price: 690_000, status: 'for_sale',
+  },
+  {
+    merchantId: 'm-surulere', title: 'Hisense 1.5HP inverter AC', category: 'Home', images: [],
+    description: 'Installation in Lagos included.', price: 520_000, status: 'for_sale',
+  },
+  {
+    merchantId: 'm-surulere', title: 'Office desk and chair set', category: 'Home', images: [],
+    description: 'Solid wood desk with an ergonomic mesh chair.', price: 350_000, status: 'for_sale',
+  },
+  {
+    merchantId: 'm-yaba', title: 'MacBook Air 13-inch, M4', category: 'Electronics', images: [],
+    description: '16GB, 512GB SSD, brand new.', price: 1_650_000, status: 'for_sale',
+  },
+  {
+    merchantId: 'm-yaba', title: 'HP LaserJet Pro printer', category: 'Electronics', images: [],
+    description: 'Wireless, prints and scans.', price: 285_000, status: 'for_sale',
+  },
+  {
+    merchantId: 'm-yaba', title: 'JBL Charge 6 speaker', category: 'Electronics', images: [],
+    description: 'Waterproof Bluetooth speaker, brand new.', price: 240_000, status: 'for_sale',
+  },
+  {
+    merchantId: 'm-yaba', title: 'Ankara fabric bundle, 5 × 6 yards', category: 'Fashion', images: [],
+    description: 'Assorted prints, 100% cotton.', price: 85_000, status: 'for_sale',
+  },
+  {
+    merchantId: 'm-vi', title: 'Toyota Camry 2018, Nigerian-used', category: 'Cars', images: img('toyotaCamry2018.jpg'),
+    description: 'One owner, inspected, papers complete. View at our VI showroom.', price: 13_500_000, status: 'for_sale',
+  },
+  {
+    merchantId: 'm-vi', title: 'Mercedes-Benz GLE 450 2021', category: 'Cars', images: img('mercedesBenzGle63s2025.jpg'),
+    description: 'Foreign-used, full service history.', price: 78_000_000, status: 'for_sale',
+  },
+  {
+    merchantId: 'm-vi', title: 'Front and rear dashcam', category: 'Electronics', images: [],
+    description: 'Installed while you wait at our VI showroom.', price: 120_000, status: 'for_sale',
+  },
+  {
+    merchantId: TOLU_SHOP, title: 'PS5 Slim, barely used', category: 'Electronics', images: [],
+    description: 'With two controllers. Pickup in Yaba or delivery.', price: 650_000, status: 'for_sale',
+  },
+  {
+    merchantId: TOLU_SHOP, title: 'iPad 10th gen, 64GB', category: 'Electronics', images: [],
+    description: 'Like new, with case and charger.', price: 420_000, status: 'for_sale',
+  },
+  {
+    merchantId: TOLU_SHOP, title: 'Nintendo Switch 2', category: 'Electronics', images: [],
+    description: 'Sealed. Bought abroad.', price: 520_000, status: 'pending_review',
+  },
+  {
+    merchantId: 'm-lekki', title: 'Samsung soundbar Q800', category: 'Electronics', images: [],
+    description: 'With wireless subwoofer.', price: 560_000, status: 'pending_review',
   },
 ]
 
@@ -296,24 +451,38 @@ function crowdBuys(db: Db, listing: Listing, quantity: number, at: string): stri
   return purchaseId
 }
 
+const DEMO_BUYERS = DEMO_ACCOUNTS.filter((a) => a.role === 'buyer')
+const WELCOME_KOBO = nairaToKobo(25_000)
+
+/** seller@drawmart.test already passed the ID check and has a shop. */
+function seedSellerShop(db: Db, now: number) {
+  db.merchants.push({ id: TOLU_SHOP, kind: 'individual', name: 'Tolu’s Gadgets', area: 'Yaba', cacNumber: '', verified: true })
+  db.sellerShops[TOLU] = TOLU_SHOP
+  const at = iso(now - 10 * DAY)
+  db.sellerApplications[TOLU] = {
+    id: uid('S'), status: 'approved', shopName: 'Tolu’s Gadgets', legalName: 'Toluwani Adebayo', nin: '12345678901', phone: '0803 123 4567',
+    address: '12 Herbert Macaulay Way, Yaba', area: 'Yaba', idPhotoUrl: null, selfieUrl: null, reviewNote: null, createdAt: at, updatedAt: at, reviewedAt: at,
+  }
+}
+
 async function freshDb(): Promise<Db> {
   const now = Date.now()
   const db: Db = {
     users: [
-      { id: ME, displayName: 'You', state: 'Lagos', weeklyLimitKobo: RULES.defaultWeeklyLimitKobo, ageVerified: true },
+      ...DEMO_BUYERS.map((a) => ({ id: a.mockId, displayName: a.name, state: 'Lagos', weeklyLimitKobo: RULES.defaultWeeklyLimitKobo, ageVerified: true })),
       { id: CROWD, displayName: 'Other buyers', state: 'Lagos', weeklyLimitKobo: Number.MAX_SAFE_INTEGER, ageVerified: true },
-      { id: 'u-ada', displayName: 'Ada O.', state: 'Lagos', weeklyLimitKobo: RULES.defaultWeeklyLimitKobo, ageVerified: true },
     ],
     merchants: MERCHANTS.map((x) => ({ ...x })),
     listings: [],
     seeds: {},
     tickets: [],
-    ledger: [{ id: uid('E'), userId: ME, kind: 'topup', cashKobo: nairaToKobo(25_000), creditKobo: 0, memo: 'Welcome top-up (test money)', createdAt: iso(now - DAY) }],
+    // Every buyer starts with the same test money (welcome_credit_kobo on Supabase).
+    ledger: DEMO_BUYERS.map((a) => ({ id: uid('E'), userId: a.mockId, kind: 'topup' as const, cashKobo: WELCOME_KOBO, creditKobo: 0, memo: 'Welcome top-up (test money)', createdAt: iso(now - DAY) })),
     results: [],
     pendingLimits: {},
     orders: [],
-    sellerApplication: null,
-    sellerShopId: null,
+    sellerApplications: {},
+    sellerShops: {},
     conversations: [],
     messages: [],
     callPhones: { 'm-surulere': '0803 000 1234' },
@@ -322,8 +491,9 @@ async function freshDb(): Promise<Db> {
     // The demo never reaches the real threshold, so boosts start switched on.
     boostSettings: { minActiveBuyers: BOOST_DEFAULTS.minActiveBuyers, forcedOn: true, maxActive: BOOST_DEFAULTS.maxActiveBoosts },
   }
+  seedSellerShop(db, now)
   for (const p of SEED_PRODUCTS) {
-    db.listings.push(productListing({ ...p, priceKobo: nairaToKobo(p.price) }, now - DAY))
+    db.listings.push({ ...productListing({ ...p, priceKobo: nairaToKobo(p.price) }, now - DAY), status: p.status })
   }
   for (const s of SEED_LISTINGS) {
     const l = await makeListing(s, now, db.seeds)
@@ -367,10 +537,10 @@ function seedBoosts(db: Db, now: number) {
   }
 }
 
-/** A month of made-up visits to the demo store's listings, so its insights aren't empty. */
+/** A month of made-up visits to every listing, so each seller's insights have something in them. */
 function seedViews(db: Db, now: number) {
   for (const l of db.listings) {
-    if (l.merchantId !== MY_MERCHANT || !['live', 'for_sale', 'drawn'].includes(l.status)) continue
+    if (!['live', 'for_sale', 'drawn'].includes(l.status)) continue
     const popularity = 2 + Math.random() * 10
     for (let d = 29; d >= 0; d--) {
       const day = lagosDay(now - d * DAY)
@@ -395,7 +565,7 @@ function seedChats(db: Db, now: number) {
     ['buyer', 'Hi, does the TV come with the wall bracket?', 95],
     ['seller', 'Yes, bracket and remote are in the box. We can deliver to Yaba tomorrow.', 80],
   ], false)
-  chat(phone, 'u-ada', [['buyer', 'Is the Glacier colour still available? Can I see it in person in Ikeja?', 30]], true)
+  chat(phone, 'u-chidi', [['buyer', 'Is the Glacier colour still available? Can I see it in person in Ikeja?', 30]], true)
 }
 
 // -------------------------------------------------------------- draw engine
@@ -467,10 +637,11 @@ function applyPendingLimits(db: Db, now: number): boolean {
 // ------------------------------------------------------------------ views
 
 function resultView(db: Db, r: DrawResult): DrawResultView {
+  const me = db.viewer ?? ME
   const l = db.listings.find((x) => x.id === r.listingId)!
-  const myNumbers = db.tickets.filter((t) => t.listingId === l.id && t.userId === ME).map((t) => t.number)
-  const myCreditKobo = db.ledger.filter((e) => e.userId === ME && e.kind === 'store_credit' && e.listingId === l.id).reduce((s, e) => s + e.creditKobo, 0)
-  return { ...r, listingTitle: l.title, listingImage: l.images[0] ?? null, ticketCount: l.ticketCount, iWon: r.winnerUserId === ME, myNumbers, myCreditKobo }
+  const myNumbers = db.tickets.filter((t) => t.listingId === l.id && t.userId === me).map((t) => t.number)
+  const myCreditKobo = db.ledger.filter((e) => e.userId === me && e.kind === 'store_credit' && e.listingId === l.id).reduce((s, e) => s + e.creditKobo, 0)
+  return { ...r, listingTitle: l.title, listingImage: l.images[0] ?? null, ticketCount: l.ticketCount, iWon: r.winnerUserId === me, myNumbers, myCreditKobo }
 }
 
 /**
@@ -479,7 +650,7 @@ function resultView(db: Db, r: DrawResult): DrawResultView {
  */
 function listingView(db: Db, l: Listing, audience: 'buyer' | 'full' = 'buyer'): ListingView {
   const merchant = db.merchants.find((m) => m.id === l.merchantId)!
-  const myNumbers = db.tickets.filter((t) => t.listingId === l.id && t.userId === ME).map((t) => t.number)
+  const myNumbers = db.tickets.filter((t) => t.listingId === l.id && t.userId === (db.viewer ?? ME)).map((t) => t.number)
   const r = db.results.find((x) => x.listingId === l.id)
   return { ...l, handover: audience === 'full' ? l.handover : null, merchant, myNumbers, result: r ? resultView(db, r) : null }
 }
@@ -571,10 +742,12 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     const run = queue.then(async () => {
       await sleep()
       const db = await load()
+      db.viewer = buyer()
       const t = now()
       processDeadlines(db, t)
       applyPendingLimits(db, t)
       const out = await fn(db)
+      delete db.viewer
       save(db)
       return out
     })
@@ -612,23 +785,31 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       await sleep()
       const a = DEMO_ACCOUNTS.find((d) => d.email === email.trim().toLowerCase())
       if (!a || a.password !== password) throw new ApiError('invalid_input', 'That email and password don’t match. Try one of the demo accounts.')
-      setSession({ userId: a.role === 'buyer' ? ME : `u-${a.role}`, email: a.email, role: a.role })
+      // Stores sign in as their store: userId is the store id on the mock.
+      setSession({ userId: a.mockId, email: a.email, role: a.role })
     },
     async signOut() {
       setSession(null)
     },
   }
 
-  const me = (db: Db) => db.users.find((u) => u.id === ME)!
+  /** The buyer the call acts for: whoever is signed in, or buyer@ when nobody is. */
+  function buyer(): string {
+    const s = readSession()
+    return s?.role === 'buyer' ? s.userId : ME
+  }
+  const me = (db: Db) => db.users.find((u) => u.id === buyer())!
   /** The shop whose side of chats the signed-in user sees, if any. */
   const myShop = (db: Db): string | null => {
     const role = readSession()?.role
-    return role === 'store' || role === undefined ? MY_MERCHANT : role === 'buyer' ? db.sellerShopId : null
+    if (role === undefined) return MY_MERCHANT
+    if (role === 'store') return readSession()!.userId
+    return role === 'buyer' ? (db.sellerShops[buyer()] ?? null) : null
   }
   /** As buyer if the signed-in user is the demo buyer; otherwise as the shop. */
   const sideIn = (db: Db, c: MockConversation): ChatSide | null => {
     const role = readSession()?.role
-    if ((role === 'buyer' || role === undefined) && c.buyerId === ME) return 'buyer'
+    if ((role === 'buyer' || role === undefined) && c.buyerId === buyer()) return 'buyer'
     if (c.merchantId === myShop(db)) return 'seller'
     return null
   }
@@ -645,9 +826,12 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
   }
   /** The shop being managed: the demo buyer's own once approved, otherwise the demo store. */
   const shopId = (db: Db) => {
-    if (readSession()?.role !== 'buyer') return MY_MERCHANT
-    if (!db.sellerShopId) throw new ApiError('forbidden', 'Get verified as a seller to list products.')
-    return db.sellerShopId
+    const s = readSession()
+    if (s?.role === 'store') return s.userId
+    if (s?.role !== 'buyer') return MY_MERCHANT
+    const shop = db.sellerShops[s.userId]
+    if (!shop) throw new ApiError('forbidden', 'Get verified as a seller to list products.')
+    return shop
   }
   const getListingOr404 = (db: Db, id: string) => {
     const l = db.listings.find((x) => x.id === id)
@@ -686,9 +870,9 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       tx(async (db) => {
         const user = me(db)
         const listing = getListingOr404(db, listingId)
-        const mine = db.ledger.filter((e) => e.userId === ME)
+        const mine = db.ledger.filter((e) => e.userId === buyer())
         const balance = balanceFromLedger(mine)
-        const held = db.tickets.filter((t) => t.listingId === listingId && t.userId === ME).length
+        const held = db.tickets.filter((t) => t.listingId === listingId && t.userId === buyer()).length
         const err = checkPurchase({ user, listing, quantity, ticketsAlreadyHeld: held, balance, spentThisWeekKobo: spentInLastWeek(mine, new Date(now())) })
         if (err) throw new ApiError(err, PURCHASE_ERROR_TEXT[err])
 
@@ -700,10 +884,10 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         for (let i = 0; i < quantity; i++) {
           listing.ticketsSold += 1
           numbers.push(listing.ticketsSold)
-          db.tickets.push({ id: uid('T'), listingId, userId: ME, number: listing.ticketsSold, purchaseId, purchasedAt: at })
+          db.tickets.push({ id: uid('T'), listingId, userId: buyer(), number: listing.ticketsSold, purchaseId, purchasedAt: at })
         }
         db.ledger.push({
-          id: uid('E'), userId: ME, kind: 'ticket_purchase', cashKobo: -fromCash, creditKobo: -fromCredit,
+          id: uid('E'), userId: buyer(), kind: 'ticket_purchase', cashKobo: -fromCash, creditKobo: -fromCredit,
           memo: `${quantity} ${quantity === 1 ? 'ticket' : 'tickets'} · ${listing.title}`, listingId, createdAt: at,
         })
         const drawn = listing.ticketsSold === listing.ticketCount
@@ -713,7 +897,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     listMyListings: () =>
       tx((db) => {
-        const ids = new Set(db.tickets.filter((t) => t.userId === ME).map((t) => t.listingId))
+        const ids = new Set(db.tickets.filter((t) => t.userId === buyer()).map((t) => t.listingId))
         return db.listings.filter((l) => ids.has(l.id)).map((l) => listingView(db, l))
       }),
 
@@ -723,8 +907,8 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     buyNow: (listingId, delivery) =>
       tx((db) => {
         const l = getListingOr404(db, listingId)
-        if (l.merchantId === db.sellerShopId) throw new ApiError('forbidden', 'You can’t buy your own item.')
-        const mine = db.ledger.filter((e) => e.userId === ME)
+        if (l.merchantId === db.sellerShops[buyer()]) throw new ApiError('forbidden', 'You can’t buy your own item.')
+        const mine = db.ledger.filter((e) => e.userId === buyer())
         const balance = balanceFromLedger(mine)
         const notForSale = checkOrder(l, { cashKobo: Number.MAX_SAFE_INTEGER, creditKobo: 0 })
         if (notForSale) throw new ApiError(notForSale, ORDER_ERROR_TEXT[notForSale])
@@ -736,9 +920,9 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const price = salePriceKobo(l)!
         const pay = splitPayment(price, balance)
         const at = iso(now())
-        db.ledger.push({ id: uid('E'), userId: ME, kind: 'order_payment', cashKobo: -pay.fromCash, creditKobo: -pay.fromCredit, memo: `Bought · ${l.title}`, listingId: l.id, createdAt: at })
+        db.ledger.push({ id: uid('E'), userId: buyer(), kind: 'order_payment', cashKobo: -pay.fromCash, creditKobo: -pay.fromCredit, memo: `Bought · ${l.title}`, listingId: l.id, createdAt: at })
         const order: Order = {
-          id: uid('O'), listingId: l.id, buyerId: ME, merchantId: l.merchantId, priceKobo: price, feeKobo: saleEconomics(price, l.feeBps).feeKobo,
+          id: uid('O'), listingId: l.id, buyerId: buyer(), merchantId: l.merchantId, priceKobo: price, feeKobo: saleEconomics(price, l.feeBps).feeKobo,
           delivery: { address: delivery.address.trim(), contactPhone: delivery.contactPhone.trim() }, status: 'paid', createdAt: at, dispatchedAt: null, deliveredAt: null,
         }
         db.orders.push(order)
@@ -747,11 +931,11 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       }),
 
     listMyOrders: () =>
-      tx((db) => db.orders.filter((o) => o.buyerId === ME).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((o) => orderView(db, o))),
+      tx((db) => db.orders.filter((o) => o.buyerId === buyer()).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((o) => orderView(db, o))),
 
     confirmOrder: (orderId) =>
       tx((db) => {
-        const o = db.orders.find((x) => x.id === orderId && x.buyerId === ME && x.status !== 'delivered')
+        const o = db.orders.find((x) => x.id === orderId && x.buyerId === buyer() && x.status !== 'delivered')
         if (!o) throw new ApiError('invalid_input', 'Only your own orders that are on the way can be confirmed.')
         const at = iso(now())
         o.status = 'delivered'
@@ -761,13 +945,13 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     getWallet: () =>
       tx((db): WalletView => {
-        const mine = db.ledger.filter((e) => e.userId === ME)
+        const mine = db.ledger.filter((e) => e.userId === buyer())
         return {
           balance: balanceFromLedger(mine),
           entries: [...mine].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
           spentThisWeekKobo: spentInLastWeek(mine, new Date(now())),
           weeklyLimitKobo: me(db).weeklyLimitKobo,
-          pendingLimit: db.pendingLimits[ME] ?? null,
+          pendingLimit: db.pendingLimits[buyer()] ?? null,
           pendingDeposits: [], // the mock has no payment provider
         }
       }),
@@ -776,7 +960,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       tx((db) => {
         const problem = topUpError(amountKobo)
         if (problem) throw new ApiError('invalid_input', problem)
-        db.ledger.push({ id: uid('E'), userId: ME, kind: 'topup', cashKobo: amountKobo, creditKobo: 0, memo: 'Wallet top-up (test money)', createdAt: iso(now()) })
+        db.ledger.push({ id: uid('E'), userId: buyer(), kind: 'topup', cashKobo: amountKobo, creditKobo: 0, memo: 'Wallet top-up (test money)', createdAt: iso(now()) })
       }),
 
     setWeeklyLimit: (amountKobo) =>
@@ -785,9 +969,9 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const u = me(db)
         if (amountKobo <= u.weeklyLimitKobo) {
           u.weeklyLimitKobo = amountKobo // lowering is instant
-          delete db.pendingLimits[ME]
+          delete db.pendingLimits[buyer()]
         } else {
-          db.pendingLimits[ME] = { amountKobo, effectiveAt: iso(now() + RULES.limitIncreaseDelayHours * 60 * 60 * 1000) }
+          db.pendingLimits[buyer()] = { amountKobo, effectiveAt: iso(now() + RULES.limitIncreaseDelayHours * 60 * 60 * 1000) }
         }
       }),
 
@@ -819,7 +1003,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         db.seeds[id] = seed
         const at = now()
         const listing: Listing = {
-          id, kind: 'raffle', merchantId: MY_MERCHANT, title: input.title.trim(), description: input.description.trim(), category: input.category, images: input.images ?? [],
+          id, kind: 'raffle', merchantId: shopId(db), title: input.title.trim(), description: input.description.trim(), category: input.category, images: input.images ?? [],
           priceKobo: input.priceKobo, ticketPriceKobo: input.ticketPriceKobo, buyerTicketPriceKobo: econ.buyerTicketKobo,
           ticketCount: econ.ticketCount, ticketsSold: 0, feeMode: input.feeMode, feeBps,
           unsoldPolicy: input.unsoldPolicy, fallbackPriceKobo: input.unsoldPolicy === 'convert_to_sale' ? input.fallbackPriceKobo! : null,
@@ -858,11 +1042,11 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const l = getListingOr404(db, listingId)
         if (l.kind !== 'product') throw new ApiError('invalid_input', 'Raffle items are held and checked by DrawMart, so there’s no seller chat.')
         if (l.status !== 'for_sale' && l.status !== 'sold') throw new ApiError('not_found', 'That item isn’t on sale.')
-        if (l.merchantId === db.sellerShopId) throw new ApiError('invalid_input', 'This is your own item.')
-        let c = db.conversations.find((x) => x.listingId === l.id && x.buyerId === ME)
+        if (l.merchantId === db.sellerShops[buyer()]) throw new ApiError('invalid_input', 'This is your own item.')
+        let c = db.conversations.find((x) => x.listingId === l.id && x.buyerId === buyer())
         if (!c) {
           const at = iso(now())
-          c = { id: uid('C'), listingId: l.id, buyerId: ME, merchantId: l.merchantId, lastMessageAt: at, buyerReadAt: at, sellerReadAt: iso(0) }
+          c = { id: uid('C'), listingId: l.id, buyerId: buyer(), merchantId: l.merchantId, lastMessageAt: at, buyerReadAt: at, sellerReadAt: iso(0) }
           db.conversations.push(c)
         }
         return conversationView(db, c, 'buyer')
@@ -914,7 +1098,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (!l || !['live', 'drawn', 'refunded', 'for_sale', 'sold'].includes(l.status)) return
         const role = readSession()?.role
         if (role && l.merchantId === myShop(db)) return // a seller looking at their own item
-        const visitor = role ? `u:${role === 'buyer' ? ME : role}` : /^[A-Za-z0-9-]{8,64}$/.test(visitorId) ? `v:${visitorId}` : null
+        const visitor = role ? `u:${readSession()!.userId}` : /^[A-Za-z0-9-]{8,64}$/.test(visitorId) ? `v:${visitorId}` : null
         if (!visitor) return
         const day = lagosDay(now())
         if (!db.views.some((v) => v.listingId === l.id && v.visitor === visitor && v.day === day)) db.views.push({ listingId: l.id, visitor, day })
@@ -1029,39 +1213,40 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         db.callPhones[shop] = phone.trim()
       }),
 
-    getMySellerApplication: () => tx((db) => db.sellerApplication),
+    getMySellerApplication: () => tx((db) => db.sellerApplications[buyer()] ?? null),
 
     submitSellerApplication: (input) =>
       tx((db) => {
-        const prev = db.sellerApplication
+        const prev = db.sellerApplications[buyer()]
         if (prev?.status === 'pending') throw new ApiError('invalid_input', 'Your application is already being reviewed.')
         if (prev?.status === 'approved') throw new ApiError('invalid_input', 'You’re already a verified seller.')
         const problems = validateSellerApplication(input).map((e) => SELLER_APPLICATION_ERROR_TEXT[e])
         if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
         const at = iso(now())
-        db.sellerApplication = {
+        db.sellerApplications[buyer()] = {
           id: prev?.id ?? uid('S'), status: 'pending', shopName: input.shopName.trim(), legalName: input.legalName.trim(), nin: normalizeNin(input.nin),
           phone: input.phone.trim(), address: input.address.trim(), area: input.area.trim(), idPhotoUrl: input.idPhoto, selfieUrl: input.selfie,
           reviewNote: null, createdAt: prev?.createdAt ?? at, updatedAt: at, reviewedAt: null,
         }
-        return db.sellerApplication
+        return db.sellerApplications[buyer()]
       }),
 
-    listSellerApplications: () => tx((db) => (db.sellerApplication?.status === 'pending' ? [db.sellerApplication] : [])),
+    listSellerApplications: () =>
+      tx((db) => Object.values(db.sellerApplications).filter((a) => a.status === 'pending').sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))),
 
     approveSeller: (applicationId) =>
       tx((db) => {
-        const a = db.sellerApplication
-        if (!a || a.id !== applicationId || a.status !== 'pending') throw new ApiError('invalid_input', 'Only applications waiting for review can be approved.')
+        const [userId, a] = Object.entries(db.sellerApplications).find(([, x]) => x.id === applicationId) ?? []
+        if (!userId || !a || a.status !== 'pending') throw new ApiError('invalid_input', 'Only applications waiting for review can be approved.')
         const shop: Merchant = { id: uid('M'), kind: 'individual', name: a.shopName, area: a.area, cacNumber: '', verified: true }
         db.merchants.push(shop)
-        db.sellerShopId = shop.id
+        db.sellerShops[userId] = shop.id
         Object.assign(a, { status: 'approved', reviewedAt: iso(now()) })
       }),
 
     rejectSeller: (applicationId, note) =>
       tx((db) => {
-        const a = db.sellerApplication
+        const a = Object.values(db.sellerApplications).find((x) => x.id === applicationId)
         if (note.trim().length < 5) throw new ApiError('invalid_input', 'Tell the applicant what to fix.')
         if (!a || a.id !== applicationId || a.status !== 'pending') throw new ApiError('invalid_input', 'Only applications waiting for review can be rejected.')
         Object.assign(a, { status: 'rejected', reviewNote: note.trim(), reviewedAt: iso(now()) })
@@ -1110,6 +1295,12 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     demoReset: async () => {
       await queue
       store.removeItem(STORAGE_KEY)
+    },
+
+    resetTestData: async () => {
+      if (readSession()?.role !== 'admin') throw new ApiError('forbidden', 'Admins only.')
+      await queue
+      store.removeItem(STORAGE_KEY) // the next call rebuilds the sample data
     },
   }
 }

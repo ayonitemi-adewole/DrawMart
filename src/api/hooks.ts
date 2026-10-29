@@ -259,5 +259,6 @@ export function useDemoActions() {
       mutationFn: () => api.demoReset?.() ?? Promise.resolve(),
       onSuccess: () => window.location.assign('/'),
     }),
+    resetAll: useMutation({ mutationFn: () => api.resetTestData(), onSettled: invalidate }),
   }
 }

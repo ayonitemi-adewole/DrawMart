@@ -12,6 +12,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { verifyDraw, winningTicketNumber, createSeed } from '@/domain/draw'
 import { computeListingEconomics, platformFeeBps } from '@/domain/fees'
 import { addDays, localDate } from '@/domain/listing'
+import { DEMO_ACCOUNTS } from '@/api/demoAccounts'
 
 const sql = (file: string) => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')
 
@@ -134,9 +135,9 @@ describe('schema and seed', () => {
   it('seeds stores and listings, and is safe to run twice', async () => {
     await db.exec(sql('seed.sql'))
     const [{ n }] = await admin<{ n: number }>(`select count(*)::int n from public.merchants`)
-    expect(n).toBe(5)
+    expect(n).toBe(6) // five stores and one individual seller
     const [{ products }] = await admin<{ products: number }>(`select count(*)::int products from public.listings where kind = 'product'`)
-    expect(products).toBe(4)
+    expect(products).toBe(24)
     const [{ results }] = await admin<{ results: number }>(`select count(*)::int results from public.draw_results`)
     expect(results).toBe(3)
   })
@@ -164,18 +165,27 @@ describe('schema and seed', () => {
     }
   })
 
-  it('creates the local demo accounts with the right access', async () => {
+  it('creates the test accounts, each matching src/api/demoAccounts.ts, plus a local admin', async () => {
     await db.exec(sql('seed-local-accounts.sql'))
     await db.exec(sql('seed-local-accounts.sql')) // safe to re-run
-    const rows = await admin<{ email: string; role: string; merchant_id: string | null; has_identity: boolean }>(
-      `select u.email, p.role, p.merchant_id, exists (select 1 from auth.identities i where i.user_id = u.id) has_identity
+    await db.exec(sql('seed.sql'))
+    const rows = await admin<{ email: string; role: string; display_name: string; merchant_id: string | null; seller: boolean; identities: number; cash: string }>(
+      `select u.email, p.role, p.display_name, p.merchant_id, p.seller_id is not null seller,
+              (select count(*)::int from auth.identities i where i.user_id = u.id) identities,
+              (select coalesce(sum(cash_kobo), 0) from public.ledger_entries e where e.user_id = u.id) cash
          from auth.users u join public.profiles p on p.id = u.id where u.email like '%@drawmart.test' order by u.email`,
     )
-    expect(rows).toEqual([
-      { email: 'admin@drawmart.test', role: 'admin', merchant_id: null, has_identity: true },
-      { email: 'buyer@drawmart.test', role: 'buyer', merchant_id: null, has_identity: true },
-      { email: 'store@drawmart.test', role: 'store', merchant_id: IKEJA, has_identity: true },
-    ])
+    const expected = DEMO_ACCOUNTS.map((a) => a.email).sort()
+    expect(rows.map((r) => r.email)).toEqual(expected)
+    for (const a of DEMO_ACCOUNTS) {
+      const r = rows.find((x) => x.email === a.email)!
+      expect(r).toMatchObject({ role: a.role, identities: 1 })
+      if (a.role !== 'admin') expect(r.display_name).toBe(a.name)
+      if (a.role === 'buyer') expect(Number(r.cash)).toBe(2_500_000) // the starting balance, once
+      if (a.role === 'store') expect(r.merchant_id).not.toBeNull()
+    }
+    expect(rows.find((r) => r.email === 'seller@drawmart.test')?.seller).toBe(true)
+    expect(rows.find((r) => r.email === 'store@drawmart.test')?.merchant_id).toBe(IKEJA)
   })
 
   it('blocks direct writes from API users', async () => {
@@ -927,6 +937,41 @@ describe('boost results', () => {
       expect((await asUser(staff, `select public.boost_insights($1) r`, [boost])).length).toBe(1)
     } finally {
       await asUser(staff, `select public.set_boost_settings(1000, false, 12)`)
+    }
+  })
+})
+
+describe('reset_test_data', () => {
+  it('puts the sample data back and every buyer back to the starting balance, for admins in test mode only', async () => {
+    const staff = await newUser('resetter@example.com', { role: 'admin' })
+    const buyer = await newUser('spender@example.com')
+    const [live] = await admin<{ id: string }>(`select id from public.listings where status = 'live' and kind = 'raffle' limit 1`)
+    await asUser(buyer, `select public.buy_tickets($1, 1)`, [live.id])
+    await asUser(buyer, `select public.top_up(100000)`)
+    await asUser(buyer, `select public.set_weekly_limit(1000000)`)
+
+    await expectFail(asUser(buyer, `select public.reset_test_data()`), 'forbidden')
+    await asUser(staff, `select public.reset_test_data()`)
+
+    expect(await balance(buyer)).toEqual({ cash: '2500000', credit: '0' })
+    const [p] = await admin<{ weekly_limit_kobo: string }>(`select weekly_limit_kobo from public.profiles where id = $1`, [buyer])
+    expect(Number(p.weekly_limit_kobo)).toBe(5_000_000)
+    const [{ n }] = await admin<{ n: number }>(`select count(*)::int n from public.listings`)
+    const [{ results }] = await admin<{ results: number }>(`select count(*)::int results from public.draw_results`)
+    expect(results).toBe(3)
+    expect(n).toBeGreaterThan(50)
+    expect(await admin(`select * from public.orders`)).toEqual([])
+    // Accounts and roles stay; the test seller's shop comes back.
+    const [{ role }] = await admin<{ role: string }>(`select role from public.profiles where id = $1`, [staff])
+    expect(role).toBe('admin')
+    const [{ seller }] = await admin<{ seller: string | null }>(`select p.seller_id seller from public.profiles p join auth.users u on u.id = p.id where u.email = 'seller@drawmart.test'`)
+    expect(seller).not.toBeNull()
+
+    await admin(`update public.app_settings set test_mode = false`)
+    try {
+      await expectFail(asUser(staff, `select public.reset_test_data()`), 'forbidden')
+    } finally {
+      await admin(`update public.app_settings set test_mode = true`)
     }
   })
 })

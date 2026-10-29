@@ -25,7 +25,7 @@ Working name: DrawMart (placeholder)
 - **Draws:** Provably fair. Publish SHA-256 of a secret seed before sales; at sell-out, winner = SHA-256(seed:last-ticket-ref) mod total + 1; reveal seed after. Stream draws live.
 - **Consolation:** Losing tickets return a share (default 20%) of spend as store credit.
 - **Responsible gaming:** 18+ KYC, max 20 tickets per person per draw, user-set weekly spending limit (lowering instant, raising waits 24h).
-- **No real money** until the licence is granted; run in test mode.
+- **No real money** until the licence is granted; run in test mode. Test mode has shared-password test accounts (6 buyers, one an ID-verified seller, and 5 stores) and an admin "Reset test data" button; delete the test accounts before launch.
 - **Tech:** React + TypeScript + Tailwind v4 (Vite), React Router, TanStack Query. UI talks only to a `DrawMartApi` interface. **Backend: Supabase** (Postgres + Auth + Storage), with all writes as database functions; the in-browser mock stays for demos.
 
 ## Open

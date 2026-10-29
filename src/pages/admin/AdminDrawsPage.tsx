@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { api } from '@/api'
 import { useDemoActions, useListings } from '@/api/hooks'
 import type { ListingView } from '@/api/types'
 import { Countdown } from '@/components/Countdown'
-import { DiceIcon, FastForwardIcon, TicketIcon, TrophyIcon } from '@/components/icons'
+import { DiceIcon, FastForwardIcon, RefreshIcon, TicketIcon, TrophyIcon } from '@/components/icons'
+import { Sheet } from '@/components/Sheet'
 import { useToast } from '@/components/toast'
 import { Badge, Button, Card, EmptyState, ErrorState, Notice, PageTitle, ProductImage, ProgressBar, Skeleton, errorMessage } from '@/components/ui'
 import { formatNaira } from '@/domain/money'
@@ -38,7 +40,55 @@ export function AdminDrawsPage() {
           ))}
         </Card>
       )}
+      {api.testMode ? <ResetTestData /> : null}
     </div>
+  )
+}
+
+/** Test mode only: put everything back to the sample data. The database refuses outside test mode. */
+function ResetTestData() {
+  const { resetAll } = useDemoActions()
+  const toast = useToast()
+  const [confirm, setConfirm] = useState(false)
+  return (
+    <Card className="flex flex-wrap items-center gap-4 p-5">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <strong>Reset all test data</strong>
+        <span className="text-sm text-muted">Back to the sample listings, and every buyer back to the starting ₦25,000. Accounts and their roles stay.</span>
+      </div>
+      <Button variant="danger" className="min-h-11" onClick={() => setConfirm(true)}>
+        <RefreshIcon size={16} /> Reset test data
+      </Button>
+      <Sheet open={confirm} onClose={() => !resetAll.isPending && setConfirm(false)} title="Reset all test data">
+        <h2 className="pr-10 font-display text-2xl font-extrabold">Reset everything?</h2>
+        <p className="text-sm text-muted">
+          This deletes every listing, ticket, draw result, order, wallet entry, top-up, chat, boost, seller application and page view, for every account. Then it puts the
+          sample stores and listings back and gives every buyer the starting balance. ID-verified sellers go back to being buyers (the test seller keeps their shop). It
+          can’t be undone.
+        </p>
+        <div className="flex gap-2">
+          <Button variant="outline" className="flex-1" onClick={() => setConfirm(false)} disabled={resetAll.isPending}>
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            className="flex-1"
+            loading={resetAll.isPending}
+            onClick={() =>
+              resetAll.mutate(undefined, {
+                onSuccess: () => {
+                  setConfirm(false)
+                  toast('Test data reset.')
+                },
+                onError: (e) => toast(errorMessage(e), 'error'),
+              })
+            }
+          >
+            Reset everything
+          </Button>
+        </div>
+      </Sheet>
+    </Card>
   )
 }
 

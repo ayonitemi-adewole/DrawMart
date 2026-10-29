@@ -27,6 +27,7 @@ Ticket-draw marketplace for Lagos. React 19 + TypeScript + Tailwind v4 + Vite, R
 - Design tokens are in `src/index.css` (`@theme`): use `bg-brand`, `text-muted`, `bg-ticket` etc., not raw hex values. Dark mode overrides the same tokens under `.dark`, so don't add `dark:` colour variants; use `text-on-brand` / `text-on-ticket` / `text-on-hero` for text on those fills.
 - Reuse the UI kit before writing new markup: `components/ui.tsx` (Button/`buttonClass`, Card, Badge, Notice, Segmented, StatTile, EmptyState, Field/`inputCls`), `Sheet` for modals, `Countdown`, `TicketStub`.
 - Touch targets ≥ 44px (`min-h-11`), real `<button>`/`<a>`/`<label>`, `aria-label` on icon-only buttons.
+- Test data: sample listings live in `private.seed_demo_data()` and test accounts in `private.seed_test_accounts()` (migration `…_test_data_reset.sql`; `seed.sql` just calls them); `reset_test_data()` (admin, test mode) wipes and reseeds. Keep them in step with the mock's seed in `src/api/mock.ts` and `src/api/demoAccounts.ts`. The mock acts for whichever demo account is signed in (`buyer()`, `shopId()`), or buyer@ / the Ikeja store when nobody is.
 - Test mode (`api.testMode`) shows demo controls (admin app, Live draws) and the test banner. Never let demo helpers run against a real backend.
 
 ## Product decisions
