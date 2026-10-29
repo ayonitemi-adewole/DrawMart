@@ -284,7 +284,7 @@ function Result({
 
       <div className="flex flex-col gap-2 sm:flex-row">
         <Link to="/" className={buttonClass("primary", "lg", "flex-1")}>
-          Back to live draws
+          <span className="text-on-brand">Back to live draws</span>
         </Link>
         <Link to="/draws" className={buttonClass("outline", "lg", "flex-1")}>
           All results

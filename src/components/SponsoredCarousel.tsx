@@ -160,8 +160,8 @@ function Slide({
       <span className="flex w-fit items-center gap-1.5 rounded-full bg-ticket px-2.5 py-1 text-[11px] font-extrabold text-on-ticket shadow-card">
         <SparklesIcon size={12} /> Sponsored
       </span>
-      <div className="flex max-w-lg flex-col gap-1 text-on-brand">
-        <span className="text-xs font-semibold text-on-brand-muted">
+      <div className="flex max-w-lg flex-col gap-1 text-on-brand-muted">
+        <span className="text-xs font-semibold">
           {l.merchant.name} · {l.category}
         </span>
         <strong className="font-display text-2xl leading-tight sm:text-3xl">
@@ -183,7 +183,7 @@ function Slide({
           )}
         </span>
       </div>
-      <span className="flex w-fit items-center gap-1 text-sm font-bold text-on-brand">
+      <span className="flex w-fit items-center gap-1 text-sm font-bold text-on-brand-muted">
         {price !== null ? "See the item" : "Get tickets"}{" "}
         <ArrowRightIcon size={16} />
       </span>

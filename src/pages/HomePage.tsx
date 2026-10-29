@@ -406,7 +406,7 @@ function BigPrizes({ listings }: { listings?: ListingView[] }) {
                 className="rounded-full bg-ink/60 px-2.5 py-1 text-xs font-bold text-ground backdrop-blur"
               />
             </span>
-            <div className="flex flex-col gap-2 text-on-brand">
+            <div className="flex flex-col gap-2 text-on-brand-muted">
               <span className="text-xs font-semibold text-on-brand-muted">
                 Worth {formatNaira(l.priceKobo)}
               </span>
@@ -468,7 +468,7 @@ function Hero({
         className="absolute inset-0 -z-20 size-full -scale-x-100 object-cover object-[30%_40%]"
       />
       {/* Brand-tinted scrim keeps the copy readable over the photo. */}
-      <div className="absolute inset-0 -z-10 bg-linear-to-b from-hero/75 via-hero/90 to-hero lg:bg-linear-to-r lg:from-hero lg:via-hero/85 lg:to-hero/30" />
+      <div className="absolute inset-0 -z-10 bg-linear-to-b from-hero/75 via-hero/90 to-hero lg:bg-linear-to-r lg:from-hero lg:via-hero/50 lg:to-hero/10" />
       <div className="absolute -bottom-32 left-1/4 -z-10 size-80 rounded-full bg-brand/30 blur-3xl" />
 
       <div className="grid gap-8 p-6 sm:p-8 lg:grid-cols-[1.25fr_1fr] lg:items-center lg:p-10">
