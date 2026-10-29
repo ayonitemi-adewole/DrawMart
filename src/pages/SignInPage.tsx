@@ -4,6 +4,7 @@ import { api } from "@/api";
 import { usePasswordSignIn, useSendSignInLink, useSession } from "@/api/hooks";
 import type { AccountRole } from "@/api/types";
 import {
+  LogoMark,
   MailIcon,
   ShieldIcon,
   StoreIcon,
@@ -87,7 +88,7 @@ export function SignInPage() {
     <div className="mx-auto flex w-full max-w-md animate-fade-up flex-col gap-5 py-4">
       <div className="flex flex-col items-center gap-3 text-center">
         <span className="flex size-14 -rotate-6 items-center justify-center rounded-2xl bg-linear-to-br from-brand to-hero text-ticket shadow-glow">
-          <TicketIcon size={28} strokeWidth={2.4} />
+          <LogoMark size={28} strokeWidth={2.4} />
         </span>
         <h1 className="font-display text-3xl font-extrabold tracking-tight">
           Sign in to DrawMart
