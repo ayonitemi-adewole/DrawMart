@@ -361,27 +361,27 @@ export const ChatIcon = (p: IconProps) => (
     <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z" />
     <path d="M8.5 11h.01M12 11h.01M15.5 11h.01" />
   </Icon>
-)
+);
 
 export const SendIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M21 3 10 14" />
     <path d="m21 3-7 18-4-7-7-4 18-7Z" />
   </Icon>
-)
+);
 
 export const EyeIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z" />
     <circle cx="12" cy="12" r="3" />
   </Icon>
-)
+);
 
 export const ChartIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
   </Icon>
-)
+);
 
 /** A rising chart: boosts. */
 export const TrendingUpIcon = (p: IconProps) => (
@@ -389,7 +389,7 @@ export const TrendingUpIcon = (p: IconProps) => (
     <path d="M22 7l-8.5 8.5-5-5L2 17" />
     <path d="M16 7h6v6" />
   </Icon>
-)
+);
 
 /** Two hands shaking: sponsored (paid) placement. */
 export const HandshakeIcon = (p: IconProps) => (
@@ -400,7 +400,7 @@ export const HandshakeIcon = (p: IconProps) => (
     <path d="M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3" />
     <path d="M3 4h8" />
   </Icon>
-)
+);
 
 /**
  * The DrawMart logo mark: a lottery ticket on shopping-cart wheels.
@@ -414,6 +414,4 @@ export const LogoMark = (p: IconProps) => (
     <circle cx="8.5" cy="19" r="1.75" />
     <circle cx="17.5" cy="19" r="1.75" />
   </Icon>
-)
-  </Icon>
-)
+);
