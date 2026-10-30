@@ -5,6 +5,7 @@ import { api } from './index'
 import type { MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput } from '@/domain/sellers'
 import { visitorId } from '@/lib/visitor'
+import type { SavedAddressInput } from '@/domain/addresses'
 import type { AccountRole, BoostSettings, CheckoutInput, ListingFilter, NewListingInput, NewPickupInput, NewProductInput, PickupItemInput } from './types'
 
 export const keys = {
@@ -22,6 +23,7 @@ export const keys = {
   merchantOrders: ['merchant-orders'] as const,
   savedPickup: ['saved-pickup'] as const,
   notifications: ['notifications'] as const,
+  addresses: ['addresses'] as const,
   cart: ['cart'] as const,
   pickupPoints: ['pickup-points'] as const,
   prizeOrders: ['prize-orders'] as const,
@@ -108,6 +110,20 @@ export function useSetCallPhone() {
     mutationFn: (phone: string | null) => api.setCallPhone(phone),
     onSettled: () => Promise.all([qc.invalidateQueries({ queryKey: keys.callPhone }), qc.invalidateQueries({ queryKey: keys.conversations })]),
   })
+}
+
+// Saved delivery addresses
+export const useAddresses = () => useQuery({ queryKey: keys.addresses, queryFn: () => api.listAddresses(), enabled: useIs('buyer') })
+
+/** Each change returns the new list, which goes straight in the cache. */
+export function useAddressActions() {
+  const qc = useQueryClient()
+  const onSuccess = (list: Awaited<ReturnType<typeof api.listAddresses>>) => qc.setQueryData(keys.addresses, list)
+  return {
+    save: useMutation({ mutationFn: (input: SavedAddressInput) => api.saveAddress(input), onSuccess }),
+    setDefault: useMutation({ mutationFn: (id: string) => api.setDefaultAddress(id), onSuccess }),
+    remove: useMutation({ mutationFn: (id: string) => api.deleteAddress(id), onSuccess }),
+  }
 }
 
 // Cart and checkout

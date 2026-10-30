@@ -3,7 +3,7 @@ import { nairaToKobo as k } from './money'
 import { balanceFromLedger, checkPurchase, consolationCredit, maxPurchasable, spentInLastWeek, splitPayment, topUpError } from './rules'
 import type { LedgerEntry, Listing, User } from './types'
 
-const user: User = { id: 'u1', displayName: 'Test', state: 'Lagos', weeklyLimitKobo: k(50_000), ageVerified: true }
+const user: User = { id: 'u1', displayName: 'Test', state: 'Lagos', weeklyLimitKobo: k(50_000), ageVerified: true, phone: null }
 const listing: Listing = {
   id: 'l1', kind: 'raffle', merchantId: 'm1', title: 'Phone', description: '', category: 'Phones', images: [],
   priceKobo: k(1_000_000), ticketPriceKobo: k(5_000), buyerTicketPriceKobo: k(5_000),

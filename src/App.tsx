@@ -12,6 +12,7 @@ import { hideSplash, holdSplash, showSplash } from '@/lib/splash'
 import { AuthLayout } from '@/layouts/AuthLayout'
 import { BackOfficeLayout } from '@/layouts/BackOfficeLayout'
 import { BuyerLayout } from '@/layouts/BuyerLayout'
+import { AccountPage } from '@/pages/AccountPage'
 import { AdminBoostsPage } from '@/pages/admin/AdminBoostsPage'
 import { AdminDrawsPage } from '@/pages/admin/AdminDrawsPage'
 import { AdminPage } from '@/pages/admin/AdminPage'
@@ -133,6 +134,7 @@ const router = createBrowserRouter([
       { path: 'credits', element: <CreditsPage /> },
       { path: 'draws', element: <DrawsPage /> },
       { path: 'draws/:id', element: <ResultPage /> },
+      { path: 'account', element: <RequireSignIn role="buyer"><AccountPage /></RequireSignIn> },
       { path: 'wallet', element: <RequireSignIn role="buyer"><WalletPage /></RequireSignIn> },
       { path: 'sell', element: <RequireSignIn role="buyer"><SellPage /></RequireSignIn> },
       { path: 'cart', element: <RequireSignIn role="buyer"><CartPage /></RequireSignIn> },

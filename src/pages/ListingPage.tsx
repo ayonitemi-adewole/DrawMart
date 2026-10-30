@@ -1108,7 +1108,7 @@ function BlockerNotice({ error }: { error: PurchaseError }) {
         Review your weekly limit →
       </Link>
     ) : error === "state_not_licensed" ? (
-      <Link to="/wallet" className="font-bold">
+      <Link to="/account" className="font-bold">
         Check your state of residence →
       </Link>
     ) : null;

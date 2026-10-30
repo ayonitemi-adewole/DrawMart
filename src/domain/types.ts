@@ -212,6 +212,8 @@ export interface User {
   state: string // Nigerian state of residence; only licensed states may buy tickets
   weeklyLimitKobo: Kobo
   ageVerified: boolean
+  /** Contact phone on their account, suggested at checkout. */
+  phone: string | null
 }
 
 export interface WalletBalance {

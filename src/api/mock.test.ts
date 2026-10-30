@@ -535,4 +535,33 @@ describe('mock api', () => {
     const car = onSale.find((l) => l.category === 'Cars')!
     await expect(api.checkout({ listingIds: [car.id], fulfilment: 'pickup', delivery: noAddress, pickupPointId: 'yaba' })).rejects.toThrow(/stay with the dealer/)
   })
+
+  it('saves profile details and delivery addresses, per buyer', async () => {
+    const api = make()
+    await api.auth.signInWithPassword('ngozi@drawmart.test', 'drawmart-demo')
+    await expect(api.updateProfile({ phone: '123' })).rejects.toThrow(/Nigerian mobile/)
+    expect(await api.updateProfile({ displayName: ' Ngozi B. ', phone: '0803 123 4567' })).toMatchObject({ displayName: 'Ngozi B.', phone: '0803 123 4567' })
+    expect((await api.updateProfile({ phone: '' })).phone).toBeNull()
+
+    const home = { label: 'Home', address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    await expect(api.saveAddress({ ...home, location: null })).rejects.toThrow(/Pin the exact spot/)
+    const [first] = await api.saveAddress(home)
+    expect(first.isDefault).toBe(true) // the first saved
+    const two = await api.saveAddress({ ...home, label: 'Work' })
+    expect(two.map((a) => [a.label, a.isDefault])).toEqual([['Home', true], ['Work', false]])
+    const work = two[1]
+    expect((await api.setDefaultAddress(work.id))[0].label).toBe('Work') // default first
+    expect((await api.saveAddress({ ...home, id: first.id, label: 'Home 2' })).map((a) => a.label)).toEqual(['Work', 'Home 2'])
+    await expect(api.saveAddress({ ...home, id: 'nope' })).rejects.toMatchObject({ code: 'not_found' })
+
+    await api.auth.signInWithPassword('chidi@drawmart.test', 'drawmart-demo')
+    expect(await api.listAddresses()).toEqual([])
+    await api.auth.signInWithPassword('ngozi@drawmart.test', 'drawmart-demo')
+
+    const left = await api.deleteAddress(work.id)
+    expect(left.map((a) => [a.label, a.isDefault])).toEqual([['Home 2', true]]) // hands on the default
+
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    await expect(api.saveAddress(home)).rejects.toMatchObject({ code: 'forbidden' })
+  })
 })

@@ -242,9 +242,16 @@ export function HomePage() {
           />
         ) : category || query ? (
           <div className="flex flex-col gap-2">
-            <ListingRow listings={visible} label={category ? `${category} draws` : "Matching draws"} />
+            <ListingRow
+              listings={visible}
+              label={category ? `${category} draws` : "Matching draws"}
+            />
             <SeeAllLink
-              to={browseHref({ category, q: query || undefined, type: "draws" })}
+              to={browseHref({
+                category,
+                q: query || undefined,
+                type: "draws",
+              })}
               label={`See all ${visible.length} draws`}
             />
           </div>
@@ -278,7 +285,10 @@ export function HomePage() {
           {category ? (
             <div className="flex flex-col gap-2">
               <ListingRow listings={shop} label={`${category} to buy now`} />
-              <SeeAllLink to={browseHref({ category, type: "buy" })} label={`See all ${shop.length} items`} />
+              <SeeAllLink
+                to={browseHref({ category, type: "buy" })}
+                label={`See all ${shop.length} items`}
+              />
             </div>
           ) : (
             <ByCategory listings={shop} type="buy" />
@@ -333,7 +343,10 @@ function ByCategory({
               </h3>
               <SeeAllLink to={to} label={`All ${c.toLowerCase()}`} />
             </div>
-            <ListingRow listings={items} label={type === "draws" ? `${c} draws` : `${c} to buy now`} />
+            <ListingRow
+              listings={items}
+              label={type === "draws" ? `${c} draws` : `${c} to buy now`}
+            />
           </div>
         );
       })}
@@ -367,13 +380,13 @@ function BigPrizes({ listings }: { listings?: ListingView[] }) {
           All cars →
         </Link>
       </div>
-      <div className="no-scrollbar -mx-4 flex snap-x snap-mandatory gap-4 overflow-x-auto px-4 pb-2 sm:-mx-6 sm:px-6 lg:mx-0 lg:grid lg:grid-cols-3 lg:overflow-visible lg:px-0">
+      <div className="no-scrollbar flex snap-x snap-mandatory gap-4 overflow-x-auto pb-2 sm:-mx-6 sm:px-6 lg:mx-0 lg:grid lg:grid-cols-3 lg:overflow-visible lg:px-0">
         {prizes.map((l, i) => (
           <Link
             key={l.id}
             to={`/listings/${l.id}`}
             style={{ animationDelay: `${i * 80}ms` }}
-            className="group relative isolate flex h-80 w-[82%] shrink-0 animate-fade-up snap-start flex-col justify-end overflow-hidden rounded-4xl bg-hero p-5 text-on-hero no-underline shadow-lift sm:w-[60%] lg:w-auto"
+            className="group relative isolate flex h-80 w-[88%] shrink-0 animate-fade-up snap-start flex-col justify-end overflow-hidden rounded-4xl bg-hero p-5 text-on-hero no-underline shadow-lift sm:w-[60%] lg:w-auto"
           >
             <img
               src={l.images[0]}

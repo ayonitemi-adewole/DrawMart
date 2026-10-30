@@ -1,38 +1,18 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useSearchParams } from 'react-router'
-import { useCart, useCheckout, useListing, usePickupPoints, useWallet } from '@/api/hooks'
+import { useAddressActions, useAddresses, useCart, useCheckout, useListing, useMe, usePickupPoints, useWallet } from '@/api/hooks'
 import type { ListingView, OrderView } from '@/api/types'
 import { AddressPicker } from '@/components/AddressPicker'
 import { CheckCircleIcon, MapPinIcon, PhoneIcon, ShieldIcon, StoreIcon, TruckIcon } from '@/components/icons'
 import { useToast } from '@/components/toast'
 import { Button, Card, EmptyState, ErrorState, Field, Notice, PageTitle, ProductImage, Segmented, Skeleton, buttonClass, cx, errorMessage, inputCls } from '@/components/ui'
+import { MAX_ADDRESS_LABEL, MAX_SAVED_ADDRESSES, SAVED_ADDRESS_ERROR_TEXT, preferredAddress, suggestedPhone, type SavedAddress } from '@/domain/addresses'
 import { CHECKOUT_ERROR_TEXT, checkoutTotalKobo, isCar, isWonPrize, lineAmountKobo, validateCheckout } from '@/domain/cart'
 import { directionsUrl } from '@/domain/location'
 import { formatNaira } from '@/domain/money'
 import { ORDER_ERROR_TEXT } from '@/domain/orders'
 import { splitPayment } from '@/domain/rules'
 import type { Delivery, Fulfilment } from '@/domain/types'
-
-const DELIVERY_KEY = 'drawmart:delivery'
-
-/** The last delivery details, so repeat buyers don't retype them. Only in this browser. */
-function savedDelivery(): Delivery {
-  try {
-    const d = JSON.parse(localStorage.getItem(DELIVERY_KEY) ?? 'null') as Delivery | null
-    if (d && typeof d.address === 'string' && typeof d.contactPhone === 'string') return { ...d, location: d.location ?? null }
-  } catch {
-    /* storage blocked */
-  }
-  return { address: '', location: null, contactPhone: '' }
-}
-
-function saveDelivery(d: Delivery) {
-  try {
-    localStorage.setItem(DELIVERY_KEY, JSON.stringify(d))
-  } catch {
-    /* storage blocked */
-  }
-}
 
 /** /checkout: the whole cart, or one item with ?item= (Buy now, or arranging a car). */
 export function CheckoutPage() {
@@ -57,20 +37,42 @@ function WholeCart() {
 
 type Step = 'where' | 'review'
 
-/** Two steps: delivery with a pin on the map, or a pickup location; then review and pay. */
+/** Waits for saved addresses and the account phone, which the form starts from. */
 function CheckoutFlow({ items }: { items: ListingView[] }) {
+  const addresses = useAddresses()
+  const me = useMe()
+  if (addresses.isPending || me.isPending) return <Skeleton className="h-96" />
+  // If they can't load, a new address still works.
+  return <CheckoutForm items={items} addresses={addresses.data ?? []} accountPhone={me.data?.phone ?? null} />
+}
+
+/** Two steps: a saved or new address with a pin, or a pickup location; then review and pay. */
+function CheckoutForm({ items, addresses, accountPhone }: { items: ListingView[]; addresses: SavedAddress[]; accountPhone: string | null }) {
   const wallet = useWallet()
   const points = usePickupPoints()
   const checkout = useCheckout()
   const toast = useToast()
-  const [delivery, setDelivery] = useState(savedDelivery)
+  const { save: saveAddress } = useAddressActions()
+  const phone = suggestedPhone(accountPhone, addresses)
+  // null: a new address, typed in here.
+  const [addressId, setAddressId] = useState<string | null>(preferredAddress(addresses)?.id ?? null)
+  const [newDelivery, setNewDelivery] = useState<Delivery>({ address: '', location: null, contactPhone: phone })
+  const [pickupPhone, setPickupPhone] = useState(phone)
+  const canSave = addresses.length < MAX_SAVED_ADDRESSES
+  const [saveNew, setSaveNew] = useState(canSave)
+  const [newLabel, setNewLabel] = useState(addresses.length ? '' : 'Home')
   const [fulfilment, setFulfilment] = useState<Fulfilment>('delivery')
   const [pickupPointId, setPickupPointId] = useState<string | null>(null)
   const [showErrors, setShowErrors] = useState(false)
   const hasCar = items.some(isCar)
+  const chosen = addresses.find((a) => a.id === addressId) ?? null
+  const delivery: Delivery =
+    fulfilment === 'pickup' ? { address: '', location: null, contactPhone: pickupPhone } : chosen ? { address: chosen.address, location: chosen.location, contactPhone: chosen.contactPhone } : newDelivery
   const details = { fulfilment, delivery, pickupPointId }
   const problems = validateCheckout(details, hasCar)
-  // Repeat buyers land on the review, with their last details ready to change.
+  const savingNew = fulfilment === 'delivery' && !chosen && saveNew
+  const labelMissing = savingNew && !newLabel.trim()
+  // With a saved address, buyers land on the review, ready to change it.
   const [step, setStep] = useState<Step>(problems.length ? 'where' : 'review')
   const [placed, setPlaced] = useState<OrderView[] | null>(null)
 
@@ -102,7 +104,7 @@ function CheckoutFlow({ items }: { items: ListingView[] }) {
     e.preventDefault()
     if (step === 'where') {
       setShowErrors(true)
-      if (!problems.length) setStep('review')
+      if (!problems.length && !labelMissing) setStep('review')
       return
     }
     if (problems.length) {
@@ -114,8 +116,11 @@ function CheckoutFlow({ items }: { items: ListingView[] }) {
       { listingIds: items.map((l) => l.id), ...details },
       {
         onSuccess: (orders) => {
-          saveDelivery(fulfilment === 'delivery' ? delivery : { ...savedDelivery(), contactPhone: delivery.contactPhone })
           setPlaced(orders)
+          if (savingNew) {
+            // The order's placed either way, so a failure here is only worth a note.
+            saveAddress.mutate({ ...newDelivery, label: newLabel }, { onError: () => toast('Your order’s placed, but we couldn’t save that address.', 'info') })
+          }
         },
         onError: (error) => toast(errorMessage(error), 'error'),
       },
@@ -145,18 +150,46 @@ function CheckoutFlow({ items }: { items: ListingView[] }) {
                   />
                 )}
                 {fulfilment === 'delivery' ? (
-                  <AddressPicker
-                    id="delivery-address"
-                    label="Delivery address"
-                    hint="Add your flat, gate colour or a landmark to help the rider. Lagos only for now."
-                    placeholder="e.g. 15 Awolowo Road, Ikoyi"
-                    address={delivery.address}
-                    onAddress={(address) => setDelivery((d) => ({ ...d, address }))}
-                    location={delivery.location}
-                    onLocation={(location) => setDelivery((d) => ({ ...d, location }))}
-                    addressError={err('address_required')}
-                    showPinError={showErrors}
-                  />
+                  <>
+                    {addresses.length ? (
+                      <fieldset className="flex flex-col gap-2">
+                        <legend className="mb-1.5 flex w-full items-center justify-between gap-2 text-sm font-bold">
+                          Deliver to
+                          <Link to="/account" className="text-xs">
+                            Manage addresses
+                          </Link>
+                        </legend>
+                        {addresses.map((a) => (
+                          <label key={a.id} className={cx('flex min-h-11 cursor-pointer gap-3 rounded-2xl border p-3.5 transition', addressId === a.id ? 'border-brand bg-brand-soft' : 'border-line hover:border-line-strong')}>
+                            <input type="radio" name="saved-address" checked={addressId === a.id} onChange={() => setAddressId(a.id)} className="mt-1 size-4 shrink-0 accent-brand" />
+                            <span className="flex min-w-0 flex-col gap-0.5 text-sm">
+                              <strong>{a.label}</strong>
+                              <span className="text-muted">{a.address}</span>
+                              <span className="text-xs text-subtle">Rider calls {a.contactPhone}</span>
+                            </span>
+                          </label>
+                        ))}
+                        <label className={cx('flex min-h-11 cursor-pointer items-center gap-3 rounded-2xl border p-3.5 text-sm font-bold transition', addressId === null ? 'border-brand bg-brand-soft' : 'border-line hover:border-line-strong')}>
+                          <input type="radio" name="saved-address" checked={addressId === null} onChange={() => setAddressId(null)} className="size-4 shrink-0 accent-brand" />
+                          Use a new address
+                        </label>
+                      </fieldset>
+                    ) : null}
+                    {chosen ? null : (
+                      <AddressPicker
+                        id="delivery-address"
+                        label="Delivery address"
+                        hint="Add your flat, gate colour or a landmark to help the rider. Lagos only for now."
+                        placeholder="e.g. 15 Awolowo Road, Ikoyi"
+                        address={newDelivery.address}
+                        onAddress={(address) => setNewDelivery((d) => ({ ...d, address }))}
+                        location={newDelivery.location}
+                        onLocation={(location) => setNewDelivery((d) => ({ ...d, location }))}
+                        addressError={err('address_required')}
+                        showPinError={showErrors}
+                      />
+                    )}
+                  </>
                 ) : (
                   <fieldset className="flex flex-col gap-2">
                     <legend className="mb-1.5 text-sm font-bold">Choose a pickup location</legend>
@@ -178,23 +211,38 @@ function CheckoutFlow({ items }: { items: ListingView[] }) {
                     {err('pickup_point_required') ? <span className="text-xs font-semibold text-hot-ink">{err('pickup_point_required')}</span> : null}
                   </fieldset>
                 )}
-                <Field
-                  label={<span className="flex items-center gap-1.5"><PhoneIcon size={14} /> {fulfilment === 'delivery' ? 'Phone for the rider' : 'Phone number'}</span>}
-                  htmlFor="delivery-phone"
-                  error={err('phone_invalid')}
-                  hint={fulfilment === 'pickup' ? 'We’ll call when it’s ready to collect.' : undefined}
-                >
-                  <input
-                    id="delivery-phone"
-                    type="tel"
-                    inputMode="tel"
-                    autoComplete="tel"
-                    value={delivery.contactPhone}
-                    onChange={(e) => setDelivery({ ...delivery, contactPhone: e.target.value })}
-                    placeholder="0803 123 4567"
-                    className={inputCls}
-                  />
-                </Field>
+                {fulfilment === 'delivery' && chosen ? null : (
+                  <Field
+                    label={<span className="flex items-center gap-1.5"><PhoneIcon size={14} /> {fulfilment === 'delivery' ? 'Phone for the rider' : 'Phone number'}</span>}
+                    htmlFor="delivery-phone"
+                    error={err('phone_invalid')}
+                    hint={fulfilment === 'pickup' ? 'We’ll call when it’s ready to collect.' : undefined}
+                  >
+                    <input
+                      id="delivery-phone"
+                      type="tel"
+                      inputMode="tel"
+                      autoComplete="tel"
+                      value={delivery.contactPhone}
+                      onChange={(e) => (fulfilment === 'pickup' ? setPickupPhone(e.target.value) : setNewDelivery((d) => ({ ...d, contactPhone: e.target.value })))}
+                      placeholder="0803 123 4567"
+                      className={inputCls}
+                    />
+                  </Field>
+                )}
+                {fulfilment === 'delivery' && !chosen && canSave ? (
+                  <div className="flex flex-col gap-3 rounded-2xl bg-ground p-3.5">
+                    <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm font-bold">
+                      <input type="checkbox" checked={saveNew} onChange={(e) => setSaveNew(e.target.checked)} className="size-5 shrink-0 accent-brand" />
+                      Save this address for next time
+                    </label>
+                    {saveNew ? (
+                      <Field label="Name for this address" htmlFor="new-address-label" error={showErrors && labelMissing ? SAVED_ADDRESS_ERROR_TEXT.label_required : undefined} hint="e.g. Home, Work, Mum’s house.">
+                        <input id="new-address-label" value={newLabel} maxLength={MAX_ADDRESS_LABEL} onChange={(e) => setNewLabel(e.target.value)} className={inputCls} />
+                      </Field>
+                    ) : null}
+                  </div>
+                ) : null}
               </Card>
               <Button type="submit" size="lg">
                 Continue to review
@@ -205,7 +253,7 @@ function CheckoutFlow({ items }: { items: ListingView[] }) {
               <Card className="flex items-start gap-3 p-4 text-sm sm:p-5">
                 {fulfilment === 'delivery' ? <TruckIcon size={18} className="mt-0.5 shrink-0 text-brand" /> : <StoreIcon size={18} className="mt-0.5 shrink-0 text-brand" />}
                 <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <strong>{fulfilment === 'delivery' ? 'Delivering to' : `Collecting from ${point?.name ?? 'your pickup location'}`}</strong>
+                  <strong>{fulfilment === 'delivery' ? `Delivering to${chosen ? ` ${chosen.label}` : ''}` : `Collecting from ${point?.name ?? 'your pickup location'}`}</strong>
                   <span className="text-muted">{fulfilment === 'delivery' ? delivery.address.trim() : point?.address}</span>
                   <span className="text-xs text-subtle">
                     {fulfilment === 'delivery' ? `Pinned on the map · rider calls ${delivery.contactPhone.trim()}` : `${point?.hours ?? ''} · we’ll call ${delivery.contactPhone.trim()} when it’s ready`}

@@ -1260,6 +1260,89 @@ describe('cart and checkout', () => {
   })
 })
 
+describe('saved addresses and account phone', () => {
+  let buyer: string
+  let other: string
+  const home = { label: 'Home', address: '15 Awolowo Road, Ikoyi', lat: 6.45, lng: 3.43, phone: '0803 123 4567' }
+  const save = async (who: string, a: Record<string, unknown>) => (await asUser<{ id: string }>(who, `select public.save_address($1) id`, [a]))[0].id
+  const list = (who: string) => asUser<{ id: string; label: string; is_default: boolean; phone: string }>(who, `select * from public.saved_addresses order by created_at, id`)
+  const defaults = async (who: string) => (await list(who)).filter((a) => a.is_default).map((a) => a.label)
+
+  beforeAll(async () => {
+    buyer = await newUser('addresses@example.com')
+    other = await newUser('addresses2@example.com')
+  })
+
+  it('checks addresses like validateSavedAddress', async () => {
+    const e = await expectFail(save(buyer, { label: ' ', address: 'Ikoyi', phone: '1' }), 'invalid_input')
+    for (const text of ['short name', 'full address', 'Pin the exact spot', 'Nigerian mobile']) expect(e.detail).toContain(text)
+    const far = await expectFail(save(buyer, { ...home, lat: 9.06, lng: 7.49 }), 'invalid_input')
+    expect(far.detail).toContain('outside Lagos')
+    const store = await newUser('addrstore@example.com', { merchantId: IKEJA })
+    await expectFail(save(store, home), 'forbidden')
+  })
+
+  it('makes the first the default, and keeps exactly one', async () => {
+    await save(buyer, home)
+    expect(await defaults(buyer)).toEqual(['Home'])
+    const work = await save(buyer, { ...home, label: 'Work' })
+    expect(await defaults(buyer)).toEqual(['Home'])
+    await asUser(buyer, `select public.set_default_address($1)`, [work])
+    expect(await defaults(buyer)).toEqual(['Work'])
+    await save(buyer, { ...home, label: 'Mum', makeDefault: true })
+    expect(await defaults(buyer)).toEqual(['Mum'])
+  })
+
+  it('edits and removes only your own, and hands on the default', async () => {
+    const [first] = await list(buyer)
+    await save(buyer, { ...home, id: first.id, label: 'Home 2', phone: '0803 111 2222' })
+    expect((await list(buyer))[0]).toMatchObject({ label: 'Home 2', phone: '0803 111 2222' })
+
+    expect(await list(other)).toEqual([])
+    await expectFail(save(other, { ...home, id: first.id }), 'not_found')
+    await expectFail(asUser(other, `select public.set_default_address($1)`, [first.id]), 'not_found')
+    await asUser(other, `select public.delete_address($1)`, [first.id])
+    expect((await list(buyer)).length).toBe(3)
+    await expect(asUser(buyer, `update public.saved_addresses set label = 'x'`)).rejects.toThrow(/permission denied/)
+    expect(await asUser(null, `select * from public.saved_addresses`).catch(() => [])).toEqual([])
+
+    const mum = (await list(buyer)).find((a) => a.label === 'Mum')!
+    await asUser(buyer, `select public.delete_address($1)`, [mum.id])
+    expect(await defaults(buyer)).toEqual(['Home 2']) // the oldest left
+    for (const a of await list(buyer)) await asUser(buyer, `select public.delete_address($1)`, [a.id])
+    expect(await list(buyer)).toEqual([])
+  })
+
+  it('allows 10', async () => {
+    const many = await newUser('manyaddresses@example.com')
+    for (let i = 0; i < 10; i++) await save(many, { ...home, label: `A${i}` })
+    const e = await expectFail(save(many, { ...home, label: 'One more' }), 'invalid_input')
+    expect(e.detail).toContain('up to 10')
+    expect(await defaults(many)).toEqual(['A0'])
+  })
+
+  it('keeps an order’s address when the saved one changes', async () => {
+    const [{ id: item }] = await admin<{ id: string }>(`select id from public.listings where kind = 'product' and status = 'for_sale' and price_kobo <= 2500000 and category <> 'Cars' limit 1`)
+    const shopper = await newUser('addrorder@example.com')
+    if (item) {
+      const addr = await save(shopper, home)
+      const [order] = (await asUser<{ ids: string[] }>(shopper, `select public.checkout($1) ids`, [{ listingIds: [item], fulfilment: 'delivery', address: home.address, phone: home.phone, lat: home.lat, lng: home.lng }]))[0].ids
+      await asUser(shopper, `select public.delete_address($1)`, [addr])
+      expect((await admin<{ delivery_address: string }>(`select delivery_address from public.orders where id = $1`, [order]))[0].delivery_address).toBe(home.address)
+    }
+  })
+
+  it('saves an optional account phone', async () => {
+    const read = async () => (await asUser<{ phone: string | null }>(buyer, `select phone from public.profiles`))[0].phone
+    expect(await read()).toBeNull()
+    await expectFail(asUser(buyer, `select public.set_contact_phone('123')`), 'invalid_input')
+    await asUser(buyer, `select public.set_contact_phone('0803 123 4567')`)
+    expect(await read()).toBe('0803 123 4567')
+    await asUser(buyer, `select public.set_contact_phone('')`)
+    expect(await read()).toBeNull()
+  })
+})
+
 describe('reset_test_data', () => {
   it('puts the sample data back and every buyer back to the starting balance, for admins in test mode only', async () => {
     const staff = await newUser('resetter@example.com', { role: 'admin' })
@@ -1268,6 +1351,8 @@ describe('reset_test_data', () => {
     await asUser(buyer, `select public.buy_tickets($1, 1)`, [live.id])
     await asUser(buyer, `select public.top_up(100000)`)
     await asUser(buyer, `select public.set_weekly_limit(1000000)`)
+    await asUser(buyer, `select public.set_contact_phone('0803 123 4567')`)
+    await asUser(buyer, `select public.save_address($1)`, [{ label: 'Home', address: '15 Awolowo Road, Ikoyi', lat: 6.45, lng: 3.43, phone: '0803 123 4567' }])
 
     await expectFail(asUser(buyer, `select public.reset_test_data()`), 'forbidden')
     await asUser(staff, `select public.reset_test_data()`)
@@ -1280,6 +1365,7 @@ describe('reset_test_data', () => {
     expect(results).toBe(3)
     expect(n).toBeGreaterThan(50)
     expect(await admin(`select * from public.orders`)).toEqual([])
+    expect(await admin(`select * from public.saved_addresses`)).toEqual([])
     // Accounts and roles stay; the test seller's shop comes back.
     const [{ role }] = await admin<{ role: string }>(`select role from public.profiles where id = $1`, [staff])
     expect(role).toBe('admin')

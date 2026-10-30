@@ -9,6 +9,7 @@ import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
 import { fillDays, lagosDay, type DayMetrics } from '@/domain/metrics'
+import { sortAddresses, type SavedAddress } from '@/domain/addresses'
 import { lineAmountKobo } from '@/domain/cart'
 import { ORDER_ERROR_TEXT } from '@/domain/orders'
 import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication } from '@/domain/sellers'
@@ -117,6 +118,7 @@ interface ProfileRow {
   age_verified: boolean
   role: AccountRole
   merchant_id: string | null
+  phone: string | null
   /** An individual seller's own shop (buyer accounts only). */
   seller_id: string | null
 }
@@ -225,7 +227,7 @@ function toMerchant(m: MerchantRow): Merchant {
 }
 
 function toUser(p: ProfileRow): User {
-  return { id: p.id, displayName: p.display_name, state: p.state ?? '', weeklyLimitKobo: num(p.weekly_limit_kobo), ageVerified: p.age_verified }
+  return { id: p.id, displayName: p.display_name, state: p.state ?? '', weeklyLimitKobo: num(p.weekly_limit_kobo), ageVerified: p.age_verified, phone: p.phone }
 }
 
 function toLedgerEntry(e: LedgerRow): LedgerEntry {
@@ -433,6 +435,18 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     return row ? { items: row.items, savedAt: row.saved_at, expiresAt: row.expires_at } : null
   }
 
+  /** Row security limits these to the signed-in buyer's own. */
+  async function readAddresses(): Promise<SavedAddress[]> {
+    const rows = unwrap(
+      await client
+        .from('saved_addresses')
+        .select('id, label, address, lat, lng, phone, is_default')
+        .order('created_at')
+        .returns<{ id: string; label: string; address: string; lat: number; lng: number; phone: string; is_default: boolean }[]>(),
+    )
+    return sortAddresses(rows.map((a) => ({ id: a.id, label: a.label, address: a.address, location: { lat: a.lat, lng: a.lng }, contactPhone: a.phone, isDefault: a.is_default })))
+  }
+
   /** ID photos are private: hand out links that expire after an hour. */
   async function toApplicationView(a: SellerApplicationRow): Promise<SellerApplicationView> {
     const { data } = await client.storage.from(ID_BUCKET).createSignedUrls([a.id_photo_path, a.selfie_path], 60 * 60)
@@ -539,8 +553,27 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     getCurrentUser: async () => toUser(await myProfile()),
 
     updateProfile: async (patch) => {
-      await rpc('update_profile', { p_display_name: patch.displayName ?? null, p_state: patch.state ?? null })
+      if (patch.displayName !== undefined || patch.state !== undefined) await rpc('update_profile', { p_display_name: patch.displayName ?? null, p_state: patch.state ?? null })
+      if (patch.phone !== undefined) await rpc('set_contact_phone', { p_phone: patch.phone })
       return toUser(await myProfile())
+    },
+
+    // Saved delivery addresses
+    listAddresses: () => readAddresses(),
+
+    saveAddress: async (input) => {
+      await rpc('save_address', { p: { id: input.id, label: input.label, address: input.address, phone: input.contactPhone, lat: input.location?.lat, lng: input.location?.lng, makeDefault: input.makeDefault } })
+      return readAddresses()
+    },
+
+    setDefaultAddress: async (id) => {
+      await rpc('set_default_address', { p_id: id })
+      return readAddresses()
+    },
+
+    deleteAddress: async (id) => {
+      await rpc('delete_address', { p_id: id })
+      return readAddresses()
     },
 
     // Buyer

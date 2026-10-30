@@ -1,26 +1,22 @@
 import { useState, type FormEvent } from "react";
+import { Link } from "react-router";
 import { api } from "@/api";
 import {
-  useAccess,
   useCheckDeposit,
-  useDemoActions,
   useDeposit,
-  useMe,
   useSetWeeklyLimit,
   useTopUp,
-  useUpdateProfile,
   useWallet,
 } from "@/api/hooks";
 import type { DepositStatus, WalletView } from "@/api/types";
-import { resetIntro } from "@/components/HowItWorks";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
+  ChevronRightIcon,
   ClockIcon,
   NairaIcon,
   GaugeIcon,
   GiftIcon,
-  MapPinIcon,
   PlusIcon,
   RefreshIcon,
   SettingsIcon,
@@ -31,7 +27,6 @@ import {
   type IconComponent,
 } from "@/components/icons";
 import { Sheet } from "@/components/Sheet";
-import { ThemePicker } from "@/components/ThemeToggle";
 import { useToast } from "@/components/toast";
 import {
   Button,
@@ -60,7 +55,6 @@ const LIMIT_PRESETS = [
   nairaToKobo(50_000),
   nairaToKobo(100_000),
 ];
-const STATES = ["Lagos", "Ogun", "Oyo", "FCT", "Rivers", "Kano"];
 
 /** What to tell the buyer once a payment-provider top-up finishes. */
 function depositMessage(
@@ -121,7 +115,14 @@ export function WalletPage() {
             limit={w.weeklyLimitKobo}
             pending={w.pendingLimit}
           />
-          <AccountCard />
+          <Link
+            to="/account"
+            className="flex min-h-14 items-center gap-3 rounded-3xl border border-line bg-surface p-4 text-sm font-bold text-ink no-underline shadow-card transition hover:border-line-strong"
+          >
+            <SettingsIcon size={20} className="shrink-0 text-muted" />
+            Account and settings
+            <ChevronRightIcon size={18} className="ml-auto text-subtle" />
+          </Link>
         </div>
       </div>
     </div>
@@ -625,145 +626,5 @@ function Activity({ entries }: { entries: LedgerEntry[] }) {
         </Card>
       )}
     </section>
-  );
-}
-
-function AccountCard() {
-  const me = useMe();
-  const update = useUpdateProfile();
-  const demo = useDemoActions();
-  const { email } = useAccess();
-  const toast = useToast();
-  const [confirmReset, setConfirmReset] = useState(false);
-  if (!me.data) return <Skeleton className="h-56" />;
-  const licensed = RULES.licensedStates.includes(me.data.state);
-
-  return (
-    <Card className="flex flex-col gap-4 p-5">
-      <div className="flex items-center gap-3">
-        <span className="flex size-10 items-center justify-center rounded-xl bg-sunken text-muted">
-          <SettingsIcon size={20} />
-        </span>
-        <div className="flex min-w-0 flex-col">
-          <strong>Account & settings</strong>
-          {email ? (
-            <span className="truncate text-xs text-subtle">
-              Signed in as {email}
-            </span>
-          ) : null}
-        </div>
-      </div>
-
-      <Field
-        label={
-          <span className="flex items-center gap-1.5">
-            <MapPinIcon size={14} /> State of residence
-          </span>
-        }
-        htmlFor="state"
-        hint={`Tickets can only be bought in licensed states (${RULES.licensedStates.join(", ")}). In production this is checked with KYC, not a dropdown.`}
-      >
-        <select
-          id="state"
-          value={me.data.state}
-          onChange={(e) =>
-            update.mutate(
-              { state: e.target.value },
-              { onError: (err) => toast(errorMessage(err), "error") },
-            )
-          }
-          className={inputCls}
-        >
-          {STATES.map((s) => (
-            <option key={s}>{s}</option>
-          ))}
-        </select>
-      </Field>
-      {!licensed ? (
-        <Notice tone="hot">
-          DrawMart isn’t available in {me.data.state} yet, so ticket purchases
-          are paused.
-        </Notice>
-      ) : null}
-
-      <div className="flex flex-col gap-1.5">
-        <span className="text-sm font-bold">Appearance</span>
-        <ThemePicker />
-      </div>
-
-      <div className="flex flex-wrap gap-2 border-t border-line pt-4">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            resetIntro();
-            window.location.assign("/");
-          }}
-        >
-          Replay the intro
-        </Button>
-        <SignOutButton />
-        {api.testMode && api.demoReset ? (
-          <Button
-            variant="danger"
-            size="sm"
-            onClick={() => setConfirmReset(true)}
-          >
-            Reset demo data
-          </Button>
-        ) : null}
-      </div>
-
-      {api.testMode && api.demoReset ? (
-        <Sheet
-          open={confirmReset}
-          onClose={() => setConfirmReset(false)}
-          title="Reset demo data"
-        >
-          <h2 className="pr-10 font-display text-2xl font-extrabold">
-            Start over?
-          </h2>
-          <p className="text-sm text-muted">
-            This clears your test wallet, tickets and any listings you created,
-            and reloads the sample draws.
-          </p>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              className="flex-1"
-              onClick={() => setConfirmReset(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="danger"
-              className="flex-1"
-              loading={demo.reset.isPending}
-              onClick={() => demo.reset.mutate()}
-            >
-              Reset everything
-            </Button>
-          </div>
-        </Sheet>
-      ) : null}
-    </Card>
-  );
-}
-
-function SignOutButton() {
-  const [busy, setBusy] = useState(false);
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      loading={busy}
-      onClick={async () => {
-        setBusy(true);
-        await api.auth.signOut();
-        window.location.assign("/");
-      }}
-    >
-      Sign out
-    </Button>
   );
 }

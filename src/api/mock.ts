@@ -37,6 +37,7 @@ import {
   splitPayment,
   topUpError,
 } from '@/domain/rules'
+import { MAX_SAVED_ADDRESSES, SAVED_ADDRESS_ERROR_TEXT, sortAddresses, validateSavedAddress, type SavedAddress, type SavedAddressInput } from '@/domain/addresses'
 import { CART_ERROR_TEXT, CHECKOUT_ERROR_TEXT, cartError, checkoutTotalKobo, isCar, isWonPrize, lineAmountKobo, validateCheckout } from '@/domain/cart'
 import { ORDER_ERROR_TEXT, PRODUCT_ERROR_TEXT, saleEconomics, validateProduct } from '@/domain/orders'
 import { MAX_MESSAGES_PER_MINUTE, messageError } from '@/domain/messages'
@@ -71,7 +72,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v15' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v16' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -96,6 +97,8 @@ interface Db {
   results: DrawResult[]
   pendingLimits: Record<string, { amountKobo: number; effectiveAt: string }>
   orders: Order[]
+  /** Each buyer's saved delivery addresses, oldest first. */
+  addresses: Record<string, SavedAddress[]>
   /** Listing ids in each buyer's cart, oldest first. */
   carts: Record<string, string[]>
   /** Buyers' applications to sell, by user id. */
@@ -505,8 +508,8 @@ async function freshDb(): Promise<Db> {
   const now = Date.now()
   const db: Db = {
     users: [
-      ...DEMO_BUYERS.map((a) => ({ id: a.mockId, displayName: a.name, state: 'Lagos', weeklyLimitKobo: RULES.defaultWeeklyLimitKobo, ageVerified: true })),
-      { id: CROWD, displayName: 'Other buyers', state: 'Lagos', weeklyLimitKobo: Number.MAX_SAFE_INTEGER, ageVerified: true },
+      ...DEMO_BUYERS.map((a) => ({ id: a.mockId, displayName: a.name, state: 'Lagos', weeklyLimitKobo: RULES.defaultWeeklyLimitKobo, ageVerified: true, phone: null })),
+      { id: CROWD, displayName: 'Other buyers', state: 'Lagos', weeklyLimitKobo: Number.MAX_SAFE_INTEGER, ageVerified: true, phone: null },
     ],
     merchants: MERCHANTS.map((x) => ({ ...x })),
     listings: [],
@@ -520,6 +523,7 @@ async function freshDb(): Promise<Db> {
     pendingLimits: {},
     orders: [],
     carts: {},
+    addresses: {},
     sellerApplications: {},
     sellerShops: {},
     conversations: [],
@@ -877,6 +881,10 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     return s?.role === 'buyer' ? s.userId : ME
   }
   const me = (db: Db) => db.users.find((u) => u.id === buyer())!
+  const addressesOf = (db: Db) => sortAddresses(db.addresses[buyer()] ?? [])
+  const makeDefault = (list: SavedAddress[], id: string) => {
+    for (const a of list) a.isDefault = a.id === id
+  }
   /** The shop whose side of chats the signed-in user sees, if any. */
   const myShop = (db: Db): string | null => {
     const role = readSession()?.role
@@ -980,8 +988,54 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     updateProfile: (patch) =>
       tx((db) => {
-        Object.assign(me(db), patch)
+        const phone = patch.phone?.trim()
+        if (phone && !isNigerianMobile(phone)) throw new ApiError('invalid_input', 'Enter a Nigerian mobile number, e.g. 0803 123 4567.')
+        const name = patch.displayName?.trim()
+        Object.assign(me(db), {
+          ...(patch.state !== undefined ? { state: patch.state } : {}),
+          ...(name ? { displayName: name } : {}),
+          ...(patch.phone !== undefined ? { phone: phone || null } : {}),
+        })
         return { ...me(db) }
+      }),
+
+    listAddresses: () => tx((db) => addressesOf(db)),
+
+    saveAddress: (input: SavedAddressInput) =>
+      tx((db) => {
+        if (readSession() && readSession()!.role !== 'buyer') throw new ApiError('forbidden', 'Only buyer accounts save delivery addresses.')
+        const problems = validateSavedAddress(input).map((e) => SAVED_ADDRESS_ERROR_TEXT[e])
+        if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+        const list = (db.addresses[buyer()] ??= [])
+        const fields = { label: input.label.trim(), address: input.address.trim(), location: input.location!, contactPhone: input.contactPhone.trim() }
+        if (input.id) {
+          const a = list.find((x) => x.id === input.id)
+          if (!a) throw new ApiError('not_found', 'That address doesn’t exist.')
+          Object.assign(a, fields)
+          if (input.makeDefault) makeDefault(list, a.id)
+        } else {
+          if (list.length >= MAX_SAVED_ADDRESSES) throw new ApiError('invalid_input', `You can save up to ${MAX_SAVED_ADDRESSES} addresses. Remove one to add another.`)
+          const a: SavedAddress = { id: uid('A'), ...fields, isDefault: list.length === 0 }
+          list.push(a)
+          if (input.makeDefault) makeDefault(list, a.id)
+        }
+        return addressesOf(db)
+      }),
+
+    setDefaultAddress: (id) =>
+      tx((db) => {
+        const list = db.addresses[buyer()] ?? []
+        if (!list.some((a) => a.id === id)) throw new ApiError('not_found', 'That address doesn’t exist.')
+        makeDefault(list, id)
+        return addressesOf(db)
+      }),
+
+    deleteAddress: (id) =>
+      tx((db) => {
+        const list = (db.addresses[buyer()] ?? []).filter((a) => a.id !== id)
+        if (list.length && !list.some((a) => a.isDefault)) list[0].isDefault = true
+        db.addresses[buyer()] = list
+        return addressesOf(db)
       }),
 
     listListings: (filter: ListingFilter = {}) =>

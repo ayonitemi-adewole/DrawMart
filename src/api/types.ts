@@ -6,6 +6,7 @@
  * implements the same interface and nothing in src/pages has to change.
  */
 import type { HandoverDetails } from '@/domain/listing'
+import type { SavedAddress, SavedAddressInput } from '@/domain/addresses'
 import type { CheckoutDetails } from '@/domain/cart'
 import type { OrderError } from '@/domain/orders'
 import type { PurchaseError } from '@/domain/rules'
@@ -337,7 +338,16 @@ export interface DrawMartApi {
 
   // Session
   getCurrentUser(): Promise<User>
-  updateProfile(patch: Partial<Pick<User, 'state' | 'displayName'>>): Promise<User>
+  updateProfile(patch: Partial<Pick<User, 'state' | 'displayName' | 'phone'>>): Promise<User>
+
+  // Saved delivery addresses
+  /** The buyer's own, default first. */
+  listAddresses(): Promise<SavedAddress[]>
+  /** Adds one, or updates it when `id` is set. The first saved becomes the default. */
+  saveAddress(input: SavedAddressInput): Promise<SavedAddress[]>
+  setDefaultAddress(id: string): Promise<SavedAddress[]>
+  /** Removing the default hands it to the oldest one left. Orders keep their own copy. */
+  deleteAddress(id: string): Promise<SavedAddress[]>
 
   // Buyer
   listListings(filter?: ListingFilter): Promise<ListingView[]>

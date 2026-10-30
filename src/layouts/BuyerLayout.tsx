@@ -23,12 +23,14 @@ import {
   BellIcon,
   CartIcon,
   ChatIcon,
+  ChevronRightIcon,
   HomeIcon,
   LogoMark,
   ShieldIcon,
   StoreIcon,
   TicketIcon,
   TrophyIcon,
+  UserIcon,
   WalletIcon,
 } from "@/components/icons";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -42,6 +44,14 @@ const NAV = [
   { to: "/draws", label: "Results", icon: TrophyIcon },
   { to: "/wallet", label: "Wallet", icon: WalletIcon },
   { to: "/sell", label: "Sell", icon: StoreIcon },
+];
+
+/** Phones and tablets: the rest of NAV is in the menu. */
+const BOTTOM_NAV = [
+  { to: "/", label: "Explore", icon: HomeIcon, end: true },
+  { to: "/tickets", label: "Tickets", icon: TicketIcon },
+  { to: "/draws", label: "Results", icon: TrophyIcon },
+  { to: "/messages", label: "Messages", icon: ChatIcon },
 ];
 
 export function Logo({ suffix, to = "/" }: { suffix?: string; to?: string }) {
@@ -85,10 +95,13 @@ function WalletChip({
   cash,
   credit,
   className,
+  showArrow,
 }: {
   cash: number | null;
   credit: number;
   className?: string;
+  /** In the menu, where it needs to look like the link it is. */
+  showArrow?: boolean;
 }) {
   return (
     <Link
@@ -112,6 +125,11 @@ function WalletChip({
           </span>
         ) : null}
       </span>
+      {showArrow ? (
+        <span className="ml-auto flex items-center gap-1 text-xs font-bold">
+          Wallet <ChevronRightIcon size={16} />
+        </span>
+      ) : null}
     </Link>
   );
 }
@@ -135,10 +153,11 @@ export function BuyerLayout() {
   const signOut = useSignOut();
   const menuLinks: MenuLink[] = access.signedIn
     ? [
+        { to: "/account", label: "Account", icon: UserIcon },
         { to: "/notifications", label: "Notifications", icon: BellIcon, count: unreadNotifications },
-        { to: "/messages", label: "Messages", icon: ChatIcon, count: unread },
+        { to: "/sell", label: "Sell", icon: StoreIcon },
       ]
-    : [];
+    : [{ to: "/sell", label: "Sell", icon: StoreIcon }];
 
   // Store and admin accounts have their own apps and never see this one.
   if (access.role && access.role !== "buyer")
@@ -222,6 +241,15 @@ export function BuyerLayout() {
                 ) : null}
               </Link>
             ) : null}
+            {access.signedIn ? (
+              <Link
+                to="/account"
+                aria-label="Account"
+                className="hidden size-11 items-center justify-center rounded-xl text-muted no-underline hover:bg-sunken hover:text-ink lg:flex"
+              >
+                <UserIcon size={20} />
+              </Link>
+            ) : null}
             <span className="hidden lg:block">
               <ThemeToggle />
             </span>
@@ -241,7 +269,7 @@ export function BuyerLayout() {
               links={menuLinks}
               top={
                 access.signedIn ? (
-                  <WalletChip cash={cash} credit={credit} className="flex min-h-14" />
+                  <WalletChip cash={cash} credit={credit} className="flex min-h-14" showArrow />
                 ) : null
               }
               account={access.email}
@@ -298,10 +326,10 @@ export function BuyerLayout() {
       </footer>
 
       <nav
-        className="fixed inset-x-3 bottom-[max(env(safe-area-inset-bottom),12px)] z-30 grid grid-cols-5 gap-1 rounded-3xl border border-line bg-raised/90 p-1.5 shadow-lift backdrop-blur-xl lg:hidden"
+        className="fixed inset-x-3 bottom-[max(env(safe-area-inset-bottom),12px)] z-30 grid grid-cols-4 gap-1 rounded-3xl border border-line bg-raised/90 p-1.5 shadow-lift backdrop-blur-xl lg:hidden"
         aria-label="Main"
       >
-        {NAV.map((n) => (
+        {BOTTOM_NAV.map((n) => (
           <NavLink
             key={n.to}
             to={n.to}
@@ -320,6 +348,11 @@ export function BuyerLayout() {
             {n.to === "/tickets" && active > 0 ? (
               <span className="absolute top-1 right-[calc(50%-20px)] flex size-4.5 items-center justify-center rounded-full bg-hot text-[9px] font-extrabold text-white">
                 {active}
+              </span>
+            ) : null}
+            {n.to === "/messages" && unread > 0 ? (
+              <span className="absolute top-1 right-[calc(50%-20px)] flex size-4.5 items-center justify-center rounded-full bg-hot text-[9px] font-extrabold text-white">
+                {unread > 9 ? "9+" : unread}
               </span>
             ) : null}
           </NavLink>
