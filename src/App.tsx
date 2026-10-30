@@ -1,12 +1,13 @@
-import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query'
-import { useEffect } from 'react'
+import { QueryClient, QueryClientProvider, useIsFetching, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { Link, Navigate, RouterProvider, createBrowserRouter, useRouteError } from 'react-router'
 import { api } from '@/api'
-import { keys } from '@/api/hooks'
+import { keys, useSession } from '@/api/hooks'
 import { RequireSignIn } from '@/components/RequireSignIn'
 import { ToastProvider } from '@/components/toast'
 import { SearchIcon } from '@/components/icons'
 import { EmptyState, ErrorState, buttonClass } from '@/components/ui'
+import { hideSplash, holdSplash, showSplash } from '@/lib/splash'
 import { AuthLayout } from '@/layouts/AuthLayout'
 import { BackOfficeLayout } from '@/layouts/BackOfficeLayout'
 import { BuyerLayout } from '@/layouts/BuyerLayout'
@@ -78,6 +79,33 @@ function SessionSync() {
   return null
 }
 
+/**
+ * Drives the loading screen: it comes down once the session and the page's
+ * first data have loaded, and goes back up when someone signs in, while their
+ * app opens.
+ */
+function SplashController() {
+  const session = useSession()
+  const fetching = useIsFetching()
+  const busy = session.isPending || fetching > 0
+  const userId = session.isPending ? undefined : (session.data?.userId ?? null)
+  const lastUser = useRef<string | null | undefined>(undefined)
+
+  // Before paint, so the app being opened never shows from behind it.
+  useLayoutEffect(() => {
+    if (userId === undefined) return
+    if (lastUser.current === null && userId) showSplash()
+    lastUser.current = userId
+  }, [userId])
+
+  useEffect(() => {
+    if (busy) holdSplash()
+    else hideSplash()
+  }, [busy, userId])
+
+  return null
+}
+
 // Three separate apps behind one sign-in page. Each account belongs to one of them:
 //   buyer  /        browsing is public; tickets and wallet need a buyer account
 //   store  /store   store accounts only
@@ -140,6 +168,7 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <SessionSync />
+      <SplashController />
       <ToastProvider>
         <RouterProvider router={router} />
       </ToastProvider>
