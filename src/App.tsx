@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react'
 import { Link, Navigate, RouterProvider, createBrowserRouter, useRouteError } from 'react-router'
 import { api } from '@/api'
 import { keys, useSession } from '@/api/hooks'
+import { PullToRefresh } from '@/components/PullToRefresh'
 import { RequireSignIn } from '@/components/RequireSignIn'
 import { ToastProvider } from '@/components/toast'
 import { SearchIcon } from '@/components/icons'
@@ -169,6 +170,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <SessionSync />
       <SplashController />
+      <PullToRefresh />
       <ToastProvider>
         <RouterProvider router={router} />
       </ToastProvider>

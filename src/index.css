@@ -158,6 +158,13 @@ body,
   min-height: 100%;
 }
 
+/* Home-screen app: no bounce at the top, so our pull-to-refresh (components/PullToRefresh.tsx) moves on its own. */
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  html {
+    overscroll-behavior-y: none;
+  }
+}
+
 body {
   background: var(--color-ground);
   color: var(--color-ink);

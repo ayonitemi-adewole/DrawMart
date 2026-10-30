@@ -27,7 +27,7 @@ function hideNow() {
 
 if (splash()) maxTimer = setTimeout(hideNow, MAX_MS)
 
-const isShown = () => !!splash() && !splash()!.hasAttribute('data-hidden')
+export const isSplashShown = () => !!splash() && !splash()!.hasAttribute('data-hidden')
 
 export function showSplash() {
   const el = splash()
@@ -43,7 +43,7 @@ export function showSplash() {
 
 /** Hides it once it has been up for the minimum time. */
 export function hideSplash() {
-  if (!isShown() || hideTimer) return
+  if (!isSplashShown() || hideTimer) return
   hideTimer = setTimeout(hideNow, Math.max(0, shownAt + MIN_MS - performance.now()))
 }
 
