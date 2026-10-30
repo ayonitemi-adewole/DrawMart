@@ -944,6 +944,131 @@ describe('boost results', () => {
   })
 })
 
+describe('shared pickups', () => {
+  let store: string
+  let staff: string
+  const handover = { address: '12 Allen Avenue, Ikeja', contactPhone: '0803 123 4567', date: addDays(localDate(new Date()), 2), slot: 'morning' }
+  const item = (title: string, category = 'Phones', patch: Record<string, unknown> = {}) => {
+    const { handover: _omit, ...rest } = listingInput({ title, category, ...patch })
+    return rest
+  }
+  const batch = async (items: unknown[]) => (await asUser<{ ids: string[] }>(store, `select public.create_listing_batch($1) ids`, [{ items, handover }]))[0].ids
+  const fees = async (ids: string[]) =>
+    (await admin<{ s: string }>(`select caution_fee_status s from public.listings where id = any($1::uuid[])`, [ids])).map((r) => r.s)
+  const sellOut = (id: string) => asUser(staff, `select public.demo_sell_out($1)`, [id])
+
+  beforeAll(async () => {
+    store = await newUser('batcher@example.com', { merchantId: IKEJA })
+    staff = await newUser('staff9@example.com', { role: 'admin' })
+  })
+
+  it('charges one fee, the highest, and books one pickup for every item', async () => {
+    const ids = await batch([item('Phone A'), item('Blender B', 'Home'), item('TV C', 'Electronics')])
+    const rows = await admin<{ caution_fee_kobo: string; pickup_batch_id: string; status: string }>(`select * from public.listings where id = any($1::uuid[])`, [ids])
+    expect(rows).toHaveLength(3)
+    expect(rows.every((r) => Number(r.caution_fee_kobo) === 1_000_000 && r.status === 'pending_review')).toBe(true) // Home's ₦10,000
+    expect(new Set(rows.map((r) => r.pickup_batch_id)).size).toBe(1)
+    expect(rows[0].pickup_batch_id).not.toBeNull()
+    const handovers = await asUser<{ address: string }>(store, `select address from public.listing_handovers where listing_id = any($1::uuid[])`, [ids])
+    expect(handovers.map((h) => h.address)).toEqual(Array(3).fill(handover.address))
+  })
+
+  it('refuses too few, too many, and cars, and creates nothing if any item is bad', async () => {
+    await expectFail(batch([item('Only one')]), 'invalid_input')
+    await expectFail(batch(Array.from({ length: 11 }, (_, i) => item(`Item ${i}`))), 'invalid_input')
+    const e = await expectFail(batch([item('Phone'), item('Saloon', 'Cars')]), 'invalid_input')
+    expect(e.detail).toContain('Cars are inspected')
+    const [{ before }] = await admin<{ before: number }>(`select count(*)::int before from public.listings`)
+    await expectFail(batch([item('Good one'), item(' ')]), 'invalid_input')
+    const [{ after }] = await admin<{ after: number }>(`select count(*)::int after from public.listings`)
+    expect(after).toBe(before)
+    const buyer = await newUser('notastore@example.com')
+    await expectFail(asUser(buyer, `select public.create_listing_batch($1)`, [{ items: [item('A'), item('B')], handover }]), 'forbidden')
+  })
+
+  it('refunds the fee only when every draw sells out', async () => {
+    const ids = await batch([item('Sells 1'), item('Sells 2', 'Home')])
+    for (const id of ids) await asUser(staff, `select public.approve_listing($1)`, [id])
+    await sellOut(ids[0])
+    expect(await fees(ids)).toEqual(['held', 'held']) // one drawn, one still live
+    await sellOut(ids[1])
+    expect(await fees(ids)).toEqual(['refunded', 'refunded'])
+  })
+
+  it('keeps the fee across the pickup as soon as one draw fails', async () => {
+    const unsold = await batch([item('Drawn'), item('Unsold', 'Home')])
+    for (const id of unsold) await asUser(staff, `select public.approve_listing($1)`, [id])
+    await sellOut(unsold[0])
+    await asUser(staff, `select public.demo_expire($1)`, [unsold[1]])
+    expect(await fees(unsold)).toEqual(['kept', 'kept'])
+
+    const rejected = await batch([item('Fine'), item('Rejected', 'Home')])
+    await asUser(staff, `select public.reject_listing($1)`, [rejected[1]])
+    expect(await fees(rejected)).toEqual(['kept', 'kept'])
+  })
+
+  it('leaves listings on their own settling as before', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ title: 'Solo' })])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    await sellOut(id)
+    expect(await fees([id])).toEqual(['refunded'])
+  })
+})
+
+describe('saved pickups', () => {
+  let store: string
+  let other: string
+  const items = (...titles: string[]) => titles.map((title) => ({ title, category: 'Phones', images: [], priceKobo: 100_000 }))
+  const save = (who: string, list: unknown[]) => asUser(who, `select public.save_pickup_items($1)`, [JSON.stringify(list)])
+  const read = (who: string) => asUser<{ items: { title: string }[]; saved_at: string; expires_at: string }>(who, `select * from public.saved_pickups`)
+
+  beforeAll(async () => {
+    store = await newUser('saver@example.com', { merchantId: IKEJA })
+    other = await newUser('saver2@example.com', { merchantId: '11111111-1111-4111-8111-000000000002' })
+  })
+
+  it('saves items for 7 days from the first save, and edits do not extend it', async () => {
+    await save(store, items('A'))
+    const [first] = await read(store)
+    expect(Date.parse(first.expires_at) - Date.parse(first.saved_at)).toBe(7 * 86_400_000)
+    await save(store, items('A', 'B'))
+    const [second] = await read(store)
+    expect(second.items.map((i) => i.title)).toEqual(['A', 'B'])
+    expect(second.expires_at).toEqual(first.expires_at)
+  })
+
+  it('is private to the store, and only for stores', async () => {
+    expect(await read(other)).toEqual([])
+    const buyer = await newUser('nosave@example.com')
+    await expectFail(save(buyer, items('A')), 'forbidden')
+    await expect(asUser(store, `insert into public.saved_pickups (merchant_id, items, expires_at) values ($1, '[]', now())`, [IKEJA])).rejects.toThrow(/permission denied/)
+  })
+
+  it('refuses cars, too many items and photos not yet uploaded', async () => {
+    await expectFail(save(store, [{ title: 'Saloon', category: 'Cars' }]), 'invalid_input')
+    await expectFail(save(store, items(...Array.from({ length: 11 }, (_, i) => `I${i}`))), 'invalid_input')
+    await expectFail(save(store, [{ title: 'X', category: 'Home', images: ['data:image/png;base64,xx'] }]), 'invalid_input')
+  })
+
+  it('disappears once expired, starts afresh on the next save, and clears when emptied', async () => {
+    await admin(`update public.saved_pickups set expires_at = now() - interval '1 minute' where merchant_id = $1`, [IKEJA])
+    expect(await read(store)).toEqual([])
+    await save(store, items('New'))
+    const [fresh] = await read(store)
+    expect(fresh.items.map((i) => i.title)).toEqual(['New'])
+    expect(Date.parse(fresh.expires_at)).toBeGreaterThan(Date.now() + 6 * 86_400_000)
+    await save(store, [])
+    expect(await read(store)).toEqual([])
+  })
+
+  it('removes expired ones in the clean-up', async () => {
+    await save(other, items('Old'))
+    await admin(`update public.saved_pickups set expires_at = now() - interval '1 minute'`)
+    await admin(`select private.delete_expired_saved_pickups()`)
+    expect(await admin(`select * from public.saved_pickups`)).toEqual([])
+  })
+})
+
 describe('reset_test_data', () => {
   it('puts the sample data back and every buyer back to the starting balance, for admins in test mode only', async () => {
     const staff = await newUser('resetter@example.com', { role: 'admin' })

@@ -12,7 +12,12 @@ import {
   HANDOVER_ERROR_TEXT,
   LISTING_TERMS_ERROR_TEXT,
   addDays,
+  PICKUP_ERROR_TEXT,
   cautionFeeFor,
+  pickupCautionFee,
+  savedPickupExpiry,
+  settlePickupFee,
+  validatePickup,
   handoverMethodFor,
   isNigerianMobile,
   localDate,
@@ -46,6 +51,9 @@ import {
   type ListingView,
   type NewListingInput,
   type WalletView,
+  type NewPickupInput,
+  type PickupItemInput,
+  type SavedPickupView,
   type NewProductInput,
   type SellerApplicationView,
   type ChatMessage,
@@ -61,7 +69,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v10' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v12' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -93,6 +101,8 @@ interface Db {
   messages: ChatMessage[]
   /** Opt-in call numbers by merchant id. */
   callPhones: Record<string, string>
+  /** Items each store has saved to send later, by merchant id. */
+  savedPickups: Record<string, SavedPickupView>
   /** One per visitor per listing per Lagos day. */
   views: { listingId: string; visitor: string; day: string }[]
   boosts: (Omit<BoostView, 'listingTitle' | 'merchantName'> & { merchantId: string })[]
@@ -395,7 +405,7 @@ function productListing(input: NewProductInput & { merchantId: string; status: L
     id: uid('L'), kind: 'product', merchantId: input.merchantId, title: input.title.trim(), description: input.description.trim(), category: input.category,
     images: input.images ?? [], priceKobo: input.priceKobo, ticketPriceKobo: 0, buyerTicketPriceKobo: 0, ticketCount: 0, ticketsSold: 0,
     feeMode: 'seller', feeBps: platformFeeBps(input.priceKobo), unsoldPolicy: 'refund', fallbackPriceKobo: null, durationDays: 0, extended: false,
-    status: input.status, handover: null, cautionFee: { amountKobo: 0, status: 'none' }, commitment: '', createdAt: iso(at), closesAt: iso(at), boostedUntil: null,
+    status: input.status, handover: null, cautionFee: { amountKobo: 0, status: 'none' }, commitment: '', createdAt: iso(at), closesAt: iso(at), boostedUntil: null, pickupBatchId: null,
   }
 }
 
@@ -439,6 +449,7 @@ async function makeListing(s: SeedListing, now: number, seeds: Record<string, st
     createdAt: iso(now - 2 * DAY),
     closesAt: iso(now + s.closesInHours * 60 * 60 * 1000),
     boostedUntil: null,
+    pickupBatchId: null,
   }
 }
 
@@ -487,6 +498,7 @@ async function freshDb(): Promise<Db> {
     messages: [],
     callPhones: { 'm-surulere': '0803 000 1234' },
     views: [],
+    savedPickups: {},
     boosts: [],
     // The demo never reaches the real threshold, so boosts start switched on.
     boostSettings: { minActiveBuyers: BOOST_DEFAULTS.minActiveBuyers, forcedOn: true, maxActive: BOOST_DEFAULTS.maxActiveBoosts },
@@ -622,6 +634,16 @@ function processDeadlines(db: Db, now: number): boolean {
   return changed
 }
 
+/** A shared pickup's one fee follows all its draws (listing.ts settlePickupFee). */
+function settlePickups(db: Db) {
+  const batches = new Map<string, Listing[]>()
+  for (const l of db.listings) if (l.pickupBatchId) batches.set(l.pickupBatchId, [...(batches.get(l.pickupBatchId) ?? []), l])
+  for (const members of batches.values()) {
+    const status = settlePickupFee(members.map((l) => l.status))
+    for (const l of members) l.cautionFee = { ...l.cautionFee, status }
+  }
+}
+
 function applyPendingLimits(db: Db, now: number): boolean {
   let changed = false
   for (const [userId, p] of Object.entries(db.pendingLimits)) {
@@ -746,7 +768,9 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       const t = now()
       processDeadlines(db, t)
       applyPendingLimits(db, t)
+      settlePickups(db)
       const out = await fn(db)
+      settlePickups(db)
       delete db.viewer
       save(db)
       return out
@@ -848,6 +872,46 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     if (!shop) throw new ApiError('forbidden', 'Get verified as a seller to list products.')
     return shop
   }
+  /** This store's saved items, unless they've expired. */
+  function savedPickupOf(db: Db): SavedPickupView | null {
+    const shop = shopId(db)
+    const saved = db.savedPickups[shop]
+    if (saved && Date.parse(saved.expiresAt) <= now()) delete db.savedPickups[shop]
+    return db.savedPickups[shop] ?? null
+  }
+
+  /** Checks one draw item and adds it for review, with its own pickup booking and fee. */
+  async function addRaffle(db: Db, input: NewListingInput): Promise<Listing> {
+    if (readSession()?.role === 'buyer') throw new ApiError('forbidden', 'Only registered stores can run raffle draws.')
+    const today = localDate(new Date(now()))
+    const problems = [
+      ...validateListingEconomics(input).map((e) => LISTING_ERROR_TEXT[e]),
+      ...validateListingTerms(input).map((e) => LISTING_TERMS_ERROR_TEXT[e]),
+      ...validateHandover(input.handover, today).map((e) => HANDOVER_ERROR_TEXT[e]),
+    ]
+    if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+    // DrawMart sets the fee from the item's value; the store never chooses it.
+    const feeBps = platformFeeBps(input.priceKobo)
+    const econ = computeListingEconomics({ ...input, feeBps })
+    const seed = createSeed()
+    const id = uid('L')
+    db.seeds[id] = seed
+    const at = now()
+    const listing: Listing = {
+      id, kind: 'raffle', merchantId: shopId(db), title: input.title.trim(), description: input.description.trim(), category: input.category, images: input.images ?? [],
+      priceKobo: input.priceKobo, ticketPriceKobo: input.ticketPriceKobo, buyerTicketPriceKobo: econ.buyerTicketKobo,
+      ticketCount: econ.ticketCount, ticketsSold: 0, feeMode: input.feeMode, feeBps,
+      unsoldPolicy: input.unsoldPolicy, fallbackPriceKobo: input.unsoldPolicy === 'convert_to_sale' ? input.fallbackPriceKobo! : null,
+      durationDays: input.durationDays, extended: false, status: 'pending_review',
+      handover: { ...input.handover, address: input.handover.address.trim(), method: handoverMethodFor(input.category) },
+      // In test mode the fee is recorded, not charged. A real backend takes it before booking the pickup.
+      cautionFee: { amountKobo: cautionFeeFor(input.category), status: 'held' },
+      commitment: await commitmentFor(seed), createdAt: iso(at), closesAt: iso(at + input.durationDays * DAY), boostedUntil: null, pickupBatchId: null,
+    }
+    db.listings.push(listing)
+    return listing
+  }
+
   const getListingOr404 = (db: Db, id: string) => {
     const l = db.listings.find((x) => x.id === id)
     if (!l) throw new ApiError('not_found', 'That listing doesn’t exist.')
@@ -1002,34 +1066,48 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     createListing: (input: NewListingInput) =>
       tx(async (db) => {
-        if (readSession()?.role === 'buyer') throw new ApiError('forbidden', 'Only registered stores can run raffle draws.')
-        const today = localDate(new Date(now()))
-        const problems = [
-          ...validateListingEconomics(input).map((e) => LISTING_ERROR_TEXT[e]),
-          ...validateListingTerms(input).map((e) => LISTING_TERMS_ERROR_TEXT[e]),
-          ...validateHandover(input.handover, today).map((e) => HANDOVER_ERROR_TEXT[e]),
-        ]
-        if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
-        // DrawMart sets the fee from the item's value; the store never chooses it.
-        const feeBps = platformFeeBps(input.priceKobo)
-        const econ = computeListingEconomics({ ...input, feeBps })
-        const seed = createSeed()
-        const id = uid('L')
-        db.seeds[id] = seed
-        const at = now()
-        const listing: Listing = {
-          id, kind: 'raffle', merchantId: shopId(db), title: input.title.trim(), description: input.description.trim(), category: input.category, images: input.images ?? [],
-          priceKobo: input.priceKobo, ticketPriceKobo: input.ticketPriceKobo, buyerTicketPriceKobo: econ.buyerTicketKobo,
-          ticketCount: econ.ticketCount, ticketsSold: 0, feeMode: input.feeMode, feeBps,
-          unsoldPolicy: input.unsoldPolicy, fallbackPriceKobo: input.unsoldPolicy === 'convert_to_sale' ? input.fallbackPriceKobo! : null,
-          durationDays: input.durationDays, extended: false, status: 'pending_review',
-          handover: { ...input.handover, address: input.handover.address.trim(), method: handoverMethodFor(input.category) },
-          // In test mode the fee is recorded, not charged. A real backend takes it before booking the pickup.
-          cautionFee: { amountKobo: cautionFeeFor(input.category), status: 'held' },
-          commitment: await commitmentFor(seed), createdAt: iso(at), closesAt: iso(at + input.durationDays * DAY), boostedUntil: null,
-        }
-        db.listings.push(listing)
+        const listing = await addRaffle(db, input)
         return listingView(db, listing, 'full')
+      }),
+
+    createListingBatch: ({ items, handover }: NewPickupInput) =>
+      tx(async (db) => {
+        const problems = validatePickup(items.map((i) => i.category)).map((e) => PICKUP_ERROR_TEXT[e])
+        if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+        const added = db.listings.length
+        try {
+          const batchId = uid('B')
+          const fee = pickupCautionFee(items.map((i) => i.category))
+          const listings: Listing[] = []
+          for (const item of items) {
+            const l = await addRaffle(db, { ...item, handover })
+            l.pickupBatchId = batchId
+            l.cautionFee = { amountKobo: fee, status: 'held' }
+            listings.push(l)
+          }
+          return listings.map((l) => listingView(db, l, 'full'))
+        } catch (e) {
+          db.listings.length = added // all or none
+          throw e
+        }
+      }),
+
+    getSavedPickup: () => tx((db) => savedPickupOf(db)),
+
+    savePickupItems: (items: PickupItemInput[]) =>
+      tx((db) => {
+        if (readSession()?.role === 'buyer') throw new ApiError('forbidden', 'Only store accounts can save draw items.')
+        const shop = shopId(db)
+        if (items.length === 0) {
+          delete db.savedPickups[shop]
+          return null
+        }
+        if (items.length > RULES.maxPickupItems) throw new ApiError('invalid_input', PICKUP_ERROR_TEXT.too_many_items)
+        if (items.some((i) => i.category === 'Cars')) throw new ApiError('invalid_input', 'Cars are inspected where they are, so they can’t be saved to a pickup. List them on their own.')
+        const current = savedPickupOf(db)
+        const saved = { items, savedAt: current?.savedAt ?? iso(now()), expiresAt: current?.expiresAt ?? savedPickupExpiry(now()) }
+        db.savedPickups[shop] = saved
+        return saved
       }),
 
     createProduct: (input: NewProductInput) =>

@@ -25,6 +25,9 @@ import {
   type ListingFilter,
   type ListingView,
   type NewListingInput,
+  type NewPickupInput,
+  type PickupItemInput,
+  type SavedPickupView,
   type NewProductInput,
   type OrderView,
   type PaymentsAdapter,
@@ -93,6 +96,7 @@ interface ListingRow {
   commitment: string
   created_at: string
   closes_at: string
+  pickup_batch_id: string | null
   boosted_until: string | null
   merchant: MerchantRow
   result: DrawResultRow | null
@@ -270,6 +274,7 @@ function toListingView(l: ListingRow, me: string | null, mine: Mine): ListingVie
     createdAt: l.created_at,
     closesAt: l.closes_at,
     boostedUntil: l.boosted_until,
+    pickupBatchId: l.pickup_batch_id,
     handover: l.handover
       ? { method: l.handover.method, address: l.handover.address, contactPhone: l.handover.contact_phone, date: l.handover.date, slot: l.handover.slot }
       : null,
@@ -388,6 +393,12 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
         return client.storage.from(PHOTO_BUCKET).getPublicUrl(path).data.publicUrl
       }),
     )
+  }
+
+  /** Row security hides other stores' saved items and expired ones. */
+  async function readSavedPickup(): Promise<SavedPickupView | null> {
+    const row = unwrap(await client.from('saved_pickups').select('items, saved_at, expires_at').maybeSingle<{ items: PickupItemInput[]; saved_at: string; expires_at: string }>())
+    return row ? { items: row.items, savedAt: row.saved_at, expiresAt: row.expires_at } : null
   }
 
   /** ID photos are private: hand out links that expire after an hour. */
@@ -709,6 +720,23 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       const images = await uploadPhotos(merchantId, input.images ?? [])
       const id = await rpc<string>('create_listing', { p: { ...input, images } })
       return getListing(id)
+    },
+
+    createListingBatch: async (input: NewPickupInput) => {
+      const merchantId = await myMerchantId()
+      const items = await Promise.all(input.items.map(async (item) => ({ ...item, images: await uploadPhotos(merchantId, item.images ?? []) })))
+      const ids = await rpc<string[]>('create_listing_batch', { p: { items, handover: input.handover } })
+      return Promise.all(ids.map((id) => getListing(id)))
+    },
+
+    getSavedPickup: () => readSavedPickup(),
+
+    savePickupItems: async (input) => {
+      const merchantId = await myMerchantId()
+      // Saved items live on the server, so their photos need to as well.
+      const items = await Promise.all(input.map(async (item) => ({ ...item, images: await uploadPhotos(merchantId, item.images ?? []) })))
+      await rpc('save_pickup_items', { p_items: items })
+      return readSavedPickup()
     },
 
     createProduct: async (input: NewProductInput) => {

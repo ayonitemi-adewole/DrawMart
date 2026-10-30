@@ -97,6 +97,8 @@ export interface Listing {
   /** Raffles only: products stay with the store until they're sold. */
   handover: Handover | null
   cautionFee: CautionFee
+  /** Set when this item shares a pickup, and one caution fee, with others. */
+  pickupBatchId: string | null
   /** SHA-256 of the secret draw seed, published before any ticket is sold. Empty for products. */
   commitment: string
   createdAt: ISODate

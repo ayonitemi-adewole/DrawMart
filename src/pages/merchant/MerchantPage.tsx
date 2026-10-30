@@ -1,8 +1,8 @@
-import { useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router'
 import { api } from '@/api'
-import { useCreateListing, useMerchant, useMerchantListings, useMerchantOrders } from '@/api/hooks'
-import type { ListingView } from '@/api/types'
+import { useCreateListing, useCreateListingBatch, useSavePickupItems, useSavedPickup, useMerchant, useMerchantListings, useMerchantOrders } from '@/api/hooks'
+import type { ListingView, PickupItemInput } from '@/api/types'
 import { Countdown } from '@/components/Countdown'
 import {
   BackIcon,
@@ -30,7 +30,10 @@ import {
   LISTING_TERMS_ERROR_TEXT,
   TIME_SLOTS,
   addDays,
-  cautionFeeFor,
+  PICKUP_ERROR_TEXT,
+  cautionFeesDue,
+  pickupCautionFee,
+  savedPickupDaysLeft,
   daysBetween,
   handoverDateRange,
   handoverMethodFor,
@@ -44,7 +47,7 @@ import { formatNaira, nairaToKobo, parseNairaInput } from '@/domain/money'
 import { saleEconomics, salePriceKobo } from '@/domain/orders'
 import { RULES } from '@/domain/rules'
 import { type Category, type FeeMode, type TimeSlot, type UnsoldPolicy } from '@/domain/types'
-import { calendarDay } from '@/lib/time'
+import { calendarDay, dateTime } from '@/lib/time'
 import { ListingKindChooser, MerchantOrders, NewProduct } from './NewProduct'
 import { CategoryPicker, PhotoPicker, Section } from './parts'
 
@@ -85,7 +88,8 @@ export function MerchantPage() {
   const awaiting =
     data
       .filter((l) => l.status === 'drawn')
-      .reduce((s, l) => s + computeListingEconomics(l).sellerPayoutKobo + (l.cautionFee.status === 'refunded' ? l.cautionFee.amountKobo : 0), 0) +
+      .reduce((s, l) => s + computeListingEconomics(l).sellerPayoutKobo, 0) +
+    cautionFeesDue(data.filter((l) => l.status === 'drawn')) +
     (orders.data ?? []).filter((o) => o.status !== 'delivered').reduce((s, o) => s + o.priceKobo - o.feeKobo, 0)
 
   return (
@@ -116,6 +120,8 @@ export function MerchantPage() {
           </Button>
         ) : null}
       </div>
+
+      {!(tab === 'new' && kind === 'raffle') ? <SavedPickupReminder onContinue={() => setTab('new', 'raffle')} /> : null}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile icon={TicketIcon} label="Live & on sale" value={active.length} hint={`${active.filter((l) => l.kind === 'raffle').length} draws`} />
@@ -172,9 +178,21 @@ const errorText = (e: ListingValidationError | ListingTermsError) =>
 
 type Step = 'details' | 'handover' | 'done'
 
-/** Two steps: describe the draw, then book the pickup (or inspection) and pay the caution fee. */
+/** An item waiting to go in a pickup: everything but the pickup booking. */
+type DraftItem = PickupItemInput
+
+const payoutOf = (d: DraftItem) => computeListingEconomics({ ...d, feeBps: platformFeeBps(d.priceKobo) }).sellerPayoutKobo
+
+/**
+ * Two steps: describe the draw (or several, to share one pickup and one fee),
+ * then book the pickup (or inspection) and pay the caution fee.
+ */
 function NewListing({ onDone }: { onDone: () => void }) {
   const create = useCreateListing()
+  const createBatch = useCreateListingBatch()
+  const sending = create.isPending || createBatch.isPending
+  const savedPickup = useSavedPickup()
+  const savePickup = useSavePickupItems()
   const toast = useToast()
   const merchant = useMerchant()
   const [today] = useState(() => localDate(new Date()))
@@ -194,6 +212,16 @@ function NewListing({ onDone }: { onDone: () => void }) {
   const [unsoldPolicy, setUnsoldPolicy] = useState<UnsoldPolicy>('refund')
   const [fallbackPrice, setFallbackPrice] = useState('')
   const [showErrors, setShowErrors] = useState(false)
+  // Items already saved for this pickup. Empty while listing a single item.
+  const [batch, setBatch] = useState<DraftItem[]>([])
+  const [restored, setRestored] = useState(false)
+
+  // Coming back: pick up the items saved earlier.
+  useEffect(() => {
+    if (restored || savedPickup.isPending) return
+    setRestored(true)
+    if (savedPickup.data) setBatch(savedPickup.data.items)
+  }, [restored, savedPickup.isPending, savedPickup.data])
 
   // Step 2: handover
   const [address, setAddress] = useState('')
@@ -202,7 +230,7 @@ function NewListing({ onDone }: { onDone: () => void }) {
   const [slot, setSlot] = useState<TimeSlot>('morning')
   const [agreed, setAgreed] = useState(false)
   const [showHandoverErrors, setShowHandoverErrors] = useState(false)
-  const [created, setCreated] = useState<ListingView | null>(null)
+  const [created, setCreated] = useState<ListingView[] | null>(null)
 
   const economics = { title, priceKobo: parseNairaInput(price), ticketPriceKobo: parseNairaInput(ticket), feeMode }
   const fallbackPriceKobo = parseNairaInput(fallbackPrice)
@@ -216,8 +244,23 @@ function NewListing({ onDone }: { onDone: () => void }) {
     return e ? errorText(e) : undefined
   }
 
-  const method = handoverMethodFor(category)
-  const cautionFee = cautionFeeFor(category)
+  const draft: DraftItem = {
+    ...economics,
+    description,
+    category,
+    images: photos,
+    durationDays,
+    unsoldPolicy,
+    fallbackPriceKobo: unsoldPolicy === 'convert_to_sale' ? fallbackPriceKobo : undefined,
+  }
+  const formBlank = !title.trim() && !price.trim() && !ticket.trim()
+  const sharing = batch.length > 0
+  const batchFull = batch.length >= RULES.maxPickupItems
+  // What gets sent: the saved items, or just this one.
+  const items = sharing ? batch : [draft]
+  const method = sharing ? 'pickup' : handoverMethodFor(category)
+  // One fee for the pickup, including the item being written (cars can't join a pickup).
+  const cautionFee = pickupCautionFee([...items.map((i) => i.category), ...(sharing && !formBlank && category !== 'Cars' ? [category] : [])])
   const handover = { address, contactPhone: phone, date, slot }
   const handoverErrors = validateHandover(handover, today)
   const handoverError = (e: HandoverError) => (showHandoverErrors && handoverErrors.includes(e) ? HANDOVER_ERROR_TEXT[e] : undefined)
@@ -231,8 +274,92 @@ function NewListing({ onDone }: { onDone: () => void }) {
     top.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
-  function onContinue(e: FormEvent) {
+  function clearItemForm() {
+    setTitle('')
+    setDescription('')
+    setPhotos([])
+    setPrice('')
+    setTicket('')
+    setUnsoldPolicy('refund')
+    setFallbackPrice('')
+    setShowErrors(false)
+  }
+
+  /** Stores the list on the server, so it's there when the seller comes back. */
+  async function persist(next: DraftItem[]) {
+    try {
+      const saved = await savePickup.mutateAsync(next)
+      setBatch(saved?.items ?? [])
+      return true
+    } catch (err) {
+      toast(errorMessage(err), 'error')
+      return false
+    }
+  }
+
+  /** Checks the item being written and saves it to the pickup. False if it can't go in. */
+  async function saveToPickup() {
+    if (errors.length) {
+      setShowErrors(true)
+      toast('A few details need fixing first.', 'error')
+      return false
+    }
+    if (category === 'Cars') {
+      toast(PICKUP_ERROR_TEXT.cars_not_allowed, 'error')
+      return false
+    }
+    if (batchFull) {
+      toast(PICKUP_ERROR_TEXT.too_many_items, 'error')
+      return false
+    }
+    if (!(await persist([...batch, draft]))) return false
+    clearItemForm()
+    return true
+  }
+
+  async function onAddAnother() {
+    if (!(await saveToPickup())) return
+    toast(`${title.trim()} saved. Now the next item.`)
+    top.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  async function onSaveForLater() {
+    if (!formBlank && !(await saveToPickup())) return
+    toast(`Saved for ${RULES.savedPickupDays} days. Come back to add more or book the pickup.`, 'info')
+    onDone()
+  }
+
+  /** Puts a saved item back in the form to change it. Its saved copy stays until the next save. */
+  function editSaved(index: number) {
+    if (!formBlank) {
+      toast('Add or clear the item you’re writing first.', 'error')
+      return
+    }
+    const d = batch[index]
+    setTitle(d.title)
+    setDescription(d.description)
+    setCategory(d.category)
+    setPhotos(d.images ?? [])
+    setPrice(String(d.priceKobo / 100))
+    setTicket(String(d.ticketPriceKobo / 100))
+    setFeeMode(d.feeMode)
+    setDurationDays(d.durationDays)
+    setUnsoldPolicy(d.unsoldPolicy)
+    setFallbackPrice(d.fallbackPriceKobo ? String(d.fallbackPriceKobo / 100) : '')
+    setBatch(batch.filter((_, i) => i !== index))
+    top.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  async function onContinue(e: FormEvent) {
     e.preventDefault()
+    if (sharing && formBlank) {
+      go('handover')
+      return
+    }
+    if (sharing) {
+      if (await saveToPickup()) go('handover')
+      return
+    }
     if (errors.length) {
       setShowErrors(true)
       toast('A few details need fixing before you continue.', 'error')
@@ -248,25 +375,14 @@ function NewListing({ onDone }: { onDone: () => void }) {
       if (!handoverErrors.length) toast('Tick the box to accept the caution fee terms.', 'error')
       return
     }
-    create.mutate(
-      {
-        ...economics,
-        description,
-        category,
-        images: photos,
-        durationDays,
-        unsoldPolicy,
-        fallbackPriceKobo: unsoldPolicy === 'convert_to_sale' ? fallbackPriceKobo : undefined,
-        handover,
-      },
-      {
-        onSuccess: (listing) => {
-          setCreated(listing)
-          go('done')
-        },
-        onError: (err) => toast(errorMessage(err), 'error'),
-      },
-    )
+    const onError = (err: unknown) => toast(errorMessage(err), 'error')
+    const onSent = (listings: ListingView[]) => {
+      setCreated(listings)
+      if (savedPickup.data) savePickup.mutate([]) // sent, so nothing is saved any more
+      go('done')
+    }
+    if (items.length > 1) createBatch.mutate({ items, handover }, { onSuccess: onSent, onError })
+    else create.mutate({ ...items[0], handover }, { onSuccess: (l) => onSent([l]), onError })
   }
 
   return (
@@ -274,11 +390,12 @@ function NewListing({ onDone }: { onDone: () => void }) {
       <Stepper step={step} method={method} />
 
       {step === 'done' && created ? (
-        <SentForReview listing={created} onDone={onDone} />
+        <SentForReview listings={created} onDone={onDone} />
       ) : (
         <div className="grid gap-6 lg:grid-cols-[1fr_360px] lg:items-start">
           {step === 'details' ? (
             <form onSubmit={onContinue} noValidate className="flex min-w-0 flex-col gap-5">
+              {sharing ? <PickupItems items={batch} fee={cautionFee} expiresAt={savedPickup.data?.expiresAt} busy={savePickup.isPending} onEdit={editSaved} onRemove={(i) => void persist(batch.filter((_, j) => j !== i))} /> : null}
               <Section n={1} title="The item" sub="What buyers are trying to win.">
                 <Field label="Item name" htmlFor="title" error={fieldError('title')}>
                   <input id="title" value={title} onChange={(e) => setTitle(e.target.value)} className={inputCls} placeholder="e.g. Smartphone, 256GB" />
@@ -393,7 +510,8 @@ function NewListing({ onDone }: { onDone: () => void }) {
                   </div>
                 ) : null}
 
-                <HandoverNotice method={method} cautionFee={cautionFee} />
+                {sharing && category === 'Cars' ? <Notice tone="hot" icon={CarIcon}>{PICKUP_ERROR_TEXT.cars_not_allowed}</Notice> : null}
+                <HandoverNotice method={handoverMethodFor(category)} cautionFee={cautionFee} sharing={sharing} />
               </Section>
 
               {showErrors && errors.length ? (
@@ -405,13 +523,32 @@ function NewListing({ onDone }: { onDone: () => void }) {
               ) : null}
 
               <div className="flex flex-wrap gap-2">
-                <Button type="submit" size="lg">
-                  {method === 'inspection' ? 'Continue to book inspection' : 'Continue to pickup details'}
+                <Button type="submit" size="lg" disabled={savePickup.isPending}>
+                  {method === 'inspection'
+                    ? 'Continue to book inspection'
+                    : sharing && formBlank
+                      ? `Continue with ${batch.length} ${batch.length === 1 ? 'item' : 'items'}`
+                      : sharing
+                        ? 'Add and continue to pickup details'
+                        : 'Continue to pickup details'}
                 </Button>
+                {category !== 'Cars' && !batchFull ? (
+                  <Button type="button" size="lg" variant="outline" loading={savePickup.isPending} onClick={() => void onAddAnother()} disabled={formBlank}>
+                    <PlusIcon size={18} /> Save and add another
+                  </Button>
+                ) : null}
+                {category !== 'Cars' ? (
+                  <Button type="button" size="lg" variant="outline" disabled={savePickup.isPending || (formBlank && !sharing)} onClick={() => void onSaveForLater()}>
+                    Save for later
+                  </Button>
+                ) : null}
                 <Button type="button" size="lg" variant="ghost" onClick={onDone}>
-                  Cancel
+                  {sharing ? 'Close' : 'Cancel'}
                 </Button>
               </div>
+              {category !== 'Cars' ? (
+                <p className="text-xs text-subtle">Saved items stay here for {RULES.savedPickupDays} days from your first save, then they’re removed. Nothing is paid or reviewed until you send them.</p>
+              ) : null}
             </form>
           ) : (
             <form onSubmit={onSend} noValidate className="flex min-w-0 animate-fade-in flex-col gap-5">
@@ -420,16 +557,18 @@ function NewListing({ onDone }: { onDone: () => void }) {
                 onClick={() => go('details')}
                 className="-ml-2 flex min-h-11 w-fit items-center gap-1 rounded-xl px-2 text-sm font-bold text-muted hover:bg-sunken hover:text-ink"
               >
-                <BackIcon size={18} /> Edit listing
+                <BackIcon size={18} /> {sharing ? 'Add or change items' : 'Edit listing'}
               </button>
 
               <Section
                 n={4}
-                title={method === 'inspection' ? 'Book an inspection' : 'Pickup details'}
+                title={method === 'inspection' ? 'Book an inspection' : items.length > 1 ? `Pickup details for ${items.length} items` : 'Pickup details'}
                 sub={
                   method === 'inspection'
                     ? 'Cars are too big for escrow, so a DrawMart inspector comes to you. The car stays with you until the winner collects it.'
-                    : 'A DrawMart rider collects the item and brings it to escrow, where we check and photograph it.'
+                    : items.length > 1
+                      ? 'A DrawMart rider collects them all in one trip and brings them to escrow, where we check and photograph each one.'
+                      : 'A DrawMart rider collects the item and brings it to escrow, where we check and photograph it.'
                 }
               >
                 <HandoverSteps method={method} />
@@ -491,7 +630,7 @@ function NewListing({ onDone }: { onDone: () => void }) {
                   <div className="flex flex-col gap-1">
                     <h2 className="font-display text-lg font-extrabold">{method === 'inspection' ? 'Inspection caution fee' : 'Delivery caution fee'}</h2>
                     <p className="text-sm text-muted">
-                      Paid now, held by DrawMart until your draw ends.
+                      {items.length > 1 ? `One fee for all ${items.length} items, the highest among them. Held by DrawMart until the draws end.` : 'Paid now, held by DrawMart until your draw ends.'}
                     </p>
                   </div>
                   <span className="font-display text-3xl font-extrabold tabular-nums">{formatNaira(cautionFee)}</span>
@@ -500,19 +639,27 @@ function NewListing({ onDone }: { onDone: () => void }) {
                   <li className="flex gap-2.5">
                     <CheckCircleIcon size={18} className="mt-px shrink-0 text-brand" />
                     <span>
-                      <strong>Sells out:</strong> refunded in full with your payout of {formatNaira(econ.sellerPayoutKobo)}.
+                      {items.length > 1 ? (
+                        <>
+                          <strong>All {items.length} draws sell out:</strong> refunded in full with your payouts of {formatNaira(items.reduce((s, i) => s + payoutOf(i), 0))}.
+                        </>
+                      ) : (
+                        <>
+                          <strong>Sells out:</strong> refunded in full with your payout of {formatNaira(payoutOf(items[0]))}.
+                        </>
+                      )}
                     </span>
                   </li>
                   <li className="flex gap-2.5">
                     <TruckIcon size={18} className="mt-px shrink-0 text-hot" />
                     <span>
-                      <strong>Doesn’t sell out or isn’t approved:</strong> kept to cover {method === 'inspection' ? 'the inspection visit' : 'pickup and return delivery'}.
+                      <strong>{items.length > 1 ? 'Any one doesn’t sell out or isn’t approved:' : 'Doesn’t sell out or isn’t approved:'}</strong> {items.length > 1 ? 'the whole fee is' : ''} kept to cover {method === 'inspection' ? 'the inspection visit' : 'pickup and return delivery'}.
                     </span>
                   </li>
                 </ul>
                 <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-2xl bg-ground p-3 text-sm">
                   <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} className="mt-0.5 size-5 shrink-0 accent-brand" />
-                  <span>I understand the caution fee is only refunded if every ticket sells.</span>
+                  <span>{items.length > 1 ? 'I understand the caution fee is only refunded if every ticket in every draw sells.' : 'I understand the caution fee is only refunded if every ticket sells.'}</span>
                 </label>
                 {showHandoverErrors && !agreed ? (
                   <span className="text-xs font-semibold text-hot-ink" role="alert">
@@ -523,10 +670,10 @@ function NewListing({ onDone }: { onDone: () => void }) {
               </Card>
 
               <div className="flex flex-wrap gap-2">
-                <Button type="submit" size="lg" loading={create.isPending}>
+                <Button type="submit" size="lg" loading={sending}>
                   <ShieldIcon size={18} /> Pay {formatNaira(cautionFee)} and send for review
                 </Button>
-                <Button type="button" size="lg" variant="ghost" onClick={() => go('details')} disabled={create.isPending}>
+                <Button type="button" size="lg" variant="ghost" onClick={() => go('details')} disabled={sending}>
                   Back
                 </Button>
               </div>
@@ -534,15 +681,16 @@ function NewListing({ onDone }: { onDone: () => void }) {
           )}
 
           <aside className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-8">
-            <div className="relative isolate flex flex-col gap-4 overflow-hidden rounded-[28px] bg-linear-to-br from-hero to-hero-2 p-6 text-on-hero shadow-lift">
+            {sharing && formBlank ? <PickupSummary items={batch} fee={cautionFee} /> : null}
+            <div className={cx('relative isolate flex flex-col gap-4 overflow-hidden rounded-[28px] bg-linear-to-br from-hero to-hero-2 p-6 text-on-hero shadow-lift', sharing && formBlank && 'hidden')}>
               <div className="texture-dots absolute inset-0 -z-10" />
               <span className="text-xs font-extrabold tracking-[0.15em] text-ticket">HOW THIS DRAW ADDS UP</span>
               <div className="flex flex-col">
                 <span className="text-sm text-on-brand-muted">You receive on a sell-out</span>
                 <span key={econ.sellerPayoutKobo} className="animate-fade-in font-display text-4xl font-extrabold tabular-nums">
-                  {formatNaira(econ.sellerPayoutKobo + (econ.sellerPayoutKobo ? cautionFee : 0))}
+                  {formatNaira(econ.sellerPayoutKobo + (econ.sellerPayoutKobo && !sharing ? cautionFee : 0))}
                 </span>
-                {econ.sellerPayoutKobo ? (
+                {econ.sellerPayoutKobo && !sharing ? (
                   <span className="text-xs text-on-brand-muted">
                     {formatNaira(econ.sellerPayoutKobo)} payout + {formatNaira(cautionFee)} caution fee back
                   </span>
@@ -554,7 +702,7 @@ function NewListing({ onDone }: { onDone: () => void }) {
                   ['Buyer pays per ticket', formatNaira(econ.buyerTicketKobo)],
                   ['Total ticket sales', formatNaira(econ.poolKobo)],
                   ['Platform keeps', formatNaira(econ.platformKobo)],
-                  ['Caution fee due now', formatNaira(cautionFee)],
+                  [sharing ? 'Fee for the whole pickup' : 'Caution fee due now', formatNaira(cautionFee)],
                   ['On sale for', `${durationDays} days after approval`],
                   ...(unsoldPolicy === 'convert_to_sale' && fallbackPriceKobo ? [['Fixed price if unsold', formatNaira(fallbackPriceKobo)]] : []),
                 ].map(([k, v]) => (
@@ -570,7 +718,7 @@ function NewListing({ onDone }: { onDone: () => void }) {
               </p>
             </div>
 
-            <div className="flex flex-col gap-2">
+            <div className={cx('flex flex-col gap-2', sharing && formBlank && 'hidden')}>
               <span className="text-xs font-extrabold tracking-wider text-subtle uppercase">Buyer preview</span>
               <Card className="flex flex-col gap-3 p-3">
                 <ProductImage category={category} src={photos[0]} alt="Cover photo preview" className="h-40" />
@@ -675,7 +823,13 @@ function DeadlinePicker({
   )
 }
 
-function HandoverNotice({ method, cautionFee }: { method: 'pickup' | 'inspection'; cautionFee: number }) {
+function HandoverNotice({ method, cautionFee, sharing }: { method: 'pickup' | 'inspection'; cautionFee: number; sharing: boolean }) {
+  if (sharing && method === 'pickup')
+    return (
+      <Notice icon={TruckIcon} title="One pickup, one fee">
+        Everything here goes in one trip for one {formatNaira(cautionFee)} caution fee, the highest among the items. It’s refunded only if every draw in the pickup sells out.
+      </Notice>
+    )
   return method === 'inspection' ? (
     <Notice icon={CarIcon} title="Cars are inspected, not stored">
       Next you’ll book a day for a DrawMart inspector to check the car and its papers where it is. A {formatNaira(cautionFee)} caution fee covers the visit and is
@@ -684,7 +838,7 @@ function HandoverNotice({ method, cautionFee }: { method: 'pickup' | 'inspection
   ) : (
     <Notice icon={LockIcon} title="We collect the item into escrow first">
       Next you’ll book a pickup. We check and photograph the item in escrow before the draw goes live. A {formatNaira(cautionFee)} caution fee covers delivery and is
-      refunded if the draw sells out.
+      refunded if the draw sells out. Sending more than one item? Add them to this pickup and pay one fee.
     </Notice>
   )
 }
@@ -706,8 +860,100 @@ function HandoverSteps({ method }: { method: 'pickup' | 'inspection' }) {
   )
 }
 
-function SentForReview({ listing: l, onDone }: { listing: ListingView; onDone: () => void }) {
+/** On the dashboard: items saved earlier are waiting, and until when. */
+function SavedPickupReminder({ onContinue }: { onContinue: () => void }) {
+  const saved = useSavedPickup()
+  if (!saved.data) return null
+  const count = saved.data.items.length
+  const left = savedPickupDaysLeft(saved.data.expiresAt, Date.now())
+  return (
+    <Notice
+      tone={left <= 2 ? 'hot' : 'ticket'}
+      icon={TruckIcon}
+      title={`${count} saved ${count === 1 ? 'item' : 'items'} waiting`}
+      action={
+        <Button size="sm" className="min-h-11" onClick={onContinue}>
+          Continue
+        </Button>
+      }
+    >
+      Add more or book the pickup by {dateTime(saved.data.expiresAt)}. After that {count === 1 ? 'it’s' : 'they’re'} removed.
+    </Notice>
+  )
+}
+
+/** The items saved for a pickup so far. */
+function PickupItems({ items, fee, expiresAt, busy, onEdit, onRemove }: { items: DraftItem[]; fee: number; expiresAt?: string; busy: boolean; onEdit: (i: number) => void; onRemove: (i: number) => void }) {
+  const urgent = expiresAt ? savedPickupDaysLeft(expiresAt, Date.now()) <= 2 : false
+  return (
+    <Card className="flex flex-col gap-3 p-5 sm:p-6">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="flex items-center gap-2 font-display text-lg font-extrabold">
+          <TruckIcon size={18} className="text-brand" /> In this pickup ({items.length})
+        </h2>
+        <span className="text-sm text-muted">
+          One fee: <strong className="text-ink tabular-nums">{formatNaira(fee)}</strong>
+        </span>
+      </div>
+      {expiresAt ? (
+        <p className={cx('text-xs', urgent ? 'font-semibold text-hot-ink' : 'text-subtle')}>Saved until {dateTime(expiresAt)}. Send them by then, or they’ll be removed.</p>
+      ) : null}
+      <ul className="flex flex-col divide-y divide-line">
+        {items.map((d, i) => (
+          <li key={i} className="flex flex-wrap items-center gap-2 py-2 text-sm">
+            <div className="flex min-w-0 flex-1 flex-col">
+              <strong className="truncate">{d.title.trim()}</strong>
+              <span className="text-xs text-subtle">
+                {d.category} · {formatNaira(d.priceKobo)} · {d.durationDays} days
+              </span>
+            </div>
+            <Button type="button" variant="ghost" size="sm" className="min-h-11" onClick={() => onEdit(i)}>
+              Edit
+            </Button>
+            <Button type="button" variant="ghost" size="sm" className="min-h-11" disabled={busy} onClick={() => onRemove(i)}>
+              Remove
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  )
+}
+
+/** Side panel once the items are saved: what the whole pickup adds up to. */
+function PickupSummary({ items, fee }: { items: DraftItem[]; fee: number }) {
+  const payouts = items.reduce((s, i) => s + payoutOf(i), 0)
+  return (
+    <div className="relative isolate flex flex-col gap-4 overflow-hidden rounded-[28px] bg-linear-to-br from-hero to-hero-2 p-6 text-on-hero shadow-lift">
+      <div className="texture-dots absolute inset-0 -z-10" />
+      <span className="text-xs font-extrabold tracking-[0.15em] text-ticket">HOW THIS PICKUP ADDS UP</span>
+      <div className="flex flex-col">
+        <span className="text-sm text-on-brand-muted">You receive if all sell out</span>
+        <span className="font-display text-4xl font-extrabold tabular-nums">{formatNaira(payouts + fee)}</span>
+        <span className="text-xs text-on-brand-muted">
+          {formatNaira(payouts)} payouts + {formatNaira(fee)} caution fee back
+        </span>
+      </div>
+      <dl className="flex flex-col border-t border-white/15 text-sm">
+        {items.map((d, i) => (
+          <div key={i} className="flex justify-between gap-3 border-b border-white/15 py-2.5">
+            <dt className="min-w-0 truncate text-on-brand-muted">{d.title.trim()}</dt>
+            <dd className="shrink-0 text-right font-bold tabular-nums">{formatNaira(payoutOf(d))}</dd>
+          </div>
+        ))}
+        <div className="flex justify-between gap-3 py-2.5">
+          <dt className="text-on-brand-muted">Caution fee due now</dt>
+          <dd className="text-right font-bold tabular-nums">{formatNaira(fee)}</dd>
+        </div>
+      </dl>
+    </div>
+  )
+}
+
+function SentForReview({ listings, onDone }: { listings: ListingView[]; onDone: () => void }) {
+  const l = listings[0]
   const h = l.handover
+  const shared = listings.length > 1
   return (
     <Card className="mx-auto flex w-full max-w-xl animate-fade-up flex-col items-center gap-5 p-6 text-center sm:p-8">
       <span className="flex size-16 animate-pop items-center justify-center rounded-3xl bg-brand text-on-brand shadow-glow">
@@ -716,9 +962,19 @@ function SentForReview({ listing: l, onDone }: { listing: ListingView; onDone: (
       <div className="flex flex-col gap-1">
         <h2 className="font-display text-2xl font-extrabold">Sent for review</h2>
         <p className="text-sm text-muted">
-          {l.title} · {formatNaira(l.cautionFee.amountKobo)} caution fee paid
+          {shared ? `${listings.length} items` : l.title} · {formatNaira(l.cautionFee.amountKobo)} caution fee paid
         </p>
       </div>
+      {shared ? (
+        <ul className="flex w-full flex-col gap-1 rounded-2xl bg-ground p-3 text-left text-sm">
+          {listings.map((x) => (
+            <li key={x.id} className="flex items-center gap-2">
+              <CheckIcon size={14} className="shrink-0 text-brand" />
+              <span className="min-w-0 truncate font-semibold">{x.title}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {h ? (
         <dl className="grid w-full gap-2 text-left text-sm sm:grid-cols-2">
           <div className="flex flex-col gap-0.5 rounded-2xl bg-ground p-3">
@@ -738,8 +994,10 @@ function SentForReview({ listing: l, onDone }: { listing: ListingView; onDone: (
         </dl>
       ) : null}
       <p className="text-xs text-subtle">
-        We’ll call the number above to confirm. Once the item is {h?.method === 'inspection' ? 'inspected' : 'checked into escrow'} and approved, your draw goes live
-        for {l.durationDays} days.
+        We’ll call the number above to confirm.{' '}
+        {shared
+          ? 'Each item is checked into escrow and approved on its own. Each draw then goes live for the days you picked. The caution fee comes back only if every draw sells out.'
+          : `Once the item is ${h?.method === 'inspection' ? 'inspected' : 'checked into escrow'} and approved, your draw goes live for ${l.durationDays} days.`}
       </p>
       <Button size="lg" className="w-full" onClick={onDone}>
         View your draws
@@ -854,7 +1112,7 @@ export function MerchantListings({ onNew, emptyBody }: { onNew: () => void; empt
                     <dd className="font-bold tabular-nums">{formatNaira(salePriceKobo(l) ?? econ.sellerPayoutKobo)}</dd>
                   </div>
                   <div className="flex items-center justify-between text-xs">
-                    <dt className="text-subtle">Caution fee</dt>
+                    <dt className="text-subtle">{l.pickupBatchId ? 'Caution fee (shared pickup)' : 'Caution fee'}</dt>
                     <dd className={cx('font-semibold', l.cautionFee.status === 'refunded' ? 'text-brand' : l.cautionFee.status === 'kept' ? 'text-hot-ink' : 'text-muted')}>
                       {formatNaira(l.cautionFee.amountKobo)} {CAUTION_TEXT[l.cautionFee.status]}
                     </dd>

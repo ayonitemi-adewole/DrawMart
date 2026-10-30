@@ -5,7 +5,7 @@ import { api } from './index'
 import type { MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput } from '@/domain/sellers'
 import { visitorId } from '@/lib/visitor'
-import type { AccountRole, BoostSettings, ListingFilter, NewListingInput, NewProductInput } from './types'
+import type { AccountRole, BoostSettings, ListingFilter, NewListingInput, NewPickupInput, NewProductInput, PickupItemInput } from './types'
 
 export const keys = {
   session: ['session'] as const,
@@ -20,6 +20,7 @@ export const keys = {
   pending: ['pending'] as const,
   myOrders: ['my-orders'] as const,
   merchantOrders: ['merchant-orders'] as const,
+  savedPickup: ['saved-pickup'] as const,
   sellerApplication: ['seller-application'] as const,
   sellerApplications: ['seller-applications'] as const,
   conversations: ['conversations'] as const,
@@ -192,6 +193,21 @@ export function useConfirmOrder() {
 export function useDispatchOrder() {
   const invalidate = useInvalidateAll()
   return useMutation({ mutationFn: (orderId: string) => api.dispatchOrder(orderId), onSettled: invalidate })
+}
+
+export function useCreateListingBatch() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: (input: NewPickupInput) => api.createListingBatch(input), onSettled: invalidate })
+}
+
+export const useSavedPickup = () => useQuery({ queryKey: keys.savedPickup, queryFn: () => api.getSavedPickup(), enabled: useIs('store') })
+
+export function useSavePickupItems() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (items: PickupItemInput[]) => api.savePickupItems(items),
+    onSuccess: (saved) => qc.setQueryData(keys.savedPickup, saved),
+  })
 }
 
 export function useCreateProduct() {

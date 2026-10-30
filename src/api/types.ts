@@ -94,6 +94,22 @@ export interface NewListingInput {
   handover: HandoverDetails
 }
 
+/** Several draw items in one pickup, for one caution fee (the highest among them). */
+export interface NewPickupInput {
+  items: PickupItemInput[]
+  handover: HandoverDetails
+}
+
+/** A draw item before its pickup is booked. */
+export type PickupItemInput = Omit<NewListingInput, 'handover'>
+
+/** Items a store has saved to send later. Gone after `expiresAt`. */
+export interface SavedPickupView {
+  items: PickupItemInput[]
+  savedAt: string
+  expiresAt: string
+}
+
 /** A regular product: sold outright at `priceKobo`, after admin review. No tickets, escrow or caution fee. */
 export interface NewProductInput {
   title: string
@@ -356,6 +372,12 @@ export interface DrawMartApi {
   listMerchantListings(): Promise<ListingView[]>
   /** Charges the caution fee for the category and queues the listing for pickup/inspection and review. */
   createListing(input: NewListingInput): Promise<ListingView>
+  /** Queues 2 or more items for one pickup and review, all or none. Cars can't share a pickup. */
+  createListingBatch(input: NewPickupInput): Promise<ListingView[]>
+  /** The store's saved items, or null if there are none or they've expired. */
+  getSavedPickup(): Promise<SavedPickupView | null>
+  /** Replaces the saved items; an empty list removes them. Edits don't extend the deadline. */
+  savePickupItems(items: PickupItemInput[]): Promise<SavedPickupView | null>
   /** Queues a regular product for admin review. */
   createProduct(input: NewProductInput): Promise<ListingView>
   /** Orders for this store's items, with delivery details. */

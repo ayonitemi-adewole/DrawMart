@@ -380,4 +380,61 @@ describe('mock api', () => {
     expect((await api.getMyMerchant()).kind).toBe('individual')
     expect((await api.listMerchantListings()).length).toBe(3)
   })
+
+  it('sends several items in one pickup for one fee, refunded only if all sell out', async () => {
+    const api = make()
+    const { handover, ...item } = newListing()
+    const pair = [{ ...item, title: 'Phone' , category: 'Phones' as const }, { ...item, title: 'Fridge', category: 'Home' as const }]
+
+    await expect(api.createListingBatch({ items: pair.slice(0, 1), handover })).rejects.toThrow(/at least 2/)
+    await expect(api.createListingBatch({ items: [pair[0], { ...item, title: 'Saloon', category: 'Cars' }], handover })).rejects.toThrow(/Cars are inspected/)
+    const pending = (await api.listPendingListings()).length
+    await expect(api.createListingBatch({ items: [pair[0], { ...pair[1], title: ' ' }], handover })).rejects.toThrow(/Give the item a name/)
+    expect((await api.listPendingListings()).length).toBe(pending) // all or none
+
+    const [a, b] = await api.createListingBatch({ items: pair, handover })
+    expect(a.pickupBatchId).toBeTruthy()
+    expect(b.pickupBatchId).toBe(a.pickupBatchId)
+    expect(a.cautionFee).toEqual({ amountKobo: cautionFeeFor('Home'), status: 'held' })
+    expect(b.cautionFee.amountKobo).toBe(cautionFeeFor('Home'))
+    expect(a.handover?.address).toBe(b.handover?.address)
+
+    await api.approveListing(a.id)
+    await api.approveListing(b.id)
+    await api.demoSellOut(a.id)
+    expect((await api.getListing(a.id)).cautionFee.status).toBe('held') // the other is still live
+    await api.demoSellOut(b.id)
+    expect((await api.getListing(a.id)).cautionFee.status).toBe('refunded')
+    expect((await api.getListing(b.id)).cautionFee.status).toBe('refunded')
+
+    const [c, d] = await api.createListingBatch({ items: pair, handover })
+    await api.rejectListing(d.id)
+    expect((await api.getListing(c.id)).cautionFee.status).toBe('kept')
+  })
+
+  it('keeps saved pickup items for a limited time, per store', async () => {
+    let t = Date.parse('2026-10-30T12:00:00Z')
+    const api = make(() => t)
+    const { handover: _h, ...item } = newListing()
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    expect(await api.getSavedPickup()).toBeNull()
+
+    const first = await api.savePickupItems([item])
+    expect(first?.expiresAt).toBe('2026-11-06T12:00:00.000Z')
+    t += 86_400_000
+    const second = await api.savePickupItems([item, { ...item, title: 'Toaster' }])
+    expect(second?.expiresAt).toBe(first?.expiresAt) // edits don't extend it
+    expect((await api.getSavedPickup())?.items).toHaveLength(2)
+
+    await api.auth.signInWithPassword('lekki@drawmart.test', 'drawmart-demo')
+    expect(await api.getSavedPickup()).toBeNull() // another store's
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+
+    await expect(api.savePickupItems([{ ...item, category: 'Cars' }])).rejects.toThrow(/Cars are inspected/)
+    t += 7 * 86_400_000
+    expect(await api.getSavedPickup()).toBeNull() // expired
+    expect((await api.savePickupItems([item]))?.expiresAt).toBe(new Date(t + 7 * 86_400_000).toISOString()) // starts afresh
+    expect(await api.savePickupItems([])).toBeNull()
+    expect(await api.getSavedPickup()).toBeNull()
+  })
 })

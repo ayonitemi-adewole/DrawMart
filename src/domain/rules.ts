@@ -19,6 +19,10 @@ export const RULES = {
   /** How far ahead a pickup or inspection can be booked. */
   handoverMinLeadDays: 1,
   handoverMaxLeadDays: 14,
+  /** Items a store can send in one pickup. */
+  maxPickupItems: 10,
+  /** How long a store can keep items saved for a pickup, from the first save. */
+  savedPickupDays: 7,
   /** Size of one wallet top-up. */
   minTopUpKobo: 100_00,
   maxTopUpKobo: 500_000_00,

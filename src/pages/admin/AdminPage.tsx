@@ -108,6 +108,7 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
                 <>
                   <Badge tone="sky">{l.durationDays}-day draw</Badge>
                   <Badge tone="violet">{UNSOLD_POLICY_LABEL[l.unsoldPolicy]}</Badge>
+                  {l.pickupBatchId ? <Badge tone="ticket">Shared pickup</Badge> : null}
                 </>
               )}
             </div>
@@ -127,7 +128,7 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
             ['Tickets', `${l.ticketCount.toLocaleString('en-NG')} × ${formatNaira(l.buyerTicketPriceKobo)}`],
             ['Fee', `${l.feeBps / 100}% (${FEE_MODE_TEXT[l.feeMode]})`],
             ['Store payout', formatNaira(econ.sellerPayoutKobo)],
-            ['Caution fee', `${formatNaira(l.cautionFee.amountKobo)} ${l.cautionFee.status}`],
+            [l.pickupBatchId ? 'Caution fee (shared)' : 'Caution fee', `${formatNaira(l.cautionFee.amountKobo)} ${l.cautionFee.status}`],
             ...(l.fallbackPriceKobo ? [['Fixed price if unsold', formatNaira(l.fallbackPriceKobo)]] : []),
           ]).map(([k, v]) => (
             <div key={k} className="flex flex-col rounded-2xl bg-ground p-3">
@@ -193,7 +194,9 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
           The store will need to submit a new listing
           {product
             ? '.'
-            : `, and its ${formatNaira(l.cautionFee.amountKobo)} caution fee is kept to cover the ${method === 'inspection' ? 'inspection visit' : 'pickup and return'}.`}{' '}
+            : l.pickupBatchId
+              ? `. This item shares a pickup, so the store loses the whole ${formatNaira(l.cautionFee.amountKobo)} caution fee, even if its other draws sell out.`
+              : `, and its ${formatNaira(l.cautionFee.amountKobo)} caution fee is kept to cover the ${method === 'inspection' ? 'inspection visit' : 'pickup and return'}.`}{' '}
           This can’t be undone.
         </p>
         <div className="flex gap-2">

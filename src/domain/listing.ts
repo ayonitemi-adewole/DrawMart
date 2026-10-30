@@ -4,7 +4,7 @@
  */
 import { formatNaira, nairaToKobo } from './money'
 import { RULES } from './rules'
-import type { CautionFee, Category, Handover, HandoverMethod, Kobo, ListingStatus, TimeSlot, UnsoldPolicy } from './types'
+import type { CautionFee, Category, Handover, HandoverMethod, Kobo, Listing, ListingStatus, TimeSlot, UnsoldPolicy } from './types'
 
 /** Cars can't sit in an escrow store, so they're inspected where they are. */
 export function handoverMethodFor(category: Category): HandoverMethod {
@@ -33,6 +33,68 @@ export function settleCautionFee(fee: CautionFee, status: ListingStatus): Cautio
   if (status === 'drawn') return { ...fee, status: 'refunded' }
   if (status === 'refunded' || status === 'for_sale' || status === 'rejected') return { ...fee, status: 'kept' }
   return fee
+}
+
+// --------------------------------------------------------- shared pickups
+
+/**
+ * A store can send several draw items in one pickup and pay one caution fee.
+ * Mirrored in supabase/migrations/…_shared_pickups.sql.
+ */
+
+/** One pickup, one fee: the highest fee among its items. */
+export function pickupCautionFee(categories: readonly Category[]): Kobo {
+  return categories.reduce((max, c) => Math.max(max, cautionFeeFor(c)), 0)
+}
+
+/** When items saved now must be sent by. Editing them doesn't move this. */
+export function savedPickupExpiry(savedAtMs: number): string {
+  return new Date(savedAtMs + RULES.savedPickupDays * 86_400_000).toISOString()
+}
+
+/** Whole days left, rounded up, so "1" means under a day. 0 once it's expired. */
+export function savedPickupDaysLeft(expiresAt: string, nowMs: number): number {
+  return Math.max(0, Math.ceil((Date.parse(expiresAt) - nowMs) / 86_400_000))
+}
+
+export type PickupError = 'too_few_items' | 'too_many_items' | 'cars_not_allowed'
+
+export function validatePickup(categories: readonly Category[]): PickupError[] {
+  const errors: PickupError[] = []
+  if (categories.length < 2) errors.push('too_few_items')
+  if (categories.length > RULES.maxPickupItems) errors.push('too_many_items')
+  if (categories.some((c) => handoverMethodFor(c) === 'inspection')) errors.push('cars_not_allowed')
+  return errors
+}
+
+export const PICKUP_ERROR_TEXT: Record<PickupError, string> = {
+  too_few_items: 'A shared pickup needs at least 2 items.',
+  too_many_items: `One pickup can take at most ${RULES.maxPickupItems} items.`,
+  cars_not_allowed: 'Cars are inspected where they are, so they can’t share a pickup. List them on their own.',
+}
+
+/**
+ * Where a shared pickup's one fee stands: refunded once every draw has sold
+ * out; kept as soon as any draw ends any other way; held until then.
+ */
+export function settlePickupFee(statuses: readonly ListingStatus[]): CautionFee['status'] {
+  if (statuses.some((s) => s === 'refunded' || s === 'for_sale' || s === 'sold' || s === 'rejected')) return 'kept'
+  return statuses.length > 0 && statuses.every((s) => s === 'drawn') ? 'refunded' : 'held'
+}
+
+/**
+ * Caution fees coming back to a store. Every item in a shared pickup shows the
+ * same fee, so a pickup is only counted once.
+ */
+export function cautionFeesDue(listings: readonly Pick<Listing, 'id' | 'cautionFee' | 'pickupBatchId'>[]): Kobo {
+  const seen = new Set<string>()
+  let total = 0
+  for (const l of listings) {
+    if (l.cautionFee.status !== 'refunded' || seen.has(l.pickupBatchId ?? l.id)) continue
+    seen.add(l.pickupBatchId ?? l.id)
+    total += l.cautionFee.amountKobo
+  }
+  return total
 }
 
 export const TIME_SLOTS: Record<TimeSlot, string> = {
