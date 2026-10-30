@@ -1,8 +1,10 @@
 import { PrizeActions } from "@/components/PrizeActions";
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "react-router";
+import { api } from "@/api";
 import { useListing, useMarkWinCelebrated, useUncelebratedWins } from "@/api/hooks";
 import type { DrawResultView } from "@/api/types";
+import { WinSheet } from "@/components/WinCelebration";
 import { Confetti } from "@/components/Confetti";
 import { CopyButton } from "@/components/CopyButton";
 import {
@@ -159,9 +161,22 @@ function Result({
     if (celebrate && unannounced) markCelebrated(listingId);
   }, [celebrate, unannounced, listingId, markCelebrated]);
 
+  // Test mode only. Just plays it again: nothing is saved.
+  const [replayingWin, setReplayingWin] = useState(false);
+
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-5">
       {celebrate ? <Confetti /> : null}
+      {replayingWin ? (
+        <WinSheet
+          listingId={listingId}
+          title={title}
+          category={category}
+          image={image}
+          winningNumber={r.winningNumber}
+          onClose={() => setReplayingWin(false)}
+        />
+      ) : null}
 
       <section
         className={cx(
@@ -216,7 +231,15 @@ function Result({
           </p>
         )}
 
-        <div className="flex gap-2">
+        <div className="flex flex-wrap justify-center gap-2">
+          {api.testMode && r.iWon && !rolling ? (
+            <button
+              onClick={() => setReplayingWin(true)}
+              className="flex min-h-11 items-center gap-1.5 rounded-xl bg-white/15 px-4 text-sm font-bold ring-1 ring-white/20 hover:bg-white/25"
+            >
+              <TrophyIcon size={14} /> Replay win pop-up
+            </button>
+          ) : null}
           {rolling ? (
             <button
               onClick={skip}

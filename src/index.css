@@ -58,11 +58,12 @@
   --animate-fade-in: fade-in 0.25s ease-out both;
   --animate-pop: pop 0.35s cubic-bezier(0.3, 1.5, 0.5, 1) both;
   --animate-sheet-up: sheet-up 0.35s cubic-bezier(0.2, 0.9, 0.2, 1) both;
+  --animate-pop-out: pop-out 0.35s ease-out both;
   --animate-toast-in: toast-in 0.35s cubic-bezier(0.2, 0.9, 0.2, 1) both;
   --animate-shimmer: shimmer 1.4s linear infinite;
   --animate-ping-slow: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
   --animate-float: float 5s ease-in-out infinite;
-  --animate-confetti: confetti 2.6s cubic-bezier(0.2, 0.6, 0.4, 1) forwards;
+  --animate-confetti: confetti 2.6s cubic-bezier(0.2, 0.6, 0.4, 1) both;
   --animate-shine: shine 2.4s ease-in-out infinite;
   --animate-progress: progress 1.1s ease-in-out infinite;
 
@@ -81,6 +82,14 @@
   @keyframes sheet-up {
     from { opacity: 0; transform: translateY(40px); }
     to { opacity: 1; transform: none; }
+  }
+  /* From deep behind the screen, past it towards the viewer, then settling back. */
+  @keyframes pop-out {
+    0% { opacity: 0; transform: perspective(800px) translateZ(-1400px) rotateX(24deg); }
+    25% { opacity: 1; }
+    55% { transform: perspective(800px) translateZ(170px) rotateX(-5deg); }
+    78% { transform: perspective(800px) translateZ(-35px) rotateX(1.5deg); }
+    100% { opacity: 1; transform: perspective(800px) translateZ(0) rotateX(0); }
   }
   @keyframes toast-in {
     from { opacity: 0; transform: translateY(-16px) scale(0.96); }

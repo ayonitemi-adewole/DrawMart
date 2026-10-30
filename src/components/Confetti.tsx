@@ -1,14 +1,14 @@
-import { useMemo } from 'react'
+import { useMemo } from "react";
 
-const COLOURS = ['bg-ticket', 'bg-brand', 'bg-hot', 'bg-sky', 'bg-violet']
+const COLOURS = ["bg-ticket", "bg-brand", "bg-hot", "bg-sky", "bg-violet"];
 
 /** A one-shot burst of CSS confetti. Decorative and hidden from screen readers. */
-export function Confetti({ pieces = 70 }: { pieces?: number }) {
+export function Confetti({ pieces = 200 }: { pieces?: number }) {
   const bits = useMemo(
     () =>
       Array.from({ length: pieces }, (_, i) => ({
         left: Math.random() * 100,
-        delay: Math.random() * 0.6,
+        delay: Math.random() * 5,
         duration: 2 + Math.random() * 1.6,
         dx: (Math.random() - 0.5) * 240,
         spin: 360 + Math.random() * 900,
@@ -18,13 +18,16 @@ export function Confetti({ pieces = 70 }: { pieces?: number }) {
         colour: COLOURS[i % COLOURS.length],
       })),
     [pieces],
-  )
+  );
   return (
-    <div className="pointer-events-none fixed inset-0 z-[70] overflow-hidden" aria-hidden="true">
+    <div
+      className="pointer-events-none fixed inset-0 z-70 overflow-hidden"
+      aria-hidden="true"
+    >
       {bits.map((b, i) => (
         <span
           key={i}
-          className={`absolute top-0 animate-confetti ${b.colour} ${b.round ? 'rounded-full' : 'rounded-[2px]'}`}
+          className={`absolute top-0 animate-confetti ${b.colour} ${b.round ? "rounded-full" : "rounded-xs"}`}
           style={
             {
               left: `${b.left}%`,
@@ -32,12 +35,12 @@ export function Confetti({ pieces = 70 }: { pieces?: number }) {
               height: b.round ? b.w : b.h,
               animationDelay: `${b.delay}s`,
               animationDuration: `${b.duration}s`,
-              '--dx': `${b.dx}px`,
-              '--spin': `${b.spin}deg`,
+              "--dx": `${b.dx}px`,
+              "--spin": `${b.spin}deg`,
             } as React.CSSProperties
           }
         />
       ))}
     </div>
-  )
+  );
 }

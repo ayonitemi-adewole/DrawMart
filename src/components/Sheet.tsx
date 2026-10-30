@@ -15,6 +15,7 @@ export function Sheet({
   className,
   hideClose,
   overlay,
+  pop,
 }: {
   open: boolean
   onClose: () => void
@@ -24,6 +25,8 @@ export function Sheet({
   hideClose?: boolean
   /** Full-screen decoration above the sheet, such as confetti. */
   overlay?: ReactNode
+  /** A moment to celebrate: bursts out of the screen, centred on every size. */
+  pop?: boolean
 }) {
   const ref = useRef<HTMLDialogElement>(null)
 
@@ -44,17 +47,19 @@ export function Sheet({
         if (e.target === e.currentTarget) onClose()
       }}
       className={cx(
-        'm-0 mt-auto w-full max-w-none bg-transparent p-0 text-ink backdrop:bg-transparent sm:m-auto sm:max-w-lg',
+        'bg-transparent text-ink backdrop:bg-transparent',
+        pop ? 'm-auto w-full max-w-lg overflow-visible p-4' : 'm-0 mt-auto w-full max-w-none p-0 sm:m-auto sm:max-w-lg',
       )}
     >
       {overlay}
       <div
         className={cx(
-          'relative flex animate-sheet-up max-h-[90dvh] flex-col gap-4 overflow-y-auto rounded-t-[28px] border border-line bg-raised p-5 pb-[max(env(safe-area-inset-bottom),20px)] shadow-lift sm:rounded-[28px] sm:p-6',
+          'relative flex flex-col gap-4 overflow-y-auto border border-line bg-raised p-5 shadow-lift sm:p-6',
+          pop ? 'max-h-[85dvh] animate-pop-out rounded-[28px]' : 'max-h-[90dvh] animate-sheet-up rounded-t-[28px] pb-[max(env(safe-area-inset-bottom),20px)] sm:rounded-[28px]',
           className,
         )}
       >
-        <span className="mx-auto -mt-2 mb-1 h-1.5 w-10 shrink-0 rounded-full bg-line-strong sm:hidden" aria-hidden="true" />
+        {pop ? null : <span className="mx-auto -mt-2 mb-1 h-1.5 w-10 shrink-0 rounded-full bg-line-strong sm:hidden" aria-hidden="true" />}
         {hideClose ? null : (
           <IconButton aria-label="Close" onClick={onClose} className="absolute top-3 right-3">
             <XIcon />
