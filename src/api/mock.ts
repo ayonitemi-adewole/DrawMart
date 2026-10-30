@@ -72,7 +72,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v16' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v17' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -91,7 +91,7 @@ interface Db {
   seeds: Record<string, string>
   /** Reference of the purchase that sold the last ticket, kept for the draw. */
   closingRefs: Record<string, string>
-  notifications: { id: string; userId: string; kind: NotificationKind; listingId: string; createdAt: string; read: boolean }[]
+  notifications: { id: string; userId: string; kind: NotificationKind; listingId: string; createdAt: string; read: boolean; celebrated: boolean }[]
   tickets: Ticket[]
   ledger: LedgerEntry[]
   results: DrawResult[]
@@ -639,7 +639,7 @@ function participants(db: Db, listing: Listing): Set<string> {
 }
 
 function notify(db: Db, userId: string, kind: NotificationKind, listingId: string, at: string) {
-  db.notifications.push({ id: uid('N'), userId, kind, listingId, createdAt: at, read: false })
+  db.notifications.push({ id: uid('N'), userId, kind, listingId, createdAt: at, read: false, celebrated: false })
 }
 
 /** The last ticket has sold: sales stop and everyone hears when the winner comes. */
@@ -1183,8 +1183,8 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           .map((n) => {
             const l = getListingOr404(db, n.listingId)
             return {
-              id: n.id, kind: n.kind, listingId: n.listingId, listingTitle: l.title, drawAt: l.drawAt,
-              winningNumber: db.results.find((r) => r.listingId === n.listingId)?.winningNumber ?? null, createdAt: n.createdAt, read: n.read,
+              id: n.id, kind: n.kind, listingId: n.listingId, listingTitle: l.title, listingImage: l.images[0] ?? null, listingCategory: l.category, drawAt: l.drawAt,
+              winningNumber: db.results.find((r) => r.listingId === n.listingId)?.winningNumber ?? null, createdAt: n.createdAt, read: n.read, celebrated: n.celebrated,
             }
           }),
       ),
@@ -1192,6 +1192,11 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     markNotificationsRead: () =>
       tx((db) => {
         for (const n of db.notifications) if (n.userId === buyer()) n.read = true
+      }),
+
+    markWinCelebrated: (listingId) =>
+      tx((db) => {
+        for (const n of db.notifications) if (n.userId === buyer() && n.listingId === listingId && n.kind === 'draw_won') n.celebrated = true
       }),
 
     getWallet: () =>

@@ -481,6 +481,28 @@ describe('mock api', () => {
     expect((await api.listNotifications()).every((n) => n.read)).toBe(true)
   })
 
+  it('keeps a win to celebrate until it has been shown, for that buyer only', async () => {
+    const api = make()
+    await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    const [draw] = (await api.listListings()).filter((l) => l.title.includes('test draw'))
+    await api.topUp(k(200_000))
+    await api.buyTickets(draw.id, 2)
+    await api.demoRunDraw(draw.id)
+    const toCelebrate = async () => (await api.listNotifications()).filter((n) => n.kind === 'draw_won' && !n.celebrated)
+
+    expect(await toCelebrate()).toMatchObject([{ listingId: draw.id, listingTitle: draw.title, listingImage: draw.images[0] ?? null, listingCategory: draw.category }])
+    await api.markNotificationsRead()
+    expect((await toCelebrate()).length).toBe(1) // reading the bell isn't the pop-up
+
+    await api.auth.signInWithPassword('ngozi@drawmart.test', 'drawmart-demo')
+    await api.markWinCelebrated(draw.id)
+    await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    expect((await toCelebrate()).length).toBe(1) // someone else can't clear it
+
+    await api.markWinCelebrated(draw.id)
+    expect(await toCelebrate()).toEqual([])
+  })
+
   it('keeps a cart of items on sale and won draws, and checks them out together', async () => {
     const api = make()
     await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')

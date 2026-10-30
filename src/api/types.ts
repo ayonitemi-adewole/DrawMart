@@ -247,11 +247,15 @@ export interface NotificationView {
   kind: NotificationKind
   listingId: string
   listingTitle: string
+  listingImage: string | null
+  listingCategory: Category
   /** When a sold-out draw's winner is announced. */
   drawAt: string | null
   winningNumber: number | null
   createdAt: string
   read: boolean
+  /** A win the buyer has been greeted with. Separate from read: opening the bell isn't the pop-up. */
+  celebrated: boolean
 }
 
 /** One item in a buyer's cart. */
@@ -409,6 +413,8 @@ export interface DrawMartApi {
   /** Newest first. */
   listNotifications(): Promise<NotificationView[]>
   markNotificationsRead(): Promise<void>
+  /** The pop-up for this win has been shown, so it won't show again on any device. */
+  markWinCelebrated(listingId: string): Promise<void>
 
   // Wallet
   getWallet(): Promise<WalletView>

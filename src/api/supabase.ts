@@ -770,19 +770,21 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       const rows = unwrap(
         await client
           .from('notifications')
-          .select('id, kind, listing_id, created_at, read_at, listing:listings(title, draw_at, result:draw_results(winning_number))')
+          .select('id, kind, listing_id, created_at, read_at, celebrated_at, listing:listings(title, images, category, draw_at, result:draw_results(winning_number))')
           .eq('user_id', me)
           .order('created_at', { ascending: false })
           .limit(100)
-          .returns<{ id: string; kind: NotificationView['kind']; listing_id: string; created_at: string; read_at: string | null; listing: { title: string; draw_at: string | null; result: { winning_number: number } | null } }[]>(),
+          .returns<{ id: string; kind: NotificationView['kind']; listing_id: string; created_at: string; read_at: string | null; celebrated_at: string | null; listing: { title: string; images: string[]; category: Category; draw_at: string | null; result: { winning_number: number } | null } }[]>(),
       )
       return rows.map((n) => ({
-        id: n.id, kind: n.kind, listingId: n.listing_id, listingTitle: n.listing.title, drawAt: n.listing.draw_at,
-        winningNumber: n.listing.result?.winning_number ?? null, createdAt: n.created_at, read: n.read_at !== null,
+        id: n.id, kind: n.kind, listingId: n.listing_id, listingTitle: n.listing.title, listingImage: n.listing.images?.[0] ?? null, listingCategory: n.listing.category, drawAt: n.listing.draw_at,
+        winningNumber: n.listing.result?.winning_number ?? null, createdAt: n.created_at, read: n.read_at !== null, celebrated: n.celebrated_at !== null,
       }))
     },
 
     markNotificationsRead: () => rpc('mark_notifications_read'),
+
+    markWinCelebrated: (listingId) => rpc('mark_win_celebrated', { p_listing_id: listingId }),
 
     // Wallet
     getWallet: async (): Promise<WalletView> => {

@@ -135,6 +135,13 @@ export const usePrizeOrders = () => useQuery({ queryKey: keys.prizeOrders, query
 export const useNotifications = () =>
   useQuery({ queryKey: keys.notifications, queryFn: () => api.listNotifications(), enabled: useIs('buyer'), refetchInterval: 30_000 })
 export const useUnreadNotifications = () => useNotifications().data?.filter((n) => !n.read).length ?? 0
+/** Wins the buyer hasn't been greeted with yet, oldest first. */
+export const useUncelebratedWins = () => (useNotifications().data ?? []).filter((n) => n.kind === 'draw_won' && !n.celebrated).reverse()
+
+export function useMarkWinCelebrated() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (listingId: string) => api.markWinCelebrated(listingId), onSettled: () => qc.invalidateQueries({ queryKey: keys.notifications }) })
+}
 
 export function useMarkNotificationsRead() {
   const qc = useQueryClient()

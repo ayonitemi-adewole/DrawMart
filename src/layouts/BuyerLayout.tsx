@@ -34,6 +34,7 @@ import {
   WalletIcon,
 } from "@/components/icons";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { WinCelebration } from "@/components/WinCelebration";
 import { buttonClass, cx } from "@/components/ui";
 import { formatNaira } from "@/domain/money";
 import { APP_HOME } from "@/lib/apps";
@@ -359,6 +360,7 @@ export function BuyerLayout() {
         ))}
       </nav>
       <IntroSheet />
+      <WinCelebration />
       <ScrollRestoration />
     </div>
   );

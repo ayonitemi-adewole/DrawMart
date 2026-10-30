@@ -1,7 +1,7 @@
 import { PrizeActions } from "@/components/PrizeActions";
 import { useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router";
-import { useListing } from "@/api/hooks";
+import { Link, useLocation, useParams } from "react-router";
+import { useListing, useMarkWinCelebrated, useUncelebratedWins } from "@/api/hooks";
 import type { DrawResultView } from "@/api/types";
 import { Confetti } from "@/components/Confetti";
 import { CopyButton } from "@/components/CopyButton";
@@ -90,8 +90,8 @@ function alreadyRevealed(id: string) {
 }
 
 /** Rolls random ticket numbers, slowing down, then lands on the winner. */
-function useReveal(id: string, ticketCount: number, winner: number) {
-  const [rolling, setRolling] = useState(() => !alreadyRevealed(id));
+function useReveal(id: string, ticketCount: number, winner: number, announced: boolean) {
+  const [rolling, setRolling] = useState(() => !announced && !alreadyRevealed(id));
   const [shown, setShown] = useState(winner);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -141,13 +141,23 @@ function Result({
   priceKobo: number;
   r: DrawResultView;
 }) {
+  // Coming from the win pop-up, so there's no suspense left to build.
+  const announced = !!(useLocation().state as { announced?: boolean } | null)?.announced;
   const { rolling, shown, replay, skip } = useReveal(
     listingId,
     r.ticketCount,
     r.winningNumber,
+    announced,
   );
   const played = r.myNumbers.length > 0;
   const celebrate = !rolling && r.iWon;
+
+  // Seeing the win here counts: the pop-up shouldn't announce it afterwards.
+  const unannounced = useUncelebratedWins().some((n) => n.listingId === listingId);
+  const { mutate: markCelebrated } = useMarkWinCelebrated();
+  useEffect(() => {
+    if (celebrate && unannounced) markCelebrated(listingId);
+  }, [celebrate, unannounced, listingId, markCelebrated]);
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-5">

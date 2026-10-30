@@ -397,6 +397,15 @@ describe('store → admin → draw', () => {
     await asUser(alice, `select public.mark_notifications_read()`)
     expect(await asUser(alice, `select id from public.notifications where read_at is null`)).toEqual([])
     expect((await asUser(bob, `select id from public.notifications where read_at is null`)).length).toBe(2)
+
+    // Reading isn't the pop-up. Only the winner has one to mark, and only for themselves.
+    const toCelebrate = async (u: string) => asUser(u, `select id from public.notifications where kind = 'draw_won' and celebrated_at is null`)
+    expect((await toCelebrate(winner_user_id)).length).toBe(1)
+    await asUser(loser, `select public.mark_win_celebrated($1)`, [listingId])
+    expect((await toCelebrate(winner_user_id)).length).toBe(1)
+    await asUser(winner_user_id, `select public.mark_win_celebrated($1)`, [listingId])
+    expect(await toCelebrate(winner_user_id)).toEqual([])
+    expect(await asUser(loser, `select id from public.notifications where celebrated_at is not null`)).toEqual([])
   })
 })
 

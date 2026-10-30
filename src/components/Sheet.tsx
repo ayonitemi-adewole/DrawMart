@@ -14,6 +14,7 @@ export function Sheet({
   children,
   className,
   hideClose,
+  overlay,
 }: {
   open: boolean
   onClose: () => void
@@ -21,6 +22,8 @@ export function Sheet({
   children: ReactNode
   className?: string
   hideClose?: boolean
+  /** Full-screen decoration above the sheet, such as confetti. */
+  overlay?: ReactNode
 }) {
   const ref = useRef<HTMLDialogElement>(null)
 
@@ -42,12 +45,12 @@ export function Sheet({
       }}
       className={cx(
         'm-0 mt-auto w-full max-w-none bg-transparent p-0 text-ink backdrop:bg-transparent sm:m-auto sm:max-w-lg',
-        'open:animate-sheet-up',
       )}
     >
+      {overlay}
       <div
         className={cx(
-          'relative flex max-h-[90dvh] flex-col gap-4 overflow-y-auto rounded-t-[28px] border border-line bg-raised p-5 pb-[max(env(safe-area-inset-bottom),20px)] shadow-lift sm:rounded-[28px] sm:p-6',
+          'relative flex animate-sheet-up max-h-[90dvh] flex-col gap-4 overflow-y-auto rounded-t-[28px] border border-line bg-raised p-5 pb-[max(env(safe-area-inset-bottom),20px)] shadow-lift sm:rounded-[28px] sm:p-6',
           className,
         )}
       >
