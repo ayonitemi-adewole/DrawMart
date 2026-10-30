@@ -14,6 +14,8 @@
  *
  * In production the seed must be generated and stored server-side only.
  */
+import { RULES } from './rules'
+
 
 const encoder = new TextEncoder()
 
@@ -72,4 +74,12 @@ export async function verifyDraw(input: VerifyInput): Promise<VerifyOutcome> {
   const computedWinner = await winningTicketNumber(input.seed, input.closingRef, input.ticketCount)
   const winnerMatches = computedWinner === input.claimedWinner
   return { commitmentMatches, computedWinner, winnerMatches, valid: commitmentMatches && winnerMatches }
+}
+
+/**
+ * When a sold-out draw's winner is announced: on the listing's deadline, or
+ * RULES.maxDrawWaitDays after the last ticket if that comes first.
+ */
+export function announcementDate(soldOutAtMs: number, closesAt: string): string {
+  return new Date(Math.min(Date.parse(closesAt), soldOutAtMs + RULES.maxDrawWaitDays * 86_400_000)).toISOString()
 }

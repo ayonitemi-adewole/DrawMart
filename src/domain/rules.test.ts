@@ -10,7 +10,7 @@ const listing: Listing = {
   ticketCount: 200, ticketsSold: 190, feeMode: 'seller', feeBps: 1000, unsoldPolicy: 'refund', fallbackPriceKobo: null, durationDays: 7, extended: false,
   status: 'live', commitment: 'x',
   handover: { method: 'pickup', address: '1 Test Street, Ikeja', location: null, contactPhone: '08031234567', date: '2026-10-02', slot: 'morning' },
-  cautionFee: { amountKobo: k(2_500), status: 'held' }, createdAt: '2026-10-01T00:00:00Z', closesAt: '2026-11-01T00:00:00Z', boostedUntil: null, pickupBatchId: null,
+  cautionFee: { amountKobo: k(2_500), status: 'held' }, createdAt: '2026-10-01T00:00:00Z', closesAt: '2026-11-01T00:00:00Z', boostedUntil: null, soldOutAt: null, drawAt: null, pickupBatchId: null,
 }
 const base = { user, listing, quantity: 1, ticketsAlreadyHeld: 0, balance: { cashKobo: k(20_000), creditKobo: 0 }, spentThisWeekKobo: 0 }
 

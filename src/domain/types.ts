@@ -29,7 +29,8 @@ export type ListingKind = 'raffle' | 'product'
 export type ListingStatus =
   | 'pending_review' // submitted by a merchant, waiting for admin (+ escrow check for raffles)
   | 'live' // raffle: tickets on sale
-  | 'drawn' // raffle: sold out, winner picked
+  | 'sold_out' // raffle: last ticket sold, winner announced on drawAt
+  | 'drawn' // raffle: winner picked and announced
   | 'refunded' // raffle: deadline passed without selling out, buyers refunded
   | 'for_sale' // on sale at a fixed price: an approved product, or a raffle that ended unsold
   | 'sold' // a fixed-price item was bought
@@ -112,6 +113,10 @@ export interface Listing {
   closesAt: ISODate
   /** Shown first, marked Sponsored, until then (a paid boost). */
   boostedUntil: ISODate | null
+  /** When the last ticket sold. */
+  soldOutAt: ISODate | null
+  /** When a sold-out draw's winner is announced (draw.ts announcementDate). */
+  drawAt: ISODate | null
 }
 
 export interface Ticket {
@@ -179,6 +184,8 @@ export interface Order {
   dispatchedAt: ISODate | null
   deliveredAt: ISODate | null
 }
+
+export type NotificationKind = 'draw_sold_out' | 'draw_won' | 'draw_lost'
 
 export interface User {
   id: string

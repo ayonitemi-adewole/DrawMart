@@ -26,6 +26,7 @@ import {
   type ListingView,
   type NewListingInput,
   type NewPickupInput,
+  type NotificationView,
   type PickupItemInput,
   type SavedPickupView,
   type NewProductInput,
@@ -100,6 +101,8 @@ interface ListingRow {
   closes_at: string
   pickup_batch_id: string | null
   boosted_until: string | null
+  sold_out_at: string | null
+  draw_at: string | null
   merchant: MerchantRow
   result: DrawResultRow | null
   handover: HandoverRow | null
@@ -280,6 +283,8 @@ function toListingView(l: ListingRow, me: string | null, mine: Mine): ListingVie
     createdAt: l.created_at,
     closesAt: l.closes_at,
     boostedUntil: l.boosted_until,
+    soldOutAt: l.sold_out_at,
+    drawAt: l.draw_at,
     pickupBatchId: l.pickup_batch_id,
     handover: l.handover
       ? { method: l.handover.method, address: l.handover.address, location: toPoint(l.handover.lat, l.handover.lng), contactPhone: l.handover.contact_phone, date: l.handover.date, slot: l.handover.slot }
@@ -677,6 +682,26 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       return toApplicationView(row)
     },
 
+    // Notifications
+    listNotifications: async () => {
+      const me = await requireId()
+      const rows = unwrap(
+        await client
+          .from('notifications')
+          .select('id, kind, listing_id, created_at, read_at, listing:listings(title, draw_at, result:draw_results(winning_number))')
+          .eq('user_id', me)
+          .order('created_at', { ascending: false })
+          .limit(100)
+          .returns<{ id: string; kind: NotificationView['kind']; listing_id: string; created_at: string; read_at: string | null; listing: { title: string; draw_at: string | null; result: { winning_number: number } | null } }[]>(),
+      )
+      return rows.map((n) => ({
+        id: n.id, kind: n.kind, listingId: n.listing_id, listingTitle: n.listing.title, drawAt: n.listing.draw_at,
+        winningNumber: n.listing.result?.winning_number ?? null, createdAt: n.created_at, read: n.read_at !== null,
+      }))
+    },
+
+    markNotificationsRead: () => rpc('mark_notifications_read'),
+
     // Wallet
     getWallet: async (): Promise<WalletView> => {
       const me = await requireId()
@@ -779,6 +804,7 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
 
     // Demo (admins only, test mode only; enforced in the database)
     demoSellOut: (id) => rpc('demo_sell_out', { p_listing_id: id }),
+    demoRunDraw: (id) => rpc('demo_run_draw', { p_listing_id: id }),
     resetTestData: () => rpc('reset_test_data'),
     demoExpire: (id) => rpc('demo_expire', { p_listing_id: id }),
   }

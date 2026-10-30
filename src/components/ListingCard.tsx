@@ -104,6 +104,7 @@ export function ListingCard({
               </Badge>
             ) : null}
             {l.status === "drawn" ? <Badge tone="neutral">DRAWN</Badge> : null}
+            {l.status === "sold_out" ? <Badge tone="ticket">SOLD OUT</Badge> : null}
             {l.status === "sold" ? (
               <Badge tone="hot">SOLD</Badge>
             ) : forSale ? (
@@ -154,7 +155,9 @@ export function ListingCard({
               <span className="text-subtle">
                 {l.status === "live"
                   ? `${left.toLocaleString("en-NG")} left`
-                  : "Draw complete"}
+                  : l.status === "sold_out"
+                    ? "Winner coming soon"
+                    : "Draw complete"}
               </span>
             </div>
             <ProgressBar
@@ -190,9 +193,9 @@ export function ListingCard({
               </span>
             </div>
           )}
-          {l.status === "live" ? (
+          {l.status === "live" || (l.status === "sold_out" && l.drawAt) ? (
             <Countdown
-              closesAt={l.closesAt}
+              closesAt={l.status === "live" ? l.closesAt : l.drawAt!}
               className="rounded-full bg-sunken px-2.5 py-1 text-xs font-bold"
             />
           ) : null}

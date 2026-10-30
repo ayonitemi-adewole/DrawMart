@@ -24,6 +24,7 @@ import { ListingPage } from '@/pages/ListingPage'
 import { MerchantPage } from '@/pages/merchant/MerchantPage'
 import { ResultPage } from '@/pages/ResultPage'
 import { ConversationPage, MessagesPage, NewConversationPage } from '@/pages/MessagesPage'
+import { NotificationsPage } from '@/pages/NotificationsPage'
 import { InsightsPage } from '@/pages/merchant/InsightsPage'
 import { SellPage } from '@/pages/SellPage'
 import { SignInPage } from '@/pages/SignInPage'
@@ -131,6 +132,7 @@ const router = createBrowserRouter([
       { path: 'draws/:id', element: <ResultPage /> },
       { path: 'wallet', element: <RequireSignIn role="buyer"><WalletPage /></RequireSignIn> },
       { path: 'sell', element: <RequireSignIn role="buyer"><SellPage /></RequireSignIn> },
+      { path: 'notifications', element: <RequireSignIn role="buyer"><NotificationsPage /></RequireSignIn> },
       { path: 'messages', element: <RequireSignIn role="buyer"><MessagesPage basePath="/messages" /></RequireSignIn> },
       { path: 'messages/new/:listingId', element: <RequireSignIn role="buyer"><NewConversationPage basePath="/messages" /></RequireSignIn> },
       { path: 'messages/:id', element: <RequireSignIn role="buyer"><ConversationPage basePath="/messages" /></RequireSignIn> },

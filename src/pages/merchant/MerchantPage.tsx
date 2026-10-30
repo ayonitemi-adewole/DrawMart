@@ -68,8 +68,8 @@ const UNSOLD_OPTIONS: { id: UnsoldPolicy; title: string; body: string }[] = [
 type Tab = 'draws' | 'orders' | 'new'
 const TABS: Tab[] = ['draws', 'orders', 'new']
 
-/** Taking tickets or on sale at a fixed price. */
-const isActive = (l: ListingView) => l.status === 'live' || l.status === 'for_sale'
+/** Taking tickets, sold out and waiting for the winner, or on sale at a fixed price. */
+const isActive = (l: ListingView) => l.status === 'live' || l.status === 'sold_out' || l.status === 'for_sale'
 
 export function MerchantPage() {
   const merchant = useMerchant()
@@ -89,7 +89,7 @@ export function MerchantPage() {
   // orders pay out the price less the fee once the buyer confirms.
   const awaiting =
     data
-      .filter((l) => l.status === 'drawn')
+      .filter((l) => l.status === 'drawn' || l.status === 'sold_out')
       .reduce((s, l) => s + computeListingEconomics(l).sellerPayoutKobo, 0) +
     cautionFeesDue(data.filter((l) => l.status === 'drawn')) +
     (orders.data ?? []).filter((o) => o.status !== 'delivered').reduce((s, o) => s + o.priceKobo - o.feeKobo, 0)
@@ -1015,6 +1015,7 @@ function SentForReview({ listings, onDone }: { listings: ListingView[]; onDone: 
 const STATUS: Record<ListingView['status'], { label: string; tone: Tone }> = {
   pending_review: { label: 'In review', tone: 'ticket' },
   live: { label: 'Live', tone: 'brand' },
+  sold_out: { label: 'Sold out · winner coming', tone: 'ticket' },
   drawn: { label: 'Drawn · awaiting delivery', tone: 'sky' },
   refunded: { label: 'Refunded', tone: 'neutral' },
   for_sale: { label: 'On sale · draw ended', tone: 'violet' },
@@ -1107,6 +1108,7 @@ export function MerchantListings({ onNew, emptyBody }: { onNew: () => void; empt
                         {l.ticketsSold.toLocaleString('en-NG')} / {l.ticketCount.toLocaleString('en-NG')} sold
                       </span>
                       {l.status === 'live' ? <Countdown closesAt={l.closesAt} className="font-bold" /> : null}
+                      {l.status === 'sold_out' && l.drawAt ? <span className="font-bold">Winner {dateTime(l.drawAt)}</span> : null}
                     </div>
                   </div>
                 )}

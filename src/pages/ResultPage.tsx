@@ -47,8 +47,12 @@ export function ResultPage() {
     return (
       <EmptyState
         icon={LockIcon}
-        title="This draw hasn’t run yet"
-        body="The winner is picked the moment the last ticket sells."
+        title={l.status === "sold_out" ? "All tickets sold. Winner coming soon" : "This draw hasn’t run yet"}
+        body={
+          l.status === "sold_out" && l.drawAt
+            ? `The winner will be announced on ${dateTime(l.drawAt)}. The result and the proof will be published here.`
+            : "Once the last ticket sells, the winner is announced on the deadline, or within 7 days if that’s sooner."
+        }
         action={
           <Link to={`/listings/${l.id}`} className={buttonClass("primary")}>
             Back to the listing

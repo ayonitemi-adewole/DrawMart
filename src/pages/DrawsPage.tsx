@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router'
-import { useResults } from '@/api/hooks'
+import { useListings, useResults } from '@/api/hooks'
+import { ListingRow } from '@/components/ListingGrid'
 import { ChevronRightIcon, HashIcon, LockIcon, TrophyIcon, UnlockIcon } from '@/components/icons'
 import { Badge, EmptyState, ErrorState, PageTitle, Segmented, Skeleton, cx } from '@/components/ui'
 import { formatNaira } from '@/domain/money'
@@ -16,6 +17,7 @@ type Filter = 'all' | 'mine' | 'won'
 
 export function DrawsPage() {
   const results = useResults()
+  const upcoming = useListings({ status: ['sold_out'] })
   const [filter, setFilter] = useState<Filter>('all')
   const data = results.data ?? []
   const mine = data.filter((r) => r.myNumbers.length > 0)
@@ -49,6 +51,15 @@ export function DrawsPage() {
         </ol>
       </section>
 
+      {upcoming.data?.length ? (
+        <section className="flex flex-col gap-3" aria-labelledby="upcoming-heading">
+          <h2 id="upcoming-heading" className="font-display text-2xl font-extrabold tracking-tight">
+            Sold out, winner coming soon
+          </h2>
+          <ListingRow listings={upcoming.data} label="Sold-out draws waiting for a winner" />
+        </section>
+      ) : null}
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-display text-2xl font-extrabold">Finished draws</h2>
         <Segmented<Filter>
@@ -76,7 +87,7 @@ export function DrawsPage() {
         <EmptyState
           icon={TrophyIcon}
           title={filter === 'won' ? 'No wins yet' : filter === 'mine' ? 'No finished draws for you yet' : 'No results yet'}
-          body="Results appear here the moment a draw sells out."
+          body="Results appear here when a sold-out draw’s winner is announced."
         />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">

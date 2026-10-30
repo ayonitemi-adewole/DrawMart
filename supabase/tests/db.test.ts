@@ -219,10 +219,10 @@ describe('buy_tickets', () => {
 
   it('sells numbered tickets and charges the wallet, credit first', async () => {
     await admin(`insert into public.ledger_entries (user_id, kind, credit_kobo, memo) values ($1, 'store_credit', 200000, 'test credit')`, [buyer])
-    const [{ r }] = await asUser<{ r: { numbers: number[]; costKobo: number; drawn: boolean } }>(buyer, `select public.buy_tickets($1, 3) r`, [iphone.id])
+    const [{ r }] = await asUser<{ r: { numbers: number[]; costKobo: number; soldOut: boolean } }>(buyer, `select public.buy_tickets($1, 3) r`, [iphone.id])
     expect(r.numbers).toEqual([iphone.tickets_sold + 1, iphone.tickets_sold + 2, iphone.tickets_sold + 3])
     expect(r.costKobo).toBe(1_500_000)
-    expect(r.drawn).toBe(false)
+    expect(r.soldOut).toBe(false)
     expect(await balance(buyer)).toEqual({ cash: String(2_500_000 - 1_300_000), credit: '0' })
     expect((await asUser(buyer, `select number from public.tickets`)).length).toBe(3)
   })
@@ -334,10 +334,42 @@ describe('store → admin → draw', () => {
     expect((await asUser(alice, `select * from public.listings where id = $1`, [listingId])).length).toBe(1)
   })
 
-  it('runs a draw the TypeScript verifier accepts when the last ticket sells', async () => {
+  it('announces the winner later: on the deadline, or 7 days after the last ticket', async () => {
+    const close = async (closesIn: string) => {
+      const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ title: `Timing ${closesIn}` })])
+      await asUser(adminUser, `select public.approve_listing($1)`, [id])
+      await admin(`update public.listings set closes_at = now() + $2::interval where id = $1`, [id, closesIn])
+      await asUser(adminUser, `select public.demo_sell_out($1)`, [id])
+      const [l] = await admin<{ draw_at: string; closes_at: string; sold_out_at: string }>(`select * from public.listings where id = $1`, [id])
+      return l
+    }
+    const far = await close('30 days')
+    expect(Date.parse(far.draw_at) - Date.parse(far.sold_out_at)).toBe(7 * 86_400_000)
+    const near = await close('2 days')
+    expect(near.draw_at).toEqual(near.closes_at)
+  })
+
+  it('runs a draw the TypeScript verifier accepts on the announcement date', async () => {
     await asUser(alice, `select public.buy_tickets($1, 4)`, [listingId])
-    const [{ r }] = await asUser<{ r: { drawn: boolean; purchaseId: string } }>(bob, `select public.buy_tickets($1, 6) r`, [listingId])
-    expect(r.drawn).toBe(true)
+    const [{ r }] = await asUser<{ r: { soldOut: boolean; drawAt: string; purchaseId: string } }>(bob, `select public.buy_tickets($1, 6) r`, [listingId])
+    expect(r.soldOut).toBe(true)
+
+    // Sold out: no result, no seed, and no more tickets, until the announcement.
+    const [waiting] = await asUser<{ status: string; draw_at: string; sold_out_at: string }>(alice, `select * from public.listings where id = $1`, [listingId])
+    expect(waiting.status).toBe('sold_out')
+    expect(Math.abs(Date.parse(r.drawAt) - Date.parse(waiting.draw_at))).toBeLessThan(1000)
+    expect(await asUser(alice, `select seed from public.draw_results where listing_id = $1`, [listingId])).toEqual([])
+    await expectFail(asUser(alice, `select public.buy_tickets($1, 1)`, [listingId]), 'not_live')
+    for (const who of [alice, bob]) {
+      expect(await asUser(who, `select kind from public.notifications where listing_id = $1`, [listingId])).toEqual([{ kind: 'draw_sold_out' }])
+    }
+    expect(await asUser(store, `select * from public.notifications`)).toEqual([])
+
+    // Nothing happens before the date; on the date, the job runs the draw.
+    await admin(`select private.process_deadlines()`)
+    expect((await admin<{ status: string }>(`select status from public.listings where id = $1`, [listingId]))[0].status).toBe('sold_out')
+    await admin(`update public.listings set draw_at = now() - interval '1 minute' where id = $1`, [listingId])
+    await admin(`select private.process_deadlines()`)
 
     const [l] = await asUser<{ status: string; commitment: string; caution_fee_status: string }>(alice, `select * from public.listings where id = $1`, [listingId])
     const [res] = await asUser<{ seed: string; closing_ref: string; winning_number: number }>(
@@ -357,6 +389,14 @@ describe('store → admin → draw', () => {
     const credits = async (u: string) => asUser<{ credit_kobo: string }>(u, `select credit_kobo from public.ledger_entries where kind = 'store_credit' and listing_id = $1`, [listingId])
     expect((await credits(loser)).map((c) => Number(c.credit_kobo))).toEqual([spent * 0.2])
     expect(await credits(winner_user_id)).toEqual([])
+
+    // Everyone hears how it went, and can mark it read.
+    const kinds = async (u: string) => (await asUser<{ kind: string }>(u, `select kind from public.notifications where listing_id = $1 order by created_at`, [listingId])).map((n) => n.kind)
+    expect(await kinds(winner_user_id)).toEqual(['draw_sold_out', 'draw_won'])
+    expect(await kinds(loser)).toEqual(['draw_sold_out', 'draw_lost'])
+    await asUser(alice, `select public.mark_notifications_read()`)
+    expect(await asUser(alice, `select id from public.notifications where read_at is null`)).toEqual([])
+    expect((await asUser(bob, `select id from public.notifications where read_at is null`)).length).toBe(2)
   })
 })
 
@@ -398,7 +438,12 @@ describe('deadlines and demo controls', () => {
     await asUser(buyer, `select public.buy_tickets($1, 1)`, [mac.id])
     await asUser(adminUser, `select public.demo_sell_out($1)`, [mac.id])
     const [l] = await admin<{ status: string }>(`select status from public.listings where id = $1`, [mac.id])
-    expect(l.status).toBe('drawn')
+    expect(l.status).toBe('sold_out')
+    await expectFail(asUser(buyer, `select public.demo_run_draw($1)`, [mac.id]), 'forbidden')
+    await asUser(adminUser, `select public.demo_run_draw($1)`, [mac.id])
+    const [after] = await admin<{ status: string }>(`select status from public.listings where id = $1`, [mac.id])
+    expect(after.status).toBe('drawn')
+    await expectFail(asUser(adminUser, `select public.demo_run_draw($1)`, [mac.id]), 'invalid_input')
   })
 
   it('switches off money and demo helpers outside test mode', async () => {
@@ -969,7 +1014,10 @@ describe('shared pickups', () => {
   const batch = async (items: unknown[]) => (await asUser<{ ids: string[] }>(store, `select public.create_listing_batch($1) ids`, [{ items, handover }]))[0].ids
   const fees = async (ids: string[]) =>
     (await admin<{ s: string }>(`select caution_fee_status s from public.listings where id = any($1::uuid[])`, [ids])).map((r) => r.s)
-  const sellOut = (id: string) => asUser(staff, `select public.demo_sell_out($1)`, [id])
+  const sellOut = async (id: string) => {
+    await asUser(staff, `select public.demo_sell_out($1)`, [id])
+    await asUser(staff, `select public.demo_run_draw($1)`, [id])
+  }
 
   beforeAll(async () => {
     store = await newUser('batcher@example.com', { merchantId: IKEJA })

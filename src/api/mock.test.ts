@@ -107,6 +107,7 @@ describe('mock api', () => {
     expect(phone.cautionFee.status).toBe('held')
     await api.buyTickets(phone.id, 2)
     await api.demoSellOut(phone.id)
+    await api.demoRunDraw(phone.id)
     const drawn = await api.getListing(phone.id)
     expect(drawn.status).toBe('drawn')
     expect(drawn.cautionFee.status).toBe('refunded')
@@ -402,8 +403,10 @@ describe('mock api', () => {
     await api.approveListing(a.id)
     await api.approveListing(b.id)
     await api.demoSellOut(a.id)
+    await api.demoRunDraw(a.id)
     expect((await api.getListing(a.id)).cautionFee.status).toBe('held') // the other is still live
     await api.demoSellOut(b.id)
+    await api.demoRunDraw(b.id)
     expect((await api.getListing(a.id)).cautionFee.status).toBe('refunded')
     expect((await api.getListing(b.id)).cautionFee.status).toBe('refunded')
 
@@ -436,5 +439,41 @@ describe('mock api', () => {
     expect((await api.savePickupItems([item]))?.expiresAt).toBe(new Date(t + 7 * 86_400_000).toISOString()) // starts afresh
     expect(await api.savePickupItems([])).toBeNull()
     expect(await api.getSavedPickup()).toBeNull()
+  })
+
+  it('announces the winner later, and tells everyone who took part', async () => {
+    let t = Date.parse('2026-11-01T12:00:00Z')
+    const api = make(() => t)
+    await api.auth.signInWithPassword('chidi@drawmart.test', 'drawmart-demo')
+    const [draw] = (await api.listListings()).filter((l) => l.ticketCount - l.ticketsSold > 1 && l.buyerTicketPriceKobo <= k(5_000))
+    await api.buyTickets(draw.id, 1)
+    expect(await api.listNotifications()).toEqual([])
+
+    await api.demoSellOut(draw.id)
+    const soldOut = await api.getListing(draw.id)
+    expect(soldOut.status).toBe('sold_out')
+    expect(soldOut.result).toBeNull()
+    expect(JSON.stringify(soldOut)).not.toMatch(/"seed"/)
+    expect(Date.parse(soldOut.drawAt!)).toBe(Math.min(Date.parse(draw.closesAt), t + 7 * 86_400_000))
+    await expect(api.buyTickets(draw.id, 1)).rejects.toMatchObject({ code: 'not_live' })
+    const [first] = await api.listNotifications()
+    expect(first).toMatchObject({ kind: 'draw_sold_out', listingId: draw.id, read: false, drawAt: soldOut.drawAt })
+
+    // Other buyers hear nothing about a draw they're not in.
+    await api.auth.signInWithPassword('ngozi@drawmart.test', 'drawmart-demo')
+    expect(await api.listNotifications()).toEqual([])
+    await api.auth.signInWithPassword('chidi@drawmart.test', 'drawmart-demo')
+
+    // On the date, the draw runs by itself and can be verified.
+    t = Date.parse(soldOut.drawAt!)
+    const drawn = await api.getListing(draw.id)
+    expect(drawn.status).toBe('drawn')
+    expect(drawn.result?.seed).toBeTruthy()
+    const v = await verifyDraw({ commitment: drawn.commitment, seed: drawn.result!.seed, closingRef: drawn.result!.closingRef, ticketCount: drawn.ticketCount, claimedWinner: drawn.result!.winningNumber })
+    expect(v.valid).toBe(true)
+    const notes = await api.listNotifications()
+    expect(notes.map((n) => n.kind).sort()).toEqual([drawn.result!.iWon ? 'draw_won' : 'draw_lost', 'draw_sold_out'].sort())
+    await api.markNotificationsRead()
+    expect((await api.listNotifications()).every((n) => n.read)).toBe(true)
   })
 })

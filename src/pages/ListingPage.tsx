@@ -58,7 +58,7 @@ import {
   splitPayment,
   type PurchaseError,
 } from "@/domain/rules";
-import { ticketNo } from "@/lib/time";
+import { dateTime, ticketNo } from "@/lib/time";
 
 export function ListingPage() {
   const { id = "" } = useParams();
@@ -277,10 +277,12 @@ function ListingDetail({ listing: l }: { listing: ListingView }) {
                 v: `1 in ${l.ticketCount.toLocaleString("en-NG")}`,
               },
               {
-                k: l.status === "live" ? "Closes in" : "Status",
+                k: l.status === "live" ? "Closes in" : l.status === "sold_out" ? "Winner in" : "Status",
                 v:
                   l.status === "live" ? (
                     <Countdown closesAt={l.closesAt} icon={false} />
+                  ) : l.status === "sold_out" && l.drawAt ? (
+                    <Countdown closesAt={l.drawAt} icon={false} />
                   ) : (
                     STATUS_TEXT[l.status]
                   ),
@@ -328,7 +330,9 @@ function ListingDetail({ listing: l }: { listing: ListingView }) {
               size="lg"
             />
             <p className="text-xs leading-relaxed text-subtle">
-              The draw runs the moment the last ticket sells.{" "}
+              When the last ticket sells, sales close and everyone with a ticket is
+              told. The winner is announced on the deadline, or{" "}
+              {RULES.maxDrawWaitDays} days after the last ticket if that’s sooner.{" "}
               {describeUnsoldPolicy(l.unsoldPolicy, l.fallbackPriceKobo)}
             </p>
           </Card>
@@ -514,6 +518,7 @@ function Gallery({ listing: l }: { listing: ListingView }) {
 const STATUS_TEXT: Record<ListingView["status"], string> = {
   pending_review: "In review",
   live: "Live",
+  sold_out: "Sold out",
   drawn: "Drawn",
   refunded: "Refunded",
   for_sale: "Buy now",
@@ -641,7 +646,6 @@ function BuyPanel({
   listing: ListingView;
   left: number;
 }) {
-  const navigate = useNavigate();
   const toast = useToast();
   const me = useMe();
   const wallet = useWallet();
@@ -688,6 +692,34 @@ function BuyPanel({
   }
   if (l.status === "for_sale" || l.status === "sold")
     return <BuyNowPanel listing={l} />;
+  if (l.status === "sold_out") {
+    return (
+      <Card className="flex flex-col items-center gap-4 p-6 text-center">
+        <span className="flex size-16 items-center justify-center rounded-3xl bg-ticket-soft text-ticket-ink">
+          <TrophyIcon size={32} />
+        </span>
+        <div className="flex flex-col gap-1">
+          <strong className="font-display text-2xl">All tickets sold</strong>
+          <p className="text-sm text-muted">
+            {l.drawAt
+              ? `The winner will be announced on ${dateTime(l.drawAt)}.`
+              : "The winner will be announced soon."}
+          </p>
+        </div>
+        {l.drawAt ? (
+          <Countdown
+            closesAt={l.drawAt}
+            className="rounded-full bg-sunken px-3 py-1.5 text-sm font-bold"
+          />
+        ) : null}
+        <p className="text-xs text-subtle">
+          {held > 0
+            ? `You hold ${held} ${held === 1 ? "ticket" : "tickets"}. We’ll notify you when the winner is announced.`
+            : "The result will be published here, for anyone to check."}
+        </p>
+      </Card>
+    );
+  }
   if (l.status !== "live") {
     return (
       <Card className="p-5">
@@ -727,7 +759,12 @@ function BuyPanel({
       const r = await buy.mutateAsync({ listingId: l.id, quantity: q });
       setConfirming(false);
       setQty(1);
-      if (r.drawn) navigate(`/draws/${l.id}`);
+      if (r.soldOut)
+        toast(
+          r.drawAt
+            ? `You got the last ticket! The winner will be announced on ${dateTime(r.drawAt)}.`
+            : "You got the last ticket! The winner will be announced soon.",
+        );
       else setReceipt(r);
     } catch (e) {
       setConfirming(false);
@@ -1036,8 +1073,8 @@ function BuyPanel({
               ))}
             </div>
             <p className="text-xs text-subtle">
-              We’ll notify you the moment the last ticket sells and the draw
-              runs.
+              We’ll notify you when the last ticket sells, and again when the
+              winner is announced.
             </p>
             <div className="flex w-full gap-2">
               <Link

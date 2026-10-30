@@ -23,6 +23,7 @@ import type {
   Listing,
   ListingStatus,
   Merchant,
+  NotificationKind,
   Order,
   UnsoldPolicy,
   User,
@@ -71,8 +72,9 @@ export interface PurchaseReceipt {
   purchaseId: string
   numbers: number[]
   costKobo: Kobo
-  /** True if this purchase sold the last ticket and the draw has run. */
-  drawn: boolean
+  /** True if this purchase sold the last ticket. The winner comes later, on `drawAt`. */
+  soldOut: boolean
+  drawAt: string | null
 }
 
 export interface NewListingInput {
@@ -238,6 +240,18 @@ export interface BoostInsightsView {
   daily: DayMetrics[]
 }
 
+export interface NotificationView {
+  id: string
+  kind: NotificationKind
+  listingId: string
+  listingTitle: string
+  /** When a sold-out draw's winner is announced. */
+  drawAt: string | null
+  winningNumber: number | null
+  createdAt: string
+  read: boolean
+}
+
 export interface ListingFilter {
   category?: Category
   status?: ListingStatus[]
@@ -361,6 +375,11 @@ export interface DrawMartApi {
   /** Uploads the ID photos and queues the application for an admin. Also used to resubmit after a rejection. */
   submitSellerApplication(input: SellerApplicationInput): Promise<SellerApplicationView>
 
+  // Notifications
+  /** Newest first. */
+  listNotifications(): Promise<NotificationView[]>
+  markNotificationsRead(): Promise<void>
+
   // Wallet
   getWallet(): Promise<WalletView>
   /** Instant test money. Errors outside test mode; real top-ups use `payments`. */
@@ -396,7 +415,10 @@ export interface DrawMartApi {
   rejectSeller(applicationId: string, note: string): Promise<void>
 
   // Demo-only helpers (errors outside test mode; admins only on a real backend)
+  /** Sells the remaining tickets. The winner still waits for the announcement date. */
   demoSellOut(listingId: string): Promise<void>
+  /** Announces a sold-out draw's winner now instead of waiting. */
+  demoRunDraw(listingId: string): Promise<void>
   demoExpire(listingId: string): Promise<void>
   /** Wipes all data. Only the in-browser mock can do this. */
   demoReset?(): Promise<void>

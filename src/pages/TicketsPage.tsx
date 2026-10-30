@@ -26,7 +26,7 @@ import {
   type Tone,
 } from "@/components/ui";
 import { formatNaira } from "@/domain/money";
-import { ticketNo } from "@/lib/time";
+import { dateTime, ticketNo } from "@/lib/time";
 
 function status(l: ListingView): { tone: Tone; label: string; detail: string } {
   if (l.status === "drawn" && l.result?.iWon)
@@ -40,6 +40,14 @@ function status(l: ListingView): { tone: Tone; label: string; detail: string } {
       tone: "neutral",
       label: "Not this time",
       detail: `Winner ${ticketNo(l.result.winningNumber)} · ${formatNaira(l.result.myCreditKobo)} credit returned`,
+    };
+  if (l.status === "sold_out")
+    return {
+      tone: "ticket",
+      label: "Sold out",
+      detail: l.drawAt
+        ? `Winner announced ${dateTime(l.drawAt)}`
+        : "Winner announced soon",
     };
   if (l.status === "for_sale")
     return {
@@ -132,8 +140,9 @@ function MyOrders() {
 
 function DrawTickets() {
   const q = useMyListings();
-  const live = q.data?.filter((l) => l.status === "live") ?? [];
-  const past = q.data?.filter((l) => l.status !== "live") ?? [];
+  const waiting = (l: ListingView) => l.status === "live" || l.status === "sold_out";
+  const live = q.data?.filter(waiting) ?? [];
+  const past = q.data?.filter((l) => !waiting(l)) ?? [];
   const [tab, setTab] = useState<Tab>("active");
   const items = tab === "active" ? live : past;
   const ticketsHeld = live.reduce((s, l) => s + l.myNumbers.length, 0);

@@ -6,7 +6,7 @@
  * keeps draw seeds out of every response until a draw has run, so the UI is
  * built against realistic behaviour.
  */
-import { commitmentFor, createSeed, randomHex, winningTicketNumber } from '@/domain/draw'
+import { commitmentFor, createSeed, randomHex, winningTicketNumber, announcementDate } from '@/domain/draw'
 import { LISTING_ERROR_TEXT, computeListingEconomics, platformFeeBps, validateListingEconomics } from '@/domain/fees'
 import {
   HANDOVER_ERROR_TEXT,
@@ -42,7 +42,7 @@ import { MAX_MESSAGES_PER_MINUTE, messageError } from '@/domain/messages'
 import { fillDays, lagosDay } from '@/domain/metrics'
 import { BOOST_DEFAULTS, BOOST_ERROR_TEXT, DEFAULT_BOOST_PACKAGES, boostEndsAt, boostWindow, boostsUnlocked, canBoost } from '@/domain/boosts'
 import { SELLER_APPLICATION_ERROR_TEXT, normalizeNin, validateSellerApplication } from '@/domain/sellers'
-import type { Category, DrawResult, LedgerEntry, Listing, ListingStatus, Merchant, Order, Ticket, UnsoldPolicy, User } from '@/domain/types'
+import type { Category, DrawResult, NotificationKind, LedgerEntry, Listing, ListingStatus, Merchant, Order, Ticket, UnsoldPolicy, User } from '@/domain/types'
 import {
   ApiError,
   type DrawMartApi,
@@ -52,6 +52,7 @@ import {
   type NewListingInput,
   type WalletView,
   type NewPickupInput,
+  type NotificationView,
   type PickupItemInput,
   type SavedPickupView,
   type NewProductInput,
@@ -69,7 +70,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v13' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v14' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -86,6 +87,9 @@ interface Db {
   listings: Listing[]
   /** Server-side secrets. Never returned before the draw. */
   seeds: Record<string, string>
+  /** Reference of the purchase that sold the last ticket, kept for the draw. */
+  closingRefs: Record<string, string>
+  notifications: { id: string; userId: string; kind: NotificationKind; listingId: string; createdAt: string; read: boolean }[]
   tickets: Ticket[]
   ledger: LedgerEntry[]
   results: DrawResult[]
@@ -405,7 +409,7 @@ function productListing(input: NewProductInput & { merchantId: string; status: L
     id: uid('L'), kind: 'product', merchantId: input.merchantId, title: input.title.trim(), description: input.description.trim(), category: input.category,
     images: input.images ?? [], priceKobo: input.priceKobo, ticketPriceKobo: 0, buyerTicketPriceKobo: 0, ticketCount: 0, ticketsSold: 0,
     feeMode: 'seller', feeBps: platformFeeBps(input.priceKobo), unsoldPolicy: 'refund', fallbackPriceKobo: null, durationDays: 0, extended: false,
-    status: input.status, handover: null, cautionFee: { amountKobo: 0, status: 'none' }, commitment: '', createdAt: iso(at), closesAt: iso(at), boostedUntil: null, pickupBatchId: null,
+    status: input.status, handover: null, cautionFee: { amountKobo: 0, status: 'none' }, commitment: '', createdAt: iso(at), closesAt: iso(at), boostedUntil: null, soldOutAt: null, drawAt: null, pickupBatchId: null,
   }
 }
 
@@ -450,6 +454,8 @@ async function makeListing(s: SeedListing, now: number, seeds: Record<string, st
     createdAt: iso(now - 2 * DAY),
     closesAt: iso(now + s.closesInHours * 60 * 60 * 1000),
     boostedUntil: null,
+    soldOutAt: null,
+    drawAt: null,
     pickupBatchId: null,
   }
 }
@@ -487,6 +493,8 @@ async function freshDb(): Promise<Db> {
     merchants: MERCHANTS.map((x) => ({ ...x })),
     listings: [],
     seeds: {},
+    closingRefs: {},
+    notifications: [],
     tickets: [],
     // Every buyer starts with the same test money (welcome_credit_kobo on Supabase).
     ledger: DEMO_BUYERS.map((a) => ({ id: uid('E'), userId: a.mockId, kind: 'topup' as const, cashKobo: WELCOME_KOBO, creditKobo: 0, memo: 'Welcome top-up (test money)', createdAt: iso(now - DAY) })),
@@ -599,6 +607,31 @@ async function runDraw(db: Db, listing: Listing, closingRef: string, at: string)
     const credit = consolationCredit(count * listing.buyerTicketPriceKobo)
     if (credit > 0) db.ledger.push({ id: uid('E'), userId, kind: 'store_credit', cashKobo: 0, creditKobo: credit, memo: `Store credit · ${listing.title}`, listingId: listing.id, createdAt: at })
   }
+  for (const userId of participants(db, listing)) notify(db, userId, userId === winner.userId ? 'draw_won' : 'draw_lost', listing.id, at)
+}
+
+/** Everyone holding a ticket, leaving out the demo's stand-in for other buyers. */
+function participants(db: Db, listing: Listing): Set<string> {
+  return new Set(db.tickets.filter((t) => t.listingId === listing.id && t.userId !== CROWD).map((t) => t.userId))
+}
+
+function notify(db: Db, userId: string, kind: NotificationKind, listingId: string, at: string) {
+  db.notifications.push({ id: uid('N'), userId, kind, listingId, createdAt: at, read: false })
+}
+
+/** The last ticket has sold: sales stop and everyone hears when the winner comes. */
+function closeTicketSales(db: Db, listing: Listing, closingRef: string, now: number) {
+  listing.status = 'sold_out'
+  listing.soldOutAt = iso(now)
+  listing.drawAt = announcementDate(now, listing.closesAt)
+  db.closingRefs[listing.id] = closingRef
+  for (const userId of participants(db, listing)) notify(db, userId, 'draw_sold_out', listing.id, iso(now))
+}
+
+async function runDueDraws(db: Db, now: number) {
+  for (const l of db.listings) {
+    if (l.status === 'sold_out' && l.drawAt && Date.parse(l.drawAt) <= now) await runDraw(db, l, db.closingRefs[l.id], iso(now))
+  }
 }
 
 /** Pays every ticket buyer back into the same buckets (cash/credit) the money came from. */
@@ -704,7 +737,7 @@ function statsBetween(db: Db, l: Listing, from: string, to: string) {
   }
   const views = db.views.filter((v) => v.listingId === l.id && v.day >= from && v.day <= to)
   // A refunded draw's tickets were paid back, so they aren't sales.
-  const tickets = l.kind === 'raffle' && (l.status === 'live' || l.status === 'drawn') ? db.tickets.filter((t) => t.listingId === l.id && inRange(t.purchasedAt)) : []
+  const tickets = l.kind === 'raffle' && (l.status === 'live' || l.status === 'sold_out' || l.status === 'drawn') ? db.tickets.filter((t) => t.listingId === l.id && inRange(t.purchasedAt)) : []
   const orders = db.orders.filter((o) => o.listingId === l.id && inRange(o.createdAt))
   return {
     views: views.length,
@@ -769,6 +802,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       const t = now()
       processDeadlines(db, t)
       applyPendingLimits(db, t)
+      await runDueDraws(db, t)
       settlePickups(db)
       const out = await fn(db)
       settlePickups(db)
@@ -907,7 +941,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       handover: { ...input.handover, address: input.handover.address.trim(), method: handoverMethodFor(input.category) },
       // In test mode the fee is recorded, not charged. A real backend takes it before booking the pickup.
       cautionFee: { amountKobo: cautionFeeFor(input.category), status: 'held' },
-      commitment: await commitmentFor(seed), createdAt: iso(at), closesAt: iso(at + input.durationDays * DAY), boostedUntil: null, pickupBatchId: null,
+      commitment: await commitmentFor(seed), createdAt: iso(at), closesAt: iso(at + input.durationDays * DAY), boostedUntil: null, soldOutAt: null, drawAt: null, pickupBatchId: null,
     }
     db.listings.push(listing)
     return listing
@@ -970,9 +1004,9 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           id: uid('E'), userId: buyer(), kind: 'ticket_purchase', cashKobo: -fromCash, creditKobo: -fromCredit,
           memo: `${quantity} ${quantity === 1 ? 'ticket' : 'tickets'} · ${listing.title}`, listingId, createdAt: at,
         })
-        const drawn = listing.ticketsSold === listing.ticketCount
-        if (drawn) await runDraw(db, listing, purchaseId, at)
-        return { purchaseId, numbers, costKobo, drawn }
+        const soldOut = listing.ticketsSold === listing.ticketCount
+        if (soldOut) closeTicketSales(db, listing, purchaseId, now())
+        return { purchaseId, numbers, costKobo, soldOut, drawAt: listing.drawAt }
       }),
 
     listMyListings: () =>
@@ -1021,6 +1055,25 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         o.status = 'delivered'
         o.dispatchedAt ??= at
         o.deliveredAt = at
+      }),
+
+    listNotifications: () =>
+      tx((db): NotificationView[] =>
+        db.notifications
+          .filter((n) => n.userId === buyer())
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .map((n) => {
+            const l = getListingOr404(db, n.listingId)
+            return {
+              id: n.id, kind: n.kind, listingId: n.listingId, listingTitle: l.title, drawAt: l.drawAt,
+              winningNumber: db.results.find((r) => r.listingId === n.listingId)?.winningNumber ?? null, createdAt: n.createdAt, read: n.read,
+            }
+          }),
+      ),
+
+    markNotificationsRead: () =>
+      tx((db) => {
+        for (const n of db.notifications) if (n.userId === buyer()) n.read = true
       }),
 
     getWallet: () =>
@@ -1183,7 +1236,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     recordListingView: (listingId, visitorId) =>
       tx((db) => {
         const l = db.listings.find((x) => x.id === listingId)
-        if (!l || !['live', 'drawn', 'refunded', 'for_sale', 'sold'].includes(l.status)) return
+        if (!l || !['live', 'sold_out', 'drawn', 'refunded', 'for_sale', 'sold'].includes(l.status)) return
         const role = readSession()?.role
         if (role && l.merchantId === myShop(db)) return // a seller looking at their own item
         const visitor = role ? `u:${readSession()!.userId}` : /^[A-Za-z0-9-]{8,64}$/.test(visitorId) ? `v:${visitorId}` : null
@@ -1369,7 +1422,15 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (l.status !== 'live') throw new ApiError('not_live', PURCHASE_ERROR_TEXT.not_live)
         const at = iso(now())
         const ref = crowdBuys(db, l, l.ticketCount - l.ticketsSold, at)
-        await runDraw(db, l, ref, at)
+        closeTicketSales(db, l, ref, now())
+      }),
+
+    demoRunDraw: (listingId) =>
+      tx(async (db) => {
+        const l = getListingOr404(db, listingId)
+        if (l.status !== 'sold_out') throw new ApiError('invalid_input', 'Only sold-out draws can be announced.')
+        l.drawAt = iso(now())
+        await runDueDraws(db, now())
       }),
 
     demoExpire: (listingId) =>

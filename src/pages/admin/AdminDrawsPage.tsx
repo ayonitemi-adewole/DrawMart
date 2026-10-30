@@ -8,23 +8,24 @@ import { Sheet } from '@/components/Sheet'
 import { useToast } from '@/components/toast'
 import { Badge, Button, Card, EmptyState, ErrorState, Notice, PageTitle, ProductImage, ProgressBar, Skeleton, errorMessage } from '@/components/ui'
 import { formatNaira } from '@/domain/money'
+import { dateTime } from '@/lib/time'
 
 /** Admin view of every live draw. In test mode, also the demo controls (the database only lets admins use them). */
 export function AdminDrawsPage() {
-  const q = useListings({ status: ['live'] })
+  const q = useListings({ status: ['live', 'sold_out'] })
 
   return (
     <div className="flex flex-col gap-6">
       <PageTitle
         eyebrow="Admin"
         sub={api.testMode ? 'Watch sales, and use the demo controls to run a draw or hit a deadline without waiting.' : 'Every draw that’s taking tickets right now.'}
-        action={q.data ? <Badge tone="brand">{q.data.length} live</Badge> : null}
+        action={q.data ? <Badge tone="brand">{q.data.filter((l) => l.status === 'live').length} live</Badge> : null}
       >
         Live draws
       </PageTitle>
       {api.testMode ? (
         <Notice tone="ticket" icon={DiceIcon} title="Demo controls">
-          Test mode only. “Run the draw” sells the remaining tickets to filler buyers and draws a winner; “Skip to deadline” closes the draw unsold.
+          Test mode only. “Sell out” sells the remaining tickets to filler buyers, and everyone in the draw is told; “Announce winner now” skips the wait; “Skip to deadline” closes a draw unsold.
         </Notice>
       ) : null}
       {q.isPending ? (
@@ -95,7 +96,9 @@ function ResetTestData() {
 function DrawRow({ listing: l }: { listing: ListingView }) {
   const demo = useDemoActions()
   const toast = useToast()
-  const busy = (demo.sellOut.isPending && demo.sellOut.variables === l.id) || (demo.expire.isPending && demo.expire.variables === l.id)
+  const busy =
+    (demo.sellOut.isPending && demo.sellOut.variables === l.id) || (demo.expire.isPending && demo.expire.variables === l.id) || (demo.runDraw.isPending && demo.runDraw.variables === l.id)
+  const soldOut = l.status === 'sold_out'
 
   return (
     <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:p-5">
@@ -104,7 +107,7 @@ function DrawRow({ listing: l }: { listing: ListingView }) {
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <strong className="truncate">{l.title}</strong>
           <span className="flex flex-wrap items-center gap-x-2 text-xs text-subtle">
-            {l.merchant.name} · {formatNaira(l.buyerTicketPriceKobo)} a ticket · <Countdown closesAt={l.closesAt} />
+            {l.merchant.name} · {formatNaira(l.buyerTicketPriceKobo)} a ticket · {soldOut && l.drawAt ? <>Sold out, winner on {dateTime(l.drawAt)}</> : <Countdown closesAt={l.closesAt} />}
           </span>
           <ProgressBar value={l.ticketsSold} max={l.ticketCount} label={`${l.ticketsSold} of ${l.ticketCount} sold`} />
           <span className="text-[11px] text-subtle tabular-nums">
@@ -112,7 +115,24 @@ function DrawRow({ listing: l }: { listing: ListingView }) {
           </span>
         </div>
       </div>
-      {api.testMode ? (
+      {api.testMode && soldOut ? (
+        <div className="flex shrink-0 gap-2 sm:flex-col">
+          <Button
+            variant="outline"
+            size="sm"
+            className="min-h-11 flex-1"
+            loading={demo.runDraw.isPending && demo.runDraw.variables === l.id}
+            onClick={() =>
+              demo.runDraw.mutate(l.id, {
+                onSuccess: () => toast(`${l.title}: winner announced.`),
+                onError: (e) => toast(errorMessage(e), 'error'),
+              })
+            }
+          >
+            <TrophyIcon size={14} /> Announce winner now
+          </Button>
+        </div>
+      ) : api.testMode ? (
         <div className="flex shrink-0 gap-2 sm:flex-col">
           <Button
             variant="outline"
@@ -122,12 +142,12 @@ function DrawRow({ listing: l }: { listing: ListingView }) {
             loading={demo.sellOut.isPending && demo.sellOut.variables === l.id}
             onClick={() =>
               demo.sellOut.mutate(l.id, {
-                onSuccess: () => toast(`${l.title}: draw complete.`),
+                onSuccess: () => toast(`${l.title}: sold out. Everyone in the draw has been told.`),
                 onError: (e) => toast(errorMessage(e), 'error'),
               })
             }
           >
-            <TrophyIcon size={14} /> Run the draw
+            <TicketIcon size={14} /> Sell out
           </Button>
           <Button
             variant="outline"

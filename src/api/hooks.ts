@@ -21,6 +21,7 @@ export const keys = {
   myOrders: ['my-orders'] as const,
   merchantOrders: ['merchant-orders'] as const,
   savedPickup: ['saved-pickup'] as const,
+  notifications: ['notifications'] as const,
   sellerApplication: ['seller-application'] as const,
   sellerApplications: ['seller-applications'] as const,
   conversations: ['conversations'] as const,
@@ -104,6 +105,16 @@ export function useSetCallPhone() {
     mutationFn: (phone: string | null) => api.setCallPhone(phone),
     onSettled: () => Promise.all([qc.invalidateQueries({ queryKey: keys.callPhone }), qc.invalidateQueries({ queryKey: keys.conversations })]),
   })
+}
+
+// Notifications. No push channel yet, so these poll like messages.
+export const useNotifications = () =>
+  useQuery({ queryKey: keys.notifications, queryFn: () => api.listNotifications(), enabled: useIs('buyer'), refetchInterval: 30_000 })
+export const useUnreadNotifications = () => useNotifications().data?.filter((n) => !n.read).length ?? 0
+
+export function useMarkNotificationsRead() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: () => api.markNotificationsRead(), onSettled: () => qc.invalidateQueries({ queryKey: keys.notifications }) })
 }
 
 // Boosts (paid promotion)
@@ -271,6 +282,7 @@ export function useDemoActions() {
   const invalidate = useInvalidateAll()
   return {
     sellOut: useMutation({ mutationFn: (id: string) => api.demoSellOut(id), onSettled: invalidate }),
+    runDraw: useMutation({ mutationFn: (id: string) => api.demoRunDraw(id), onSettled: invalidate }),
     expire: useMutation({ mutationFn: (id: string) => api.demoExpire(id), onSettled: invalidate }),
     reset: useMutation({
       mutationFn: () => api.demoReset?.() ?? Promise.resolve(),

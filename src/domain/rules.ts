@@ -21,6 +21,8 @@ export const RULES = {
   handoverMaxLeadDays: 14,
   /** Items a store can send in one pickup. */
   maxPickupItems: 10,
+  /** Longest wait between the last ticket selling and the winner being announced. */
+  maxDrawWaitDays: 7,
   /** How long a store can keep items saved for a pickup, from the first save. */
   savedPickupDays: 7,
   /** Size of one wallet top-up. */

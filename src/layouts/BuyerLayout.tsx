@@ -10,11 +10,13 @@ import {
   useAccess,
   useMyListings,
   useUnreadMessages,
+  useUnreadNotifications,
   useWallet,
 } from "@/api/hooks";
 import { api } from "@/api";
 import { IntroSheet } from "@/components/HowItWorks";
 import {
+  BellIcon,
   ChatIcon,
   HomeIcon,
   LogoMark,
@@ -84,6 +86,7 @@ export function BuyerLayout() {
   const { pathname, search } = useLocation();
   const active = useActiveTicketCount();
   const unread = useUnreadMessages();
+  const unreadNotifications = useUnreadNotifications();
   const cash = wallet.data?.balance.cashKobo ?? null;
   const credit = wallet.data?.balance.creditKobo ?? 0;
 
@@ -126,6 +129,20 @@ export function BuyerLayout() {
             ))}
           </nav>
           <div className="flex items-center gap-1">
+            {access.signedIn ? (
+              <Link
+                to="/notifications"
+                aria-label={unreadNotifications ? `Notifications, ${unreadNotifications} unread` : "Notifications"}
+                className="relative flex size-11 items-center justify-center rounded-xl text-muted no-underline hover:bg-sunken hover:text-ink"
+              >
+                <BellIcon size={20} />
+                {unreadNotifications ? (
+                  <span className="absolute top-1.5 right-1.5 flex size-4.5 items-center justify-center rounded-full bg-hot text-[9px] font-extrabold text-white">
+                    {unreadNotifications > 9 ? "9+" : unreadNotifications}
+                  </span>
+                ) : null}
+              </Link>
+            ) : null}
             {access.signedIn ? (
               <Link
                 to="/messages"

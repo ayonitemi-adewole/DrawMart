@@ -11,6 +11,7 @@ const STATUS_TEXT: Partial<Record<ListingMetrics['status'], string>> = {
   live: 'Live',
   for_sale: 'On sale',
   sold: 'Sold',
+  sold_out: 'Sold out',
   drawn: 'Drawn',
   refunded: 'Refunded',
   pending_review: 'In review',

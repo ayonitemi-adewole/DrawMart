@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { announcementDate } from './draw'
 import { commitmentFor, createSeed, sha256Hex, verifyDraw, winningTicketNumber } from './draw'
 
 describe('provably fair draw', () => {
@@ -47,3 +48,14 @@ describe('provably fair draw', () => {
     await expect(winningTicketNumber('a', 'b', 0)).rejects.toThrow()
   })
 })
+
+describe('announcementDate', () => {
+  const soldOut = Date.parse('2026-11-01T12:00:00Z')
+  it('is 7 days after the last ticket by default', () => {
+    expect(announcementDate(soldOut, '2026-12-01T00:00:00Z')).toBe('2026-11-08T12:00:00.000Z')
+  })
+  it('is the deadline when that comes sooner', () => {
+    expect(announcementDate(soldOut, '2026-11-03T09:00:00Z')).toBe('2026-11-03T09:00:00.000Z')
+  })
+})
+
