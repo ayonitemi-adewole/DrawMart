@@ -5,17 +5,20 @@ import {
   Outlet,
   ScrollRestoration,
   useLocation,
+  useNavigate,
 } from "react-router";
 import {
   useAccess,
   useCart,
   useMyListings,
+  useSignOut,
   useUnreadMessages,
   useUnreadNotifications,
   useWallet,
 } from "@/api/hooks";
 import { api } from "@/api";
 import { IntroSheet } from "@/components/HowItWorks";
+import { NavMenu, type MenuLink } from "@/components/NavMenu";
 import {
   BellIcon,
   CartIcon,
@@ -77,6 +80,42 @@ export function TestModeBanner() {
   );
 }
 
+/** The wallet balance, as a chip in the top bar and in the menu. */
+function WalletChip({
+  cash,
+  credit,
+  className,
+}: {
+  cash: number | null;
+  credit: number;
+  className?: string;
+}) {
+  return (
+    <Link
+      to="/wallet"
+      aria-label={`Wallet: ${cash === null ? "loading" : formatNaira(cash)} cash${credit ? `, ${formatNaira(credit)} credit` : ""}`}
+      className={cx(
+        "items-center gap-2 rounded-2xl bg-ink py-1 pr-3.5 pl-1.5 text-sm font-extrabold text-ground no-underline shadow-card transition hover:opacity-90",
+        className,
+      )}
+    >
+      <span className="flex size-8 items-center justify-center rounded-xl bg-ticket text-on-ticket">
+        <WalletIcon size={16} />
+      </span>
+      <span className="flex flex-col leading-none">
+        <span className="tabular-nums">
+          {cash === null ? "…" : formatNaira(cash)}
+        </span>
+        {credit > 0 ? (
+          <span className="mt-0.5 text-[10px] font-bold text-ticket">
+            +{formatNaira(credit)} credit
+          </span>
+        ) : null}
+      </span>
+    </Link>
+  );
+}
+
 function useActiveTicketCount() {
   const q = useMyListings();
   return q.data?.filter((l) => l.status === "live").length ?? 0;
@@ -92,6 +131,14 @@ export function BuyerLayout() {
   const cartCount = useCart().data?.length ?? 0;
   const cash = wallet.data?.balance.cashKobo ?? null;
   const credit = wallet.data?.balance.creditKobo ?? 0;
+  const navigate = useNavigate();
+  const signOut = useSignOut();
+  const menuLinks: MenuLink[] = access.signedIn
+    ? [
+        { to: "/notifications", label: "Notifications", icon: BellIcon, count: unreadNotifications },
+        { to: "/messages", label: "Messages", icon: ChatIcon, count: unread },
+      ]
+    : [];
 
   // Store and admin accounts have their own apps and never see this one.
   if (access.role && access.role !== "buyer")
@@ -104,7 +151,7 @@ export function BuyerLayout() {
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-2.5 sm:px-6">
           <Logo />
           <nav
-            className="hidden items-center gap-1 rounded-2xl bg-sunken/70 p-1 md:flex"
+            className="hidden items-center gap-1 rounded-2xl bg-sunken/70 p-1 lg:flex"
             aria-label="Main"
           >
             {NAV.map((n) => (
@@ -146,11 +193,12 @@ export function BuyerLayout() {
                 ) : null}
               </Link>
             ) : null}
+            {/* Below lg these two and the theme live in the menu. */}
             {access.signedIn ? (
               <Link
                 to="/notifications"
                 aria-label={unreadNotifications ? `Notifications, ${unreadNotifications} unread` : "Notifications"}
-                className="relative flex size-11 items-center justify-center rounded-xl text-muted no-underline hover:bg-sunken hover:text-ink"
+                className="relative hidden size-11 items-center lg:flex justify-center rounded-xl text-muted no-underline hover:bg-sunken hover:text-ink"
               >
                 <BellIcon size={20} />
                 {unreadNotifications ? (
@@ -164,7 +212,7 @@ export function BuyerLayout() {
               <Link
                 to="/messages"
                 aria-label={unread ? `Messages, ${unread} unread` : "Messages"}
-                className="relative flex size-11 items-center justify-center rounded-xl text-muted no-underline hover:bg-sunken hover:text-ink"
+                className="relative hidden size-11 items-center lg:flex justify-center rounded-xl text-muted no-underline hover:bg-sunken hover:text-ink"
               >
                 <ChatIcon size={20} />
                 {unread ? (
@@ -174,8 +222,7 @@ export function BuyerLayout() {
                 ) : null}
               </Link>
             ) : null}
-            {/* Phones are short of room here; Wallet has the same setting. */}
-            <span className="hidden sm:block">
+            <span className="hidden lg:block">
               <ThemeToggle />
             </span>
             {access.ready && !access.signedIn ? (
@@ -186,37 +233,53 @@ export function BuyerLayout() {
                 <span className="text-on-brand">Sign in</span>
               </Link>
             ) : (
-              <Link
-                to="/wallet"
-                aria-label={`Wallet: ${cash === null ? "loading" : formatNaira(cash)} cash${credit ? `, ${formatNaira(credit)} credit` : ""}`}
-                className="flex min-h-11 items-center gap-2 rounded-2xl bg-ink py-1 pr-3.5 pl-1.5 text-sm font-extrabold text-ground no-underline shadow-card transition hover:opacity-90"
-              >
-                <span className="flex size-8 items-center justify-center rounded-xl bg-ticket text-on-ticket">
-                  <WalletIcon size={16} />
-                </span>
-                <span className="flex flex-col leading-none">
-                  <span className="tabular-nums">
-                    {cash === null ? "…" : formatNaira(cash)}
-                  </span>
-                  {credit > 0 ? (
-                    <span className="mt-0.5 text-[10px] font-bold text-ticket">
-                      +{formatNaira(credit)} credit
-                    </span>
-                  ) : null}
-                </span>
-              </Link>
+              <WalletChip cash={cash} credit={credit} className="hidden min-h-11 sm:flex" />
             )}
+            <NavMenu
+              title="Menu"
+              className="lg:hidden"
+              links={menuLinks}
+              top={
+                access.signedIn ? (
+                  <WalletChip cash={cash} credit={credit} className="flex min-h-14" />
+                ) : null
+              }
+              account={access.email}
+              signingOut={signOut.isPending}
+              onSignOut={
+                access.signedIn
+                  ? (done) =>
+                      signOut.mutate(undefined, {
+                        onSuccess: () => {
+                          done();
+                          navigate("/");
+                        },
+                      })
+                  : undefined
+              }
+              bottom={
+                <div className="flex flex-col gap-1 border-t border-line pt-3 text-xs text-subtle">
+                  <Link to="/credits" className="flex min-h-11 w-fit items-center">
+                    Photo credits
+                  </Link>
+                  <span>
+                    Licensed by LSLGA · Licence [NUMBER] · Lagos residents 18+
+                    only · Play responsibly
+                  </span>
+                </div>
+              }
+            />
           </div>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 pt-5 pb-32 sm:px-6 md:pb-16">
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 pt-5 pb-32 sm:px-6 lg:pb-16">
         <div key={pathname} className="animate-fade-in">
           <Outlet />
         </div>
       </main>
 
-      <footer className="hidden border-t border-line bg-surface/50 md:block">
+      <footer className="hidden border-t border-line bg-surface/50 lg:block">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 py-6 text-xs text-subtle">
           <div className="flex items-center gap-2">
             <ShieldIcon size={16} className="text-brand" />
@@ -235,7 +298,7 @@ export function BuyerLayout() {
       </footer>
 
       <nav
-        className="fixed inset-x-3 bottom-[max(env(safe-area-inset-bottom),12px)] z-30 grid grid-cols-5 gap-1 rounded-3xl border border-line bg-raised/90 p-1.5 shadow-lift backdrop-blur-xl md:hidden"
+        className="fixed inset-x-3 bottom-[max(env(safe-area-inset-bottom),12px)] z-30 grid grid-cols-5 gap-1 rounded-3xl border border-line bg-raised/90 p-1.5 shadow-lift backdrop-blur-xl lg:hidden"
         aria-label="Main"
       >
         {NAV.map((n) => (

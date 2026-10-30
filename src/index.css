@@ -174,10 +174,13 @@ body {
   transition: background-color 0.2s ease;
 }
 
-a {
-  color: var(--color-brand);
-  font-weight: 700;
-  text-underline-offset: 3px;
+/* In the base layer, so colour utilities on a link (text-ink, text-ground…) win. */
+@layer base {
+  a {
+    color: var(--color-brand);
+    font-weight: 700;
+    text-underline-offset: 3px;
+  }
 }
 
 :focus-visible {

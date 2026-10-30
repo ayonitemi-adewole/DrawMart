@@ -415,7 +415,7 @@ export function Segmented<T extends string>({
     <div
       role="group"
       aria-label={label}
-      className={cx("inline-flex gap-1 rounded-2xl bg-sunken p-1", className)}
+      className={cx("no-scrollbar inline-flex max-w-full gap-1 overflow-x-auto rounded-2xl bg-sunken p-1", className)}
     >
       {options.map((o) => {
         const active = o.value === value;

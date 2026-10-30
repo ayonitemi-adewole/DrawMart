@@ -2,6 +2,7 @@ import { NavLink, Outlet, ScrollRestoration, useLocation, useNavigate } from 're
 import { api } from '@/api'
 import { useAccess, useMerchant, usePendingListings, usePrizeOrders, useSellerApplications, useSignOut, useUnreadMessages } from '@/api/hooks'
 import { ChartIcon, ChatIcon, TrendingUpIcon, TrophyIcon, CheckIcon, ClipboardIcon, DiceIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
+import { NavMenu } from '@/components/NavMenu'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { cx } from '@/components/ui'
 import { APP_HOME } from '@/lib/apps'
@@ -43,6 +44,22 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
           { to: '/admin/draws', label: api.testMode ? 'Live draws & demo' : 'Live draws', icon: DiceIcon },
         ]
 
+  const shopCard =
+    app === 'store' && merchant.data ? (
+      <div className="flex items-center gap-3 rounded-2xl bg-sunken p-3">
+        <span className="flex size-10 items-center justify-center rounded-xl bg-brand font-display text-lg font-extrabold text-on-brand">
+          {merchant.data.name.charAt(0)}
+        </span>
+        <div className="flex min-w-0 flex-col">
+          <span className="truncate text-sm font-bold">{merchant.data.name}</span>
+          <span className="flex items-center gap-1 text-[11px] text-subtle">
+            {merchant.data.verified ? <CheckIcon size={12} className="text-brand" /> : null}
+            {merchant.data.verified ? 'CAC verified' : 'Verification pending'}
+          </span>
+        </div>
+      </div>
+    ) : null
+
   return (
     <div className="flex min-h-dvh flex-col">
       <TestModeBanner />
@@ -55,13 +72,29 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
                 <ThemeToggle />
               </div>
             </div>
-            <nav className="flex items-center gap-1 lg:flex-col lg:items-stretch" aria-label={app === 'store' ? 'Store' : 'Admin'}>
+            {/* Below lg all of this lives in the menu. */}
+            <NavMenu
+              title={app === 'store' ? 'Store menu' : 'Admin menu'}
+              className="lg:hidden"
+              links={nav}
+              top={shopCard}
+              account={access.email}
+              signingOut={signOut.isPending}
+              onSignOut={(done) =>
+                signOut.mutate(undefined, {
+                  onSuccess: () => {
+                    done()
+                    navigate('/login')
+                  },
+                })
+              }
+            />
+            <nav className="hidden flex-col items-stretch gap-1 lg:flex" aria-label={app === 'store' ? 'Store' : 'Admin'}>
               {nav.map((n) => (
                 <NavLink
                   key={n.to}
                   to={n.to}
                   end
-                  aria-label={n.label}
                   className={({ isActive }) =>
                     cx(
                       'flex min-h-11 items-center gap-2.5 rounded-xl px-3 text-sm font-bold no-underline transition',
@@ -70,36 +103,13 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
                   }
                 >
                   <n.icon size={18} />
-                  <span className="hidden sm:inline">{n.label}</span>
+                  {n.label}
                   {n.count ? <span className="ml-auto rounded-full bg-hot px-1.5 py-0.5 text-[10px] font-extrabold text-white">{n.count}</span> : null}
                 </NavLink>
               ))}
-              <div className="lg:hidden">
-                <ThemeToggle />
-              </div>
-              <button
-                onClick={() => signOut.mutate(undefined, { onSuccess: () => navigate('/login') })}
-                aria-label="Sign out"
-                className="flex min-h-11 items-center justify-center rounded-xl px-3 text-muted hover:bg-sunken hover:text-ink lg:hidden"
-              >
-                <LogOutIcon size={18} />
-              </button>
             </nav>
             <div className="mt-auto hidden flex-col gap-3 lg:flex">
-              {app === 'store' && merchant.data ? (
-                <div className="flex items-center gap-3 rounded-2xl bg-sunken p-3">
-                  <span className="flex size-10 items-center justify-center rounded-xl bg-brand font-display text-lg font-extrabold text-on-brand">
-                    {merchant.data.name.charAt(0)}
-                  </span>
-                  <div className="flex min-w-0 flex-col">
-                    <span className="truncate text-sm font-bold">{merchant.data.name}</span>
-                    <span className="flex items-center gap-1 text-[11px] text-subtle">
-                      {merchant.data.verified ? <CheckIcon size={12} className="text-brand" /> : null}
-                      {merchant.data.verified ? 'CAC verified' : 'Verification pending'}
-                    </span>
-                  </div>
-                </div>
-              ) : null}
+              {shopCard}
               <button
                 onClick={() => signOut.mutate(undefined, { onSuccess: () => navigate('/login') })}
                 className="flex min-h-11 items-center justify-between gap-2 rounded-xl px-3 text-left text-sm font-bold text-muted hover:bg-sunken hover:text-ink"

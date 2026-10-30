@@ -297,7 +297,7 @@ function MessageBox({ send, placeholder = 'Write a message…', autoFocus }: { s
   }
 
   return (
-    <form onSubmit={submit} className="sticky bottom-[calc(max(env(safe-area-inset-bottom),12px)+84px)] flex items-end gap-2 rounded-3xl border border-line bg-raised/95 p-2 shadow-lift backdrop-blur-xl md:bottom-4">
+    <form onSubmit={submit} className="sticky bottom-[calc(max(env(safe-area-inset-bottom),12px)+84px)] flex items-end gap-2 rounded-3xl border border-line bg-raised/95 p-2 shadow-lift backdrop-blur-xl lg:bottom-4">
       <label htmlFor="message" className="sr-only">
         Message
       </label>
