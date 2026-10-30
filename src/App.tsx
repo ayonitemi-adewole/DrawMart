@@ -15,8 +15,11 @@ import { BuyerLayout } from '@/layouts/BuyerLayout'
 import { AdminBoostsPage } from '@/pages/admin/AdminBoostsPage'
 import { AdminDrawsPage } from '@/pages/admin/AdminDrawsPage'
 import { AdminPage } from '@/pages/admin/AdminPage'
+import { AdminPrizesPage } from '@/pages/admin/AdminPrizesPage'
 import { AdminSellersPage } from '@/pages/admin/AdminSellersPage'
 import { BrowsePage } from '@/pages/BrowsePage'
+import { CartPage } from '@/pages/CartPage'
+import { CheckoutPage } from '@/pages/CheckoutPage'
 import { CreditsPage } from '@/pages/CreditsPage'
 import { DrawsPage } from '@/pages/DrawsPage'
 import { HomePage } from '@/pages/HomePage'
@@ -132,6 +135,8 @@ const router = createBrowserRouter([
       { path: 'draws/:id', element: <ResultPage /> },
       { path: 'wallet', element: <RequireSignIn role="buyer"><WalletPage /></RequireSignIn> },
       { path: 'sell', element: <RequireSignIn role="buyer"><SellPage /></RequireSignIn> },
+      { path: 'cart', element: <RequireSignIn role="buyer"><CartPage /></RequireSignIn> },
+      { path: 'checkout', element: <RequireSignIn role="buyer"><CheckoutPage /></RequireSignIn> },
       { path: 'notifications', element: <RequireSignIn role="buyer"><NotificationsPage /></RequireSignIn> },
       { path: 'messages', element: <RequireSignIn role="buyer"><MessagesPage basePath="/messages" /></RequireSignIn> },
       { path: 'messages/new/:listingId', element: <RequireSignIn role="buyer"><NewConversationPage basePath="/messages" /></RequireSignIn> },
@@ -159,6 +164,7 @@ const router = createBrowserRouter([
       { index: true, element: <AdminPage /> },
       { path: 'draws', element: <AdminDrawsPage /> },
       { path: 'boosts', element: <AdminBoostsPage /> },
+      { path: 'prizes', element: <AdminPrizesPage /> },
       { path: 'sellers', element: <AdminSellersPage /> },
       { path: '*', element: <NotFound /> },
     ],

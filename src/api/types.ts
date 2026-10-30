@@ -6,6 +6,7 @@
  * implements the same interface and nothing in src/pages has to change.
  */
 import type { HandoverDetails } from '@/domain/listing'
+import type { CheckoutDetails } from '@/domain/cart'
 import type { OrderError } from '@/domain/orders'
 import type { PurchaseError } from '@/domain/rules'
 import type { BoostPackage, BoostWindow } from '@/domain/boosts'
@@ -13,7 +14,6 @@ import type { DayMetrics, ListingMetricsInput, MetricRange } from '@/domain/metr
 import type { SellerApplicationInput, SellerApplicationStatus } from '@/domain/sellers'
 import type {
   Category,
-  Delivery,
   DrawResult,
   FeeMode,
   Handover,
@@ -24,6 +24,7 @@ import type {
   ListingStatus,
   Merchant,
   NotificationKind,
+  PickupPoint,
   Order,
   UnsoldPolicy,
   User,
@@ -252,6 +253,17 @@ export interface NotificationView {
   read: boolean
 }
 
+/** One item in a buyer's cart. */
+export interface CartLine {
+  listing: ListingView
+  /** What it costs today (0 for a won item); null if it's no longer available. */
+  amountKobo: Kobo | null
+}
+
+export interface CheckoutInput extends CheckoutDetails {
+  listingIds: string[]
+}
+
 export interface ListingFilter {
   category?: Category
   status?: ListingStatus[]
@@ -335,8 +347,16 @@ export interface DrawMartApi {
   buyTickets(listingId: string, quantity: number): Promise<PurchaseReceipt>
   listMyListings(): Promise<ListingView[]>
   listResults(): Promise<DrawResultView[]>
-  /** Buys a 'for_sale' item from the wallet (store credit first). */
-  buyNow(listingId: string, delivery: Delivery): Promise<OrderView>
+  listCart(): Promise<CartLine[]>
+  /** Regular products and draws the buyer has won. Never cars. */
+  addToCart(listingId: string): Promise<void>
+  removeFromCart(listingId: string): Promise<void>
+  listPickupPoints(): Promise<PickupPoint[]>
+  /**
+   * Orders items on sale and won items together, paid from the wallet (store
+   * credit first), all or none, and takes them out of the cart. A car goes on its own.
+   */
+  checkout(input: CheckoutInput): Promise<OrderView[]>
   listMyOrders(): Promise<OrderView[]>
   /** The buyer confirms the item arrived. */
   confirmOrder(orderId: string): Promise<void>
@@ -408,6 +428,8 @@ export interface DrawMartApi {
   listPendingListings(): Promise<ListingView[]>
   approveListing(id: string): Promise<void>
   rejectListing(id: string): Promise<void>
+  /** Won items DrawMart sends from escrow, newest first. */
+  listPrizeOrders(): Promise<OrderView[]>
   /** Applications waiting for an ID check, oldest first. */
   listSellerApplications(): Promise<SellerApplicationView[]>
   /** Creates the seller's shop. */

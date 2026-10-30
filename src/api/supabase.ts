@@ -9,9 +9,10 @@ import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
 import { fillDays, lagosDay, type DayMetrics } from '@/domain/metrics'
+import { lineAmountKobo } from '@/domain/cart'
 import { ORDER_ERROR_TEXT } from '@/domain/orders'
 import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication } from '@/domain/sellers'
-import type { Category, FeeMode, Handover, LedgerEntry, LedgerKind, ListingKind, ListingStatus, Merchant, OrderStatus, UnsoldPolicy, User } from '@/domain/types'
+import type { Category, Fulfilment, PickupPoint, FeeMode, Handover, LedgerEntry, LedgerKind, ListingKind, ListingStatus, Merchant, OrderStatus, UnsoldPolicy, User } from '@/domain/types'
 import { DEMO_ACCOUNTS } from './demoAccounts'
 import {
   type AccountRole,
@@ -137,6 +138,16 @@ interface SellerApplicationRow {
   reviewed_at: string | null
 }
 
+interface PickupPointRow {
+  id: string
+  name: string
+  area: string
+  address: string
+  hours: string
+  lat: number
+  lng: number
+}
+
 interface OrderRow {
   id: string
   listing_id: string
@@ -144,7 +155,7 @@ interface OrderRow {
   merchant_id: string
   price_kobo: number
   fee_kobo: number
-  delivery_address: string
+  delivery_address: string | null
   delivery_phone: string
   delivery_lat: number | null
   delivery_lng: number | null
@@ -152,6 +163,10 @@ interface OrderRow {
   created_at: string
   dispatched_at: string | null
   delivered_at: string | null
+  fulfilment: Fulfilment
+  is_prize: boolean
+  handled_by: 'store' | 'drawmart'
+  pickup_point: PickupPointRow | null
   listing: { title: string; images: string[]; category: Category }
   merchant: { name: string }
 }
@@ -170,7 +185,7 @@ interface LedgerRow {
 // draw_results.winner_user_id isn't readable by clients, so name the columns.
 const RESULT_COLUMNS = 'listing_id, commitment, seed, closing_ref, winning_number, drawn_at'
 const LISTING_SELECT = `*, merchant:merchants(*), result:draw_results(${RESULT_COLUMNS}), handover:listing_handovers(*)`
-const ORDER_SELECT = '*, listing:listings(title, images, category), merchant:merchants(name)'
+const ORDER_SELECT = '*, listing:listings(title, images, category), merchant:merchants(name), pickup_point:pickup_points(*)'
 const PHOTO_BUCKET = 'listing-photos'
 /** Private: ID photos for seller checks. */
 const ID_BUCKET = 'seller-ids'
@@ -302,6 +317,8 @@ function sortForBrowsing(a: ListingView, b: ListingView) {
   return soldShare(b) - soldShare(a)
 }
 
+const toPickupPoint = (p: PickupPointRow): PickupPoint => ({ id: p.id, name: p.name, area: p.area, address: p.address, hours: p.hours, location: { lat: p.lat, lng: p.lng } })
+
 function toOrderView(o: OrderRow): OrderView {
   return {
     id: o.id,
@@ -310,7 +327,11 @@ function toOrderView(o: OrderRow): OrderView {
     merchantId: o.merchant_id,
     priceKobo: num(o.price_kobo),
     feeKobo: num(o.fee_kobo),
-    delivery: { address: o.delivery_address, location: toPoint(o.delivery_lat, o.delivery_lng), contactPhone: o.delivery_phone },
+    delivery: { address: o.delivery_address ?? '', location: toPoint(o.delivery_lat, o.delivery_lng), contactPhone: o.delivery_phone },
+    fulfilment: o.fulfilment,
+    pickupPoint: o.pickup_point ? toPickupPoint(o.pickup_point) : null,
+    isPrize: o.is_prize,
+    handledBy: o.handled_by,
     status: o.status,
     createdAt: o.created_at,
     dispatchedAt: o.dispatched_at,
@@ -552,9 +573,37 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       return rows.map((r) => toResultView(r, r.listing, me, mine))
     },
 
-    buyNow: async (listingId, delivery) => {
-      const id = await rpc<string>('buy_now', { p_listing_id: listingId, p_address: delivery.address, p_phone: delivery.contactPhone, p_lat: delivery.location?.lat ?? null, p_lng: delivery.location?.lng ?? null })
-      return toOrderView(unwrap(await client.from('orders').select(ORDER_SELECT).eq('id', id).single<OrderRow>()))
+    listCart: async () => {
+      const me = await requireId()
+      const rows = unwrap(await client.from('cart_items').select('listing_id').eq('user_id', me).order('added_at').returns<{ listing_id: string }[]>())
+      const ids = rows.map((r) => r.listing_id)
+      if (!ids.length) return []
+      const listings = await views(unwrap(await client.from('listings').select(LISTING_SELECT).in('id', ids).returns<ListingRow[]>()))
+      return ids.flatMap((id) => {
+        const listing = listings.find((l) => l.id === id)
+        return listing ? [{ listing, amountKobo: lineAmountKobo(listing) }] : []
+      })
+    },
+
+    addToCart: (listingId) => rpc('add_to_cart', { p_listing_id: listingId }),
+    removeFromCart: (listingId) => rpc('remove_from_cart', { p_listing_id: listingId }),
+
+    listPickupPoints: async () => unwrap(await client.from('pickup_points').select('*').order('name').returns<PickupPointRow[]>()).map(toPickupPoint),
+
+    checkout: async (input) => {
+      const pickup = input.fulfilment === 'pickup'
+      const ids = await rpc<string[]>('checkout', {
+        p: {
+          listingIds: input.listingIds,
+          fulfilment: input.fulfilment,
+          address: pickup ? null : input.delivery.address,
+          phone: input.delivery.contactPhone,
+          lat: pickup ? null : input.delivery.location?.lat,
+          lng: pickup ? null : input.delivery.location?.lng,
+          pickupPointId: input.pickupPointId,
+        },
+      })
+      return unwrap(await client.from('orders').select(ORDER_SELECT).in('id', ids).returns<OrderRow[]>()).map(toOrderView)
     },
 
     listMyOrders: async () => {
@@ -792,6 +841,9 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     },
 
     approveListing: (id) => rpc('approve_listing', { p_listing_id: id }),
+
+    listPrizeOrders: async () =>
+      unwrap(await client.from('orders').select(ORDER_SELECT).eq('handled_by', 'drawmart').order('created_at', { ascending: false }).returns<OrderRow[]>()).map(toOrderView),
 
     listSellerApplications: async () => {
       const rows = unwrap(await client.from('seller_applications').select('*').eq('status', 'pending').order('updated_at').returns<SellerApplicationRow[]>())

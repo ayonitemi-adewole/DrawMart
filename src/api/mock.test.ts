@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { verifyDraw } from '@/domain/draw'
 import { addDays, cautionFeeFor, localDate } from '@/domain/listing'
 import { nairaToKobo as k } from '@/domain/money'
+import type { Delivery } from '@/domain/types'
 import { createMockApi, memoryStore } from './mock'
 import { ApiError, type NewListingInput } from './types'
 
 const make = (now = () => Date.now()) => createMockApi({ store: memoryStore(), latencyMs: 0, now })
+
+const buyNow = async (api: ReturnType<typeof make>, listingId: string, delivery: Delivery) =>
+  (await api.checkout({ listingIds: [listingId], fulfilment: 'delivery', delivery, pickupPointId: null }))[0]
 
 const newListing = (patch: Partial<NewListingInput> = {}): NewListingInput => ({
   title: 'Blender', description: '', category: 'Home', priceKobo: k(60_000), ticketPriceKobo: k(500),
@@ -18,7 +22,7 @@ describe('mock api', () => {
   it('seeds live listings without leaking draw seeds', async () => {
     const api = make()
     const listings = await api.listListings()
-    expect(listings.length).toBe(24)
+    expect(listings.length).toBe(25)
     for (const l of listings) {
       expect(l.status).toBe('live')
       expect(l.commitment).toMatch(/^[0-9a-f]{64}$/)
@@ -200,14 +204,14 @@ describe('mock api', () => {
     expect((await api.getListing(p.id)).status).toBe('for_sale')
 
     const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
-    await expect(api.buyNow(p.id, { address: 'Ikoyi', location: null, contactPhone: '1' })).rejects.toThrow(/full delivery address/)
+    await expect(buyNow(api, p.id, { address: 'Ikoyi', location: null, contactPhone: '1' })).rejects.toThrow(/full delivery address/)
     const before = (await api.getWallet()).balance.cashKobo
-    const order = await api.buyNow(p.id, delivery)
+    const order = await buyNow(api, p.id, delivery)
     expect(order).toMatchObject({ status: 'paid', priceKobo: k(20_000), feeKobo: k(1_500), // 7.5% under ₦50,000
       listingTitle: 'Office chair', merchantName: 'Ikeja Partner Store' })
     expect((await api.getWallet()).balance.cashKobo).toBe(before - k(20_000))
     expect((await api.getListing(p.id)).status).toBe('sold')
-    await expect(api.buyNow(p.id, delivery)).rejects.toMatchObject({ code: 'not_for_sale' })
+    await expect(buyNow(api, p.id, delivery)).rejects.toMatchObject({ code: 'not_for_sale' })
 
     expect((await api.listMerchantOrders()).map((o) => o.id)).toEqual([order.id])
     await api.dispatchOrder(order.id)
@@ -219,7 +223,7 @@ describe('mock api', () => {
   it('needs enough in the wallet to buy now', async () => {
     const api = make()
     const [mac] = (await api.listListings({ status: ['for_sale'] })).filter((l) => l.kind === 'product' && l.title.startsWith('MacBook'))
-    await expect(api.buyNow(mac.id, { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' })).rejects.toMatchObject({ code: 'insufficient_funds' })
+    await expect(buyNow(api, mac.id, { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' })).rejects.toMatchObject({ code: 'insufficient_funds' })
   })
 
   it('verifies individual sellers, who sell products but never raffles', async () => {
@@ -247,7 +251,7 @@ describe('mock api', () => {
     const p = await api.createProduct({ title: 'PS5', description: '', category: 'Electronics', priceKobo: k(15_000) })
     expect((await api.listMerchantListings()).map((l) => l.id)).toEqual([p.id])
     await api.approveListing(p.id)
-    await expect(api.buyNow(p.id, { address: '12 Herbert Macaulay Way, Yaba', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' })).rejects.toThrow(/your own item/)
+    await expect(buyNow(api, p.id, { address: '12 Herbert Macaulay Way, Yaba', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' })).rejects.toThrow(/your own item/)
   })
 
   it('lets buyers and sellers chat about products, with unread counts and opt-in calls', async () => {
@@ -475,5 +479,60 @@ describe('mock api', () => {
     expect(notes.map((n) => n.kind).sort()).toEqual([drawn.result!.iWon ? 'draw_won' : 'draw_lost', 'draw_sold_out'].sort())
     await api.markNotificationsRead()
     expect((await api.listNotifications()).every((n) => n.read)).toBe(true)
+  })
+
+  it('keeps a cart of items on sale and won draws, and checks them out together', async () => {
+    const api = make()
+    await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const onSale = await api.listListings({ status: ['for_sale'] })
+    const cheap = onSale.filter((l) => l.kind === 'product' && l.priceKobo <= k(100_000) && l.category !== 'Cars')
+    const car = onSale.find((l) => l.category === 'Cars')!
+    const [draw] = (await api.listListings()).filter((l) => l.title.includes('test draw'))
+
+    await expect(api.addToCart(car.id)).rejects.toThrow(/Cars don’t go in the cart/)
+    await expect(api.addToCart(draw.id)).rejects.toThrow(/draws you’ve won/)
+
+    await api.topUp(k(200_000))
+    // Win the tiny draw: both tickets.
+    await api.buyTickets(draw.id, 2)
+    await api.demoRunDraw(draw.id)
+    await api.addToCart(draw.id)
+    await api.addToCart(cheap[0].id)
+    await api.addToCart(cheap[0].id)
+    const lines = await api.listCart()
+    expect(lines.map((l) => l.amountKobo)).toEqual([0, cheap[0].priceKobo])
+
+    const before = (await api.getWallet()).balance.cashKobo
+    const orders = await api.checkout({ listingIds: lines.map((l) => l.listing.id), fulfilment: 'delivery', delivery, pickupPointId: null })
+    expect(orders.map((o) => [o.isPrize, o.handledBy])).toEqual([[true, 'drawmart'], [false, 'store']])
+    expect((await api.getWallet()).balance.cashKobo).toBe(before - cheap[0].priceKobo)
+    expect(await api.listCart()).toEqual([])
+    expect((await api.getListing(draw.id)).status).toBe('drawn')
+    await expect(api.addToCart(draw.id)).rejects.toThrow(/already arranged/)
+
+    // DrawMart sends the won item, not the store.
+    await api.auth.signInWithPassword('yaba@drawmart.test', 'drawmart-demo')
+    expect((await api.listMerchantOrders()).map((o) => o.listingId)).not.toContain(draw.id)
+    await expect(api.dispatchOrder(orders[0].id)).rejects.toThrow(ApiError)
+    await api.auth.signInWithPassword('admin@drawmart.test', 'drawmart-demo')
+    expect((await api.listPrizeOrders()).map((o) => o.id)).toEqual([orders[0].id])
+    await api.dispatchOrder(orders[0].id)
+  })
+
+  it('collects from a pickup location, but never a car', async () => {
+    const api = make()
+    await api.auth.signInWithPassword('emeka@drawmart.test', 'drawmart-demo')
+    await api.topUp(k(500_000))
+    await api.topUp(k(500_000))
+    const onSale = await api.listListings({ status: ['for_sale'] })
+    const item = onSale.find((l) => l.kind === 'product' && l.priceKobo <= k(100_000) && l.category !== 'Cars')!
+    const noAddress = { address: '', location: null, contactPhone: '0803 123 4567' }
+    expect((await api.listPickupPoints()).length).toBe(5)
+    await expect(api.checkout({ listingIds: [item.id], fulfilment: 'pickup', delivery: noAddress, pickupPointId: null })).rejects.toThrow(/Choose a pickup location/)
+    const [order] = await api.checkout({ listingIds: [item.id], fulfilment: 'pickup', delivery: noAddress, pickupPointId: 'yaba' })
+    expect(order).toMatchObject({ fulfilment: 'pickup', pickupPoint: { name: 'DrawMart Yaba' } })
+    const car = onSale.find((l) => l.category === 'Cars')!
+    await expect(api.checkout({ listingIds: [car.id], fulfilment: 'pickup', delivery: noAddress, pickupPointId: 'yaba' })).rejects.toThrow(/stay with the dealer/)
   })
 })

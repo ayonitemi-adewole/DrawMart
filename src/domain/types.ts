@@ -169,7 +169,19 @@ export interface Delivery {
   contactPhone: string
 }
 
-/** One fixed-price item bought from the wallet. */
+export type Fulfilment = 'delivery' | 'pickup'
+
+/** A DrawMart location where buyers can collect their items. */
+export interface PickupPoint {
+  id: string
+  name: string
+  area: string
+  address: string
+  hours: string
+  location: GeoPoint
+}
+
+/** One item bought from the wallet, or a won draw item on its way to the winner. */
 export interface Order {
   id: string
   listingId: string
@@ -178,7 +190,14 @@ export interface Order {
   priceKobo: Kobo
   /** Platform fee, taken from the store's payout. */
   feeKobo: Kobo
+  /** Pickup orders have an empty address and no pin, only the phone. */
   delivery: Delivery
+  fulfilment: Fulfilment
+  pickupPoint: PickupPoint | null
+  /** Won in a draw, so free: the tickets paid for it. */
+  isPrize: boolean
+  /** Who sends it. Won items sit in DrawMart's escrow, except cars, which stay with the dealer. */
+  handledBy: 'store' | 'drawmart'
   status: OrderStatus
   createdAt: ISODate
   dispatchedAt: ISODate | null

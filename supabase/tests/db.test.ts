@@ -1131,6 +1131,135 @@ describe('saved pickups', () => {
   })
 })
 
+describe('cart and checkout', () => {
+  let buyer: string
+  let store: string
+  let staff: string
+  const add = (who: string, id: string) => asUser(who, `select public.add_to_cart($1)`, [id])
+  const details = (listingIds: string[], patch: Record<string, unknown> = {}) => ({
+    listingIds, fulfilment: 'delivery', address: '15 Awolowo Road, Ikoyi', phone: '0803 123 4567', lat: 6.45, lng: 3.43, ...patch,
+  })
+  const checkout = async (who: string, p: unknown) => (await asUser<{ ids: string[] }>(who, `select public.checkout($1) ids`, [p]))[0].ids
+  const newProduct = async (title: string, priceKobo = 500_000, category = 'Home') => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_product($1) id`, [{ title, category, priceKobo }])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    return id
+  }
+  /** A draw `who` has won: they hold every real ticket. */
+  const wonDraw = async (who: string, category = 'Home') => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ title: `Prize ${category}`, category, priceKobo: 100_000, ticketPriceKobo: 100_000 })])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    await asUser(who, `select public.buy_tickets($1, 1)`, [id])
+    await asUser(staff, `select public.demo_run_draw($1)`, [id])
+    return id
+  }
+
+  beforeAll(async () => {
+    buyer = await newUser('carter@example.com')
+    store = await newUser('cartstore@example.com', { merchantId: IKEJA })
+    staff = await newUser('staff10@example.com', { role: 'admin' })
+    await asUser(staff, `select public.set_boost_settings(1000, false, 12)`)
+  })
+
+  it('lists pickup locations for everyone', async () => {
+    expect((await asUser(null, `select id from public.pickup_points`)).length).toBe(5)
+  })
+
+  it('only takes items on sale and draws you have won, never cars', async () => {
+    const product = await newProduct('Cart lamp')
+    await add(buyer, product)
+    await add(buyer, product) // twice is fine
+    expect((await asUser(buyer, `select listing_id from public.cart_items`)).length).toBe(1)
+    const car = await newProduct('Cart car', 900_000, 'Cars')
+    const e = await expectFail(add(buyer, car), 'invalid_input')
+    expect(e.detail).toContain('Cars don’t go in the cart')
+    const [live] = await admin<{ id: string }>(`select id from public.listings where status = 'live' and category <> 'Cars' limit 1`)
+    await expectFail(add(buyer, live.id), 'invalid_input')
+    await expectFail(add(store, product), 'forbidden')
+    expect(await asUser(store, `select * from public.cart_items`)).toEqual([])
+    await asUser(buyer, `select public.remove_from_cart($1)`, [product])
+    expect(await asUser(buyer, `select * from public.cart_items`)).toEqual([])
+  })
+
+  it('buys several items at once, credit first, all or nothing, and empties the cart', async () => {
+    const [a, b] = [await newProduct('Cart A', 1_000_000), await newProduct('Cart B', 500_000)]
+    await add(buyer, a)
+    await add(buyer, b)
+    await admin(`insert into public.ledger_entries (user_id, kind, credit_kobo, memo) values ($1, 'store_credit', 200000, 'credit')`, [buyer])
+    const before = await balance(buyer)
+
+    await expectFail(checkout(buyer, details([a, b], { address: 'Ikoyi' })), 'invalid_input')
+    await expectFail(checkout(buyer, details([a, b], { lat: 9.06, lng: 7.49 })), 'invalid_input')
+    const sold = await newProduct('Cart sold')
+    const rival = await newUser('rivalbuyer@example.com')
+    await checkout(rival, details([sold]))
+    await expectFail(checkout(buyer, details([a, sold])), 'not_for_sale') // nothing bought
+    expect(await balance(buyer)).toEqual(before)
+    expect((await admin<{ status: string }>(`select status from public.listings where id = $1`, [a]))[0].status).toBe('for_sale')
+
+    const ids = await checkout(buyer, details([a, b]))
+    expect(ids).toHaveLength(2)
+    expect(await balance(buyer)).toEqual({ cash: String(Number(before.cash) - 1_300_000), credit: '0' })
+    expect(await asUser(buyer, `select * from public.cart_items`)).toEqual([])
+    const rows = await admin<{ checkout_id: string; fulfilment: string; is_prize: boolean; handled_by: string }>(`select * from public.orders where id = any($1::uuid[])`, [ids])
+    expect(new Set(rows.map((r) => r.checkout_id)).size).toBe(1)
+    expect(rows.every((r) => r.fulfilment === 'delivery' && !r.is_prize && r.handled_by === 'store')).toBe(true)
+  })
+
+  it('collects from a pickup location without an address', async () => {
+    const id = await newProduct('Cart pickup')
+    await expectFail(checkout(buyer, details([id], { fulfilment: 'pickup', pickupPointId: 'nowhere' })), 'invalid_input')
+    const [order] = await checkout(buyer, details([id], { fulfilment: 'pickup', pickupPointId: 'yaba', address: null, lat: null, lng: null }))
+    const [row] = await admin<{ fulfilment: string; pickup_point_id: string; delivery_address: string | null; delivery_lat: number | null }>(`select * from public.orders where id = $1`, [order])
+    expect(row).toMatchObject({ fulfilment: 'pickup', pickup_point_id: 'yaba', delivery_address: null, delivery_lat: null })
+  })
+
+  it('sends a won item free with other items; DrawMart handles it and the store sees nothing', async () => {
+    const winner = await newUser('prizewinner@example.com')
+    const prize = await wonDraw(winner)
+    const loser = await newUser('notawinner@example.com')
+    await expectFail(add(loser, prize), 'invalid_input')
+    await expectFail(checkout(loser, details([prize])), 'not_for_sale')
+
+    const other = await newProduct('With my prize', 300_000)
+    await add(winner, prize)
+    await add(winner, other)
+    const before = await balance(winner)
+    const ids = await checkout(winner, details([prize, other]))
+    expect(Number((await balance(winner)).cash)).toBe(Number(before.cash) - 300_000)
+    const [row] = await admin<{ id: string; price_kobo: string; is_prize: boolean; handled_by: string }>(`select * from public.orders where listing_id = $1`, [prize])
+    expect(row).toMatchObject({ is_prize: true, handled_by: 'drawmart' })
+    expect(Number(row.price_kobo)).toBe(0)
+    expect(ids).toContain(row.id)
+    expect((await admin<{ status: string }>(`select status from public.listings where id = $1`, [prize]))[0].status).toBe('drawn')
+
+    expect(await asUser(store, `select * from public.orders where id = $1`, [row.id])).toEqual([])
+    await expectFail(asUser(store, `select public.dispatch_order($1)`, [row.id]), 'invalid_input')
+    await asUser(staff, `select public.dispatch_order($1)`, [row.id])
+    await asUser(winner, `select public.confirm_order($1)`, [row.id])
+    await expectFail(add(winner, prize), 'invalid_input') // already arranged
+    await expectFail(checkout(winner, details([prize])), 'invalid_input')
+    // A free prize isn't a sale in the store's insights.
+    const [{ m }] = await asUser<{ m: { listings: { listingId: string; units: number }[] } }>(store, `select public.merchant_metrics(30) m`)
+    expect(m.listings.find((l) => l.listingId === prize)?.units).toBe(1) // just the ticket
+  })
+
+  it('arranges cars alone, by delivery, and a won car with the dealer', async () => {
+    const winner = await newUser('carwinner@example.com')
+    await asUser(winner, `select public.top_up(50000000)`)
+    const car = await newProduct('Car for sale', 900_000, 'Cars')
+    const lamp = await newProduct('Not with a car')
+    await expectFail(checkout(winner, details([car, lamp])), 'invalid_input')
+    await expectFail(checkout(winner, details([car], { fulfilment: 'pickup', pickupPointId: 'ikeja' })), 'invalid_input')
+    await checkout(winner, details([car]))
+
+    const prize = await wonDraw(winner, 'Cars')
+    const [id] = await checkout(winner, details([prize]))
+    const [row] = await asUser<{ handled_by: string }>(store, `select handled_by from public.orders where id = $1`, [id])
+    expect(row.handled_by).toBe('store') // the dealer has it, and sees the delivery details
+  })
+})
+
 describe('reset_test_data', () => {
   it('puts the sample data back and every buyer back to the starting balance, for admins in test mode only', async () => {
     const staff = await newUser('resetter@example.com', { role: 'admin' })

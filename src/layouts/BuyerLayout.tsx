@@ -8,6 +8,7 @@ import {
 } from "react-router";
 import {
   useAccess,
+  useCart,
   useMyListings,
   useUnreadMessages,
   useUnreadNotifications,
@@ -17,6 +18,7 @@ import { api } from "@/api";
 import { IntroSheet } from "@/components/HowItWorks";
 import {
   BellIcon,
+  CartIcon,
   ChatIcon,
   HomeIcon,
   LogoMark,
@@ -87,6 +89,7 @@ export function BuyerLayout() {
   const active = useActiveTicketCount();
   const unread = useUnreadMessages();
   const unreadNotifications = useUnreadNotifications();
+  const cartCount = useCart().data?.length ?? 0;
   const cash = wallet.data?.balance.cashKobo ?? null;
   const credit = wallet.data?.balance.creditKobo ?? 0;
 
@@ -131,6 +134,20 @@ export function BuyerLayout() {
           <div className="flex items-center gap-1">
             {access.signedIn ? (
               <Link
+                to="/cart"
+                aria-label={cartCount ? `Cart, ${cartCount} ${cartCount === 1 ? "item" : "items"}` : "Cart"}
+                className="relative flex size-11 items-center justify-center rounded-xl text-muted no-underline hover:bg-sunken hover:text-ink"
+              >
+                <CartIcon size={20} />
+                {cartCount ? (
+                  <span className="absolute top-1.5 right-1.5 flex size-4.5 items-center justify-center rounded-full bg-brand text-[9px] font-extrabold text-on-brand">
+                    {cartCount > 9 ? "9+" : cartCount}
+                  </span>
+                ) : null}
+              </Link>
+            ) : null}
+            {access.signedIn ? (
+              <Link
                 to="/notifications"
                 aria-label={unreadNotifications ? `Notifications, ${unreadNotifications} unread` : "Notifications"}
                 className="relative flex size-11 items-center justify-center rounded-xl text-muted no-underline hover:bg-sunken hover:text-ink"
@@ -157,7 +174,10 @@ export function BuyerLayout() {
                 ) : null}
               </Link>
             ) : null}
-            <ThemeToggle />
+            {/* Phones are short of room here; Wallet has the same setting. */}
+            <span className="hidden sm:block">
+              <ThemeToggle />
+            </span>
             {access.ready && !access.signedIn ? (
               <Link
                 to={`/login?next=${encodeURIComponent(pathname + search)}`}

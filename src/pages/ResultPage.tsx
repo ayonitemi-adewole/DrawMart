@@ -1,3 +1,4 @@
+import { PrizeActions } from "@/components/PrizeActions";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import { useListing } from "@/api/hooks";
@@ -192,11 +193,12 @@ function Result({
             </h1>
             <p className="max-w-md text-sm leading-relaxed opacity-90">
               {r.iWon
-                ? "We’ll call you within 48 hours to arrange delivery or collection in Lagos."
+                ? "Add it to your cart to come with anything else you buy, or arrange it now. You can have it delivered or collect it."
                 : played
                   ? `Not this time. ${formatNaira(r.myCreditKobo)} store credit has been added to your wallet.`
                   : "You didn’t have tickets in this draw."}
             </p>
+            {r.iWon && !rolling ? <PrizeActions listingId={listingId} /> : null}
           </div>
         ) : (
           <p className="text-sm opacity-80">

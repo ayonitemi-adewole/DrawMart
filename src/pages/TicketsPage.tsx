@@ -33,7 +33,7 @@ function status(l: ListingView): { tone: Tone; label: string; detail: string } {
     return {
       tone: "ticket",
       label: "You won",
-      detail: `Ticket ${ticketNo(l.result.winningNumber)} · we’ll arrange delivery`,
+      detail: `Ticket ${ticketNo(l.result.winningNumber)} · add it to your cart to arrange delivery`,
     };
   if (l.status === "drawn" && l.result)
     return {

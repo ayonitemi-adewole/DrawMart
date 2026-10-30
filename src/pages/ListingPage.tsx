@@ -10,6 +10,7 @@ import {
 } from "@/api/hooks";
 import type { ListingView, PurchaseReceipt } from "@/api/types";
 import { BuyNowPanel } from "@/components/BuyNowPanel";
+import { PrizeActions } from "@/components/PrizeActions";
 import { RelatedListings } from "@/components/RelatedListings";
 import { CopyButton } from "@/components/CopyButton";
 import { Countdown } from "@/components/Countdown";
@@ -681,9 +682,10 @@ function BuyPanel({
             Winning ticket {ticketNo(r.winningNumber)}
           </p>
         </div>
+        <PrizeActions listingId={l.id} />
         <Link
           to={`/draws/${l.id}`}
-          className={buttonClass("ticket", "lg", "w-full")}
+          className={buttonClass(r.iWon ? "outline" : "ticket", "lg", "w-full")}
         >
           See result and verify
         </Link>

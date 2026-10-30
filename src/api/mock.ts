@@ -37,12 +37,13 @@ import {
   splitPayment,
   topUpError,
 } from '@/domain/rules'
-import { DELIVERY_ERROR_TEXT, ORDER_ERROR_TEXT, PRODUCT_ERROR_TEXT, checkOrder, saleEconomics, salePriceKobo, validateDelivery, validateProduct } from '@/domain/orders'
+import { CART_ERROR_TEXT, CHECKOUT_ERROR_TEXT, cartError, checkoutTotalKobo, isCar, isWonPrize, lineAmountKobo, validateCheckout } from '@/domain/cart'
+import { ORDER_ERROR_TEXT, PRODUCT_ERROR_TEXT, saleEconomics, validateProduct } from '@/domain/orders'
 import { MAX_MESSAGES_PER_MINUTE, messageError } from '@/domain/messages'
 import { fillDays, lagosDay } from '@/domain/metrics'
 import { BOOST_DEFAULTS, BOOST_ERROR_TEXT, DEFAULT_BOOST_PACKAGES, boostEndsAt, boostWindow, boostsUnlocked, canBoost } from '@/domain/boosts'
 import { SELLER_APPLICATION_ERROR_TEXT, normalizeNin, validateSellerApplication } from '@/domain/sellers'
-import type { Category, DrawResult, NotificationKind, LedgerEntry, Listing, ListingStatus, Merchant, Order, Ticket, UnsoldPolicy, User } from '@/domain/types'
+import type { Category, DrawResult, NotificationKind, PickupPoint, LedgerEntry, Listing, ListingStatus, Merchant, Order, Ticket, UnsoldPolicy, User } from '@/domain/types'
 import {
   ApiError,
   type DrawMartApi,
@@ -70,7 +71,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v14' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v15' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -95,6 +96,8 @@ interface Db {
   results: DrawResult[]
   pendingLimits: Record<string, { amountKobo: number; effectiveAt: string }>
   orders: Order[]
+  /** Listing ids in each buyer's cart, oldest first. */
+  carts: Record<string, string[]>
   /** Buyers' applications to sell, by user id. */
   sellerApplications: Record<string, SellerApplicationView>
   /** Individual sellers' own shops: user id → merchant id. */
@@ -165,7 +168,22 @@ interface SeedListing {
 
 const img = (...files: string[]) => files.map((f) => `/assets/${f}`)
 
+/** Sample locations, the same as public.pickup_points. */
+const PICKUP_POINTS: PickupPoint[] = [
+  { id: 'ikeja', name: 'DrawMart Ikeja', area: 'Ikeja', address: '12 Allen Avenue, Ikeja', hours: 'Mon–Sat, 9am–6pm', location: { lat: 6.6018, lng: 3.3515 } },
+  { id: 'lekki', name: 'DrawMart Lekki', area: 'Lekki', address: '5 Admiralty Way, Lekki Phase 1', hours: 'Mon–Sat, 10am–7pm', location: { lat: 6.4478, lng: 3.4723 } },
+  { id: 'surulere', name: 'DrawMart Surulere', area: 'Surulere', address: '20 Adeniran Ogunsanya Street, Surulere', hours: 'Mon–Sat, 9am–6pm', location: { lat: 6.4969, lng: 3.3528 } },
+  { id: 'vi', name: 'DrawMart Victoria Island', area: 'Victoria Island', address: '10 Adeola Odeku Street, Victoria Island', hours: 'Mon–Fri, 9am–6pm', location: { lat: 6.4281, lng: 3.4219 } },
+  { id: 'yaba', name: 'DrawMart Yaba', area: 'Yaba', address: '48 Herbert Macaulay Way, Yaba', hours: 'Mon–Sat, 9am–6pm', location: { lat: 6.5095, lng: 3.3711 } },
+]
+
 const SEED_LISTINGS: SeedListing[] = [
+  // A tiny draw, so testers can be sure of winning and try the won-item flow.
+  {
+    merchantId: 'm-yaba', title: 'JBL Go speaker, 2-ticket test draw', category: 'Electronics', images: img('jbl-charge.jpg'),
+    description: 'A tiny draw for trying the whole flow: buy both tickets and you’re sure to win.',
+    price: 20_000, ticket: 10_000, sold: 0, closesInHours: 720,
+  },
   {
     merchantId: MY_MERCHANT, title: 'iPhone 18 Pro Max, 256GB', category: 'Phones', images: img('iphone18pmBurgundy.jpg', 'iphone18pmBlack.jpg', 'iphone18pmGlacier.jpg'),
     description: 'Brand new and sealed, with a one-year store warranty. The winner picks Burgundy, Black or Glacier.',
@@ -501,6 +519,7 @@ async function freshDb(): Promise<Db> {
     results: [],
     pendingLimits: {},
     orders: [],
+    carts: {},
     sellerApplications: {},
     sellerShops: {},
     conversations: [],
@@ -738,7 +757,7 @@ function statsBetween(db: Db, l: Listing, from: string, to: string) {
   const views = db.views.filter((v) => v.listingId === l.id && v.day >= from && v.day <= to)
   // A refunded draw's tickets were paid back, so they aren't sales.
   const tickets = l.kind === 'raffle' && (l.status === 'live' || l.status === 'sold_out' || l.status === 'drawn') ? db.tickets.filter((t) => t.listingId === l.id && inRange(t.purchasedAt)) : []
-  const orders = db.orders.filter((o) => o.listingId === l.id && inRange(o.createdAt))
+  const orders = db.orders.filter((o) => o.listingId === l.id && !o.isPrize && inRange(o.createdAt))
   return {
     views: views.length,
     visitors: new Set(views.map((v) => v.visitor)).size,
@@ -1018,30 +1037,75 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     listResults: () =>
       tx((db) => db.results.map((r) => resultView(db, r)).sort((a, b) => b.drawnAt.localeCompare(a.drawnAt))),
 
-    buyNow: (listingId, delivery) =>
+    listCart: () =>
+      tx((db) =>
+        (db.carts[buyer()] ?? []).map((id) => {
+          const listing = listingView(db, getListingOr404(db, id))
+          return { listing, amountKobo: lineAmountKobo(listing) }
+        }),
+      ),
+
+    addToCart: (listingId) =>
       tx((db) => {
         const l = getListingOr404(db, listingId)
+        if (readSession() && readSession()!.role !== 'buyer') throw new ApiError('forbidden', 'Only buyer accounts have a cart.')
         if (l.merchantId === db.sellerShops[buyer()]) throw new ApiError('forbidden', 'You can’t buy your own item.')
-        const mine = db.ledger.filter((e) => e.userId === buyer())
-        const balance = balanceFromLedger(mine)
-        const notForSale = checkOrder(l, { cashKobo: Number.MAX_SAFE_INTEGER, creditKobo: 0 })
-        if (notForSale) throw new ApiError(notForSale, ORDER_ERROR_TEXT[notForSale])
-        const problems = validateDelivery(delivery).map((e) => DELIVERY_ERROR_TEXT[e])
-        if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
-        const blocked = checkOrder(l, balance)
-        if (blocked) throw new ApiError(blocked, ORDER_ERROR_TEXT[blocked])
+        const problem = cartError(listingView(db, l))
+        if (problem) throw new ApiError('invalid_input', CART_ERROR_TEXT[problem])
+        if (db.orders.some((o) => o.listingId === l.id && o.buyerId === buyer())) throw new ApiError('invalid_input', 'You’ve already arranged this item.')
+        const cart = (db.carts[buyer()] ??= [])
+        if (!cart.includes(l.id)) cart.push(l.id)
+      }),
 
-        const price = salePriceKobo(l)!
-        const pay = splitPayment(price, balance)
-        const at = iso(now())
-        db.ledger.push({ id: uid('E'), userId: buyer(), kind: 'order_payment', cashKobo: -pay.fromCash, creditKobo: -pay.fromCredit, memo: `Bought · ${l.title}`, listingId: l.id, createdAt: at })
-        const order: Order = {
-          id: uid('O'), listingId: l.id, buyerId: buyer(), merchantId: l.merchantId, priceKobo: price, feeKobo: saleEconomics(price, l.feeBps).feeKobo,
-          delivery: { address: delivery.address.trim(), location: delivery.location, contactPhone: delivery.contactPhone.trim() }, status: 'paid', createdAt: at, dispatchedAt: null, deliveredAt: null,
+    removeFromCart: (listingId) =>
+      tx((db) => {
+        db.carts[buyer()] = (db.carts[buyer()] ?? []).filter((id) => id !== listingId)
+      }),
+
+    listPickupPoints: () => tx(() => PICKUP_POINTS),
+
+    checkout: ({ listingIds, ...details }) =>
+      tx((db) => {
+        if (!listingIds.length) throw new ApiError('invalid_input', 'Your cart is empty.')
+        const listings = listingIds.map((id) => getListingOr404(db, id))
+        const views = listings.map((l) => listingView(db, l))
+        const problems = validateCheckout(details, views.some(isCar)).map((e) => CHECKOUT_ERROR_TEXT[e])
+        if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+        for (const v of views) {
+          if (v.merchantId === db.sellerShops[buyer()]) throw new ApiError('forbidden', 'You can’t buy your own item.')
+          if (lineAmountKobo(v) === null) throw new ApiError('not_for_sale', `${v.title} isn’t for sale any more.`)
+          if (isCar(v) && views.length > 1) throw new ApiError('invalid_input', 'Cars are arranged on their own, not with other items.')
+          if (db.orders.some((o) => o.listingId === v.id)) throw new ApiError('invalid_input', `${v.title} has already been arranged.`)
         }
-        db.orders.push(order)
-        l.status = 'sold'
-        return orderView(db, order)
+        const mine = db.ledger.filter((e) => e.userId === buyer())
+        let balance = balanceFromLedger(mine)
+        if (balance.cashKobo + balance.creditKobo < checkoutTotalKobo(views)) throw new ApiError('insufficient_funds', ORDER_ERROR_TEXT.insufficient_funds)
+
+        const at = iso(now())
+        const pickup = details.fulfilment === 'pickup'
+        const pickupPoint = pickup ? (PICKUP_POINTS.find((p) => p.id === details.pickupPointId) ?? null) : null
+        if (pickup && !pickupPoint) throw new ApiError('invalid_input', CHECKOUT_ERROR_TEXT.pickup_point_required)
+        const orders = listings.map((l, i) => {
+          const v = views[i]
+          const prize = isWonPrize(v)
+          const price = lineAmountKobo(v)!
+          if (!prize) {
+            const pay = splitPayment(price, balance)
+            balance = { cashKobo: balance.cashKobo - pay.fromCash, creditKobo: balance.creditKobo - pay.fromCredit }
+            db.ledger.push({ id: uid('E'), userId: buyer(), kind: 'order_payment', cashKobo: -pay.fromCash, creditKobo: -pay.fromCredit, memo: `Bought · ${l.title}`, listingId: l.id, createdAt: at })
+            l.status = 'sold'
+          }
+          const order: Order = {
+            id: uid('O'), listingId: l.id, buyerId: buyer(), merchantId: l.merchantId, priceKobo: price, feeKobo: prize ? 0 : saleEconomics(price, l.feeBps).feeKobo,
+            delivery: pickup ? { address: '', location: null, contactPhone: details.delivery.contactPhone.trim() } : { address: details.delivery.address.trim(), location: details.delivery.location, contactPhone: details.delivery.contactPhone.trim() },
+            fulfilment: details.fulfilment, pickupPoint, isPrize: prize, handledBy: prize && !isCar(l) ? 'drawmart' : 'store',
+            status: 'paid', createdAt: at, dispatchedAt: null, deliveredAt: null,
+          }
+          db.orders.push(order)
+          return orderView(db, order)
+        })
+        db.carts[buyer()] = (db.carts[buyer()] ?? []).filter((id) => !listingIds.includes(id))
+        return orders
       }),
 
     listMyOrders: () =>
@@ -1174,12 +1238,13 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       }),
 
     listMerchantOrders: () =>
-      tx((db) => db.orders.filter((o) => o.merchantId === shopId(db)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((o) => orderView(db, o))),
+      tx((db) => db.orders.filter((o) => o.merchantId === shopId(db) && o.handledBy === 'store').sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((o) => orderView(db, o))),
 
     dispatchOrder: (orderId) =>
       tx((db) => {
-        const o = db.orders.find((x) => x.id === orderId && x.merchantId === shopId(db) && x.status === 'paid')
-        if (!o) throw new ApiError('invalid_input', 'Only your store’s paid orders can be marked as sent.')
+        const admin = readSession()?.role === 'admin'
+        const o = db.orders.find((x) => x.id === orderId && x.status === 'paid' && (x.handledBy === 'drawmart' ? admin : !admin && x.merchantId === shopId(db)))
+        if (!o) throw new ApiError('invalid_input', 'Only paid orders you send yourself can be marked as sent.')
         o.status = 'dispatched'
         o.dispatchedAt = iso(now())
       }),
@@ -1392,6 +1457,9 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (!a || a.id !== applicationId || a.status !== 'pending') throw new ApiError('invalid_input', 'Only applications waiting for review can be rejected.')
         Object.assign(a, { status: 'rejected', reviewNote: note.trim(), reviewedAt: iso(now()) })
       }),
+
+    listPrizeOrders: () =>
+      tx((db) => db.orders.filter((o) => o.handledBy === 'drawmart').sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((o) => orderView(db, o))),
 
     listPendingListings: () =>
       tx((db) => db.listings.filter((l) => l.status === 'pending_review').map((l) => listingView(db, l, 'full'))),

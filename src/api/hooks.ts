@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
-import type { Delivery, Kobo } from '@/domain/types'
+import type { Kobo } from '@/domain/types'
 import { api } from './index'
 import type { MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput } from '@/domain/sellers'
 import { visitorId } from '@/lib/visitor'
-import type { AccountRole, BoostSettings, ListingFilter, NewListingInput, NewPickupInput, NewProductInput, PickupItemInput } from './types'
+import type { AccountRole, BoostSettings, CheckoutInput, ListingFilter, NewListingInput, NewPickupInput, NewProductInput, PickupItemInput } from './types'
 
 export const keys = {
   session: ['session'] as const,
@@ -22,6 +22,9 @@ export const keys = {
   merchantOrders: ['merchant-orders'] as const,
   savedPickup: ['saved-pickup'] as const,
   notifications: ['notifications'] as const,
+  cart: ['cart'] as const,
+  pickupPoints: ['pickup-points'] as const,
+  prizeOrders: ['prize-orders'] as const,
   sellerApplication: ['seller-application'] as const,
   sellerApplications: ['seller-applications'] as const,
   conversations: ['conversations'] as const,
@@ -107,6 +110,11 @@ export function useSetCallPhone() {
   })
 }
 
+// Cart and checkout
+export const useCart = () => useQuery({ queryKey: keys.cart, queryFn: () => api.listCart(), enabled: useIs('buyer') })
+export const usePickupPoints = () => useQuery({ queryKey: keys.pickupPoints, queryFn: () => api.listPickupPoints(), staleTime: 5 * 60_000 })
+export const usePrizeOrders = () => useQuery({ queryKey: keys.prizeOrders, queryFn: () => api.listPrizeOrders(), enabled: useIs('admin') })
+
 // Notifications. No push channel yet, so these poll like messages.
 export const useNotifications = () =>
   useQuery({ queryKey: keys.notifications, queryFn: () => api.listNotifications(), enabled: useIs('buyer'), refetchInterval: 30_000 })
@@ -188,12 +196,19 @@ export function useBuyTickets() {
   })
 }
 
-export function useBuyNow() {
+export function useCheckout() {
   const invalidate = useInvalidateAll()
-  return useMutation({
-    mutationFn: ({ listingId, delivery }: { listingId: string; delivery: Delivery }) => api.buyNow(listingId, delivery),
-    onSettled: invalidate,
-  })
+  return useMutation({ mutationFn: (input: CheckoutInput) => api.checkout(input), onSettled: invalidate })
+}
+
+export function useAddToCart() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (listingId: string) => api.addToCart(listingId), onSettled: () => qc.invalidateQueries({ queryKey: keys.cart }) })
+}
+
+export function useRemoveFromCart() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (listingId: string) => api.removeFromCart(listingId), onSettled: () => qc.invalidateQueries({ queryKey: keys.cart }) })
 }
 
 export function useConfirmOrder() {

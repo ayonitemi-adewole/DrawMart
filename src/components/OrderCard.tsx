@@ -3,27 +3,34 @@ import { useConfirmOrder, useDispatchOrder } from '@/api/hooks'
 import type { OrderView } from '@/api/types'
 import { directionsUrl } from '@/domain/location'
 import { formatNaira } from '@/domain/money'
-import type { OrderStatus } from '@/domain/types'
 import { dateTime } from '@/lib/time'
-import { CheckCircleIcon, MapPinIcon, PhoneIcon, TruckIcon } from './icons'
+import { CheckCircleIcon, MapPinIcon, PhoneIcon, StoreIcon, TruckIcon } from './icons'
 import { useToast } from './toast'
 import { Badge, Button, Card, ProductImage, errorMessage, type Tone } from './ui'
 
-const STATUS: Record<OrderStatus, { label: string; tone: Tone }> = {
-  paid: { label: 'Paid · being prepared', tone: 'ticket' },
-  dispatched: { label: 'On the way', tone: 'sky' },
-  delivered: { label: 'Delivered', tone: 'brand' },
+function statusOf(o: OrderView): { label: string; tone: Tone } {
+  const pickup = o.fulfilment === 'pickup'
+  switch (o.status) {
+    case 'paid':
+      return { label: o.isPrize ? 'Being prepared' : 'Paid · being prepared', tone: 'ticket' }
+    case 'dispatched':
+      return { label: pickup ? 'On its way to the pickup location' : 'On the way', tone: 'sky' }
+    case 'delivered':
+      return { label: pickup ? 'Collected' : 'Delivered', tone: 'brand' }
+  }
 }
 
 /**
- * One fixed-price order. Buyers confirm delivery; stores see the delivery
- * details, their payout, and mark the order as sent.
+ * One order. Buyers confirm they have it; whoever sends it (the store, or an
+ * admin for won items in escrow) sees the details and marks it as sent.
  */
-export function OrderCard({ order: o, audience }: { order: OrderView; audience: 'buyer' | 'store' }) {
+export function OrderCard({ order: o, audience }: { order: OrderView; audience: 'buyer' | 'store' | 'admin' }) {
   const confirm = useConfirmOrder()
   const dispatch = useDispatchOrder()
   const toast = useToast()
-  const s = STATUS[o.status]
+  const s = statusOf(o)
+  const pickup = o.fulfilment === 'pickup'
+  const sender = audience !== 'buyer'
   const onError = (e: unknown) => toast(errorMessage(e), 'error')
 
   return (
@@ -43,43 +50,57 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
           </span>
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={s.tone}>{s.label}</Badge>
-            <span className="text-sm font-extrabold tabular-nums">{formatNaira(o.priceKobo)}</span>
+            <span className="text-sm font-extrabold tabular-nums">{o.isPrize ? 'Won in a draw' : formatNaira(o.priceKobo)}</span>
           </div>
         </div>
       </div>
 
       <div className="flex flex-col gap-1.5 rounded-2xl bg-ground p-3 text-sm">
-        <span className="flex items-start gap-2 text-muted">
-          <MapPinIcon size={14} className="mt-0.5 shrink-0" /> {o.delivery.address}
-        </span>
-        {audience === 'store' && o.delivery.location ? (
-          <a href={directionsUrl(o.delivery.location)} target="_blank" rel="noreferrer" className="flex min-h-11 w-fit items-center gap-2">
-            <MapPinIcon size={14} /> Directions to the pinned spot
-          </a>
-        ) : null}
-        {audience === 'store' ? (
+        {pickup && o.pickupPoint ? (
+          <>
+            <span className="flex items-start gap-2 text-muted">
+              <StoreIcon size={14} className="mt-0.5 shrink-0" /> <span><strong className="text-ink">{audience === 'buyer' ? 'Collect from' : 'Send to'} {o.pickupPoint.name}</strong>, {o.pickupPoint.address}</span>
+            </span>
+            {audience === 'buyer' ? <span className="text-xs text-subtle">{o.pickupPoint.hours}</span> : null}
+            <a href={directionsUrl(o.pickupPoint.location)} target="_blank" rel="noreferrer" className="flex min-h-11 w-fit items-center gap-2">
+              <MapPinIcon size={14} /> Directions
+            </a>
+          </>
+        ) : (
+          <>
+            <span className="flex items-start gap-2 text-muted">
+              <MapPinIcon size={14} className="mt-0.5 shrink-0" /> {o.delivery.address}
+            </span>
+            {sender && o.delivery.location ? (
+              <a href={directionsUrl(o.delivery.location)} target="_blank" rel="noreferrer" className="flex min-h-11 w-fit items-center gap-2">
+                <MapPinIcon size={14} /> Directions to the pinned spot
+              </a>
+            ) : null}
+          </>
+        )}
+        {sender ? (
           <a href={`tel:${o.delivery.contactPhone.replace(/\s/g, '')}`} className="flex min-h-11 w-fit items-center gap-2">
             <PhoneIcon size={14} /> {o.delivery.contactPhone}
           </a>
         ) : null}
-        {audience === 'store' ? (
+        {audience === 'store' && !o.isPrize ? (
           <span className="text-xs text-subtle">
-            Your payout {formatNaira(o.priceKobo - o.feeKobo)} after the {formatNaira(o.feeKobo)} platform fee, once the buyer confirms delivery.
+            Your payout {formatNaira(o.priceKobo - o.feeKobo)} after the {formatNaira(o.feeKobo)} platform fee, once the buyer confirms they have it.
           </span>
         ) : null}
       </div>
 
       {audience === 'buyer' && o.status !== 'delivered' ? (
-        <Button variant={o.status === 'dispatched' ? 'primary' : 'outline'} loading={confirm.isPending} onClick={() => confirm.mutate(o.id, { onSuccess: () => toast('Thanks! Delivery confirmed.'), onError })}>
-          <CheckCircleIcon size={16} /> I’ve received it
+        <Button variant={o.status === 'dispatched' ? 'primary' : 'outline'} loading={confirm.isPending} onClick={() => confirm.mutate(o.id, { onSuccess: () => toast('Thanks! Confirmed.'), onError })}>
+          <CheckCircleIcon size={16} /> {pickup ? 'I’ve collected it' : 'I’ve received it'}
         </Button>
       ) : null}
-      {audience === 'store' && o.status === 'paid' ? (
-        <Button loading={dispatch.isPending} onClick={() => dispatch.mutate(o.id, { onSuccess: () => toast('Marked as sent. The buyer will confirm when it arrives.'), onError })}>
-          <TruckIcon size={16} /> Mark as sent
+      {sender && o.status === 'paid' ? (
+        <Button loading={dispatch.isPending} onClick={() => dispatch.mutate(o.id, { onSuccess: () => toast('Marked as sent. The buyer will confirm once they have it.'), onError })}>
+          <TruckIcon size={16} /> {pickup ? 'Mark as sent to the pickup location' : 'Mark as sent'}
         </Button>
       ) : null}
-      {o.status === 'delivered' && o.deliveredAt ? <span className="text-xs text-subtle">Delivered {dateTime(o.deliveredAt)}</span> : null}
+      {o.status === 'delivered' && o.deliveredAt ? <span className="text-xs text-subtle">{pickup ? 'Collected' : 'Delivered'} {dateTime(o.deliveredAt)}</span> : null}
     </Card>
   )
 }

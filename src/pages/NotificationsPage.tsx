@@ -19,7 +19,7 @@ function describe(n: NotificationView): { icon: IconComponent; title: string; bo
       return {
         icon: TrophyIcon,
         title: `You won ${n.listingTitle}!`,
-        body: `${n.winningNumber ? `Your ticket ${ticketNo(n.winningNumber)} was drawn. ` : ''}We’ll arrange delivery with you.`,
+        body: `${n.winningNumber ? `Your ticket ${ticketNo(n.winningNumber)} was drawn. ` : ''}Add it to your cart, or arrange it now.`,
         to: `/draws/${n.listingId}`,
       }
     case 'draw_lost':

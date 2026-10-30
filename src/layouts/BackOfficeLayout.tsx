@@ -1,7 +1,7 @@
 import { NavLink, Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router'
 import { api } from '@/api'
-import { useAccess, useMerchant, usePendingListings, useSellerApplications, useSignOut, useUnreadMessages } from '@/api/hooks'
-import { ChartIcon, ChatIcon, TrendingUpIcon, CheckIcon, ClipboardIcon, DiceIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
+import { useAccess, useMerchant, usePendingListings, usePrizeOrders, useSellerApplications, useSignOut, useUnreadMessages } from '@/api/hooks'
+import { ChartIcon, ChatIcon, TrendingUpIcon, TrophyIcon, CheckIcon, ClipboardIcon, DiceIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { cx } from '@/components/ui'
 import { APP_HOME } from '@/lib/apps'
@@ -24,6 +24,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
   const pending = usePendingListings()
   const sellers = useSellerApplications()
   const unread = useUnreadMessages()
+  const prizes = usePrizeOrders()
   const access = useAccess()
   const signOut = useSignOut()
 
@@ -37,6 +38,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
       : [
           { to: '/admin', label: 'Review queue', icon: ClipboardIcon, count: pending.data?.length ?? 0 },
           { to: '/admin/sellers', label: 'Seller ID checks', icon: IdCardIcon, count: sellers.data?.length ?? 0 },
+          { to: '/admin/prizes', label: 'Won items', icon: TrophyIcon, count: prizes.data?.filter((o) => o.status === 'paid').length ?? 0 },
           { to: '/admin/boosts', label: 'Boosts', icon: TrendingUpIcon },
           { to: '/admin/draws', label: api.testMode ? 'Live draws & demo' : 'Live draws', icon: DiceIcon },
         ]
