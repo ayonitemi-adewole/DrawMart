@@ -39,10 +39,17 @@ export type ListingStatus =
 export type HandoverMethod = 'pickup' | 'inspection'
 export type TimeSlot = 'morning' | 'afternoon'
 
+export interface GeoPoint {
+  lat: number
+  lng: number
+}
+
 /** Where and when DrawMart collects (or inspects) the item. Private to the store and admins. */
 export interface Handover {
   method: HandoverMethod
   address: string
+  /** The exact spot pinned on the map. Null only on bookings made before pins existed. */
+  location: GeoPoint | null
   contactPhone: string
   date: string // YYYY-MM-DD
   slot: TimeSlot
@@ -152,6 +159,8 @@ export type OrderStatus = 'paid' | 'dispatched' | 'delivered'
 /** Where the buyer wants a fixed-price item sent. Seen only by the buyer, the store and admins. */
 export interface Delivery {
   address: string
+  /** The exact spot pinned on the map. Null only on orders made before pins existed. */
+  location: GeoPoint | null
   contactPhone: string
 }
 

@@ -3,6 +3,7 @@
  * item costs right now, and whether a buyer can check out.
  */
 import { isNigerianMobile } from './listing'
+import { LOCATION_ERROR_TEXT, locationError, type LocationError } from './location'
 import { applyBps, formatNaira } from './money'
 import type { Delivery, Kobo, Listing, WalletBalance } from './types'
 
@@ -43,16 +44,19 @@ export const PRODUCT_ERROR_TEXT: Record<ProductError, string> = {
 
 // ------------------------------------------------------------ checkout
 
-export type DeliveryError = 'address_required' | 'phone_invalid'
+export type DeliveryError = 'address_required' | 'phone_invalid' | LocationError
 
 export function validateDelivery(d: Delivery): DeliveryError[] {
   const errors: DeliveryError[] = []
   if (d.address.trim().length < 10) errors.push('address_required')
+  const pin = locationError(d.location)
+  if (pin) errors.push(pin)
   if (!isNigerianMobile(d.contactPhone)) errors.push('phone_invalid')
   return errors
 }
 
 export const DELIVERY_ERROR_TEXT: Record<DeliveryError, string> = {
+  ...LOCATION_ERROR_TEXT,
   address_required: 'Enter the full delivery address, with street and area.',
   phone_invalid: 'Enter a Nigerian mobile number, e.g. 0803 123 4567.',
 }

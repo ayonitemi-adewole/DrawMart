@@ -8,6 +8,7 @@ import { Badge, Button, Card, EmptyState, ErrorState, PageTitle, ProductImage, S
 import { computeListingEconomics } from '@/domain/fees'
 import { saleEconomics } from '@/domain/orders'
 import { TIME_SLOTS, UNSOLD_POLICY_LABEL } from '@/domain/listing'
+import { directionsUrl } from '@/domain/location'
 import { formatNaira } from '@/domain/money'
 import type { HandoverMethod } from '@/domain/types'
 import { calendarDay } from '@/lib/time'
@@ -149,6 +150,11 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
             <span className="flex items-start gap-2 text-muted">
               <MapPinIcon size={14} className="mt-0.5 shrink-0" /> {l.handover.address}
             </span>
+            {l.handover.location ? (
+              <a href={directionsUrl(l.handover.location)} target="_blank" rel="noreferrer" className="flex min-h-11 w-fit items-center">
+                Directions to the pinned spot
+              </a>
+            ) : null}
             <a href={`tel:${l.handover.contactPhone.replace(/\s/g, '')}`} className="flex min-h-11 w-fit items-center">
               {l.handover.contactPhone}
             </a>

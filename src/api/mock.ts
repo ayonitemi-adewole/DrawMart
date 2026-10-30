@@ -69,7 +69,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v12' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v13' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -440,6 +440,7 @@ async function makeListing(s: SeedListing, now: number, seeds: Record<string, st
     handover: {
       method: handoverMethodFor(s.category),
       address: `${merchant.name}, ${merchant.area}, Lagos`,
+      location: null,
       contactPhone: '0803 000 0000',
       date: addDays(localDate(new Date(now)), status === 'pending_review' ? 2 : -3),
       slot: 'morning',
@@ -1002,7 +1003,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         db.ledger.push({ id: uid('E'), userId: buyer(), kind: 'order_payment', cashKobo: -pay.fromCash, creditKobo: -pay.fromCredit, memo: `Bought · ${l.title}`, listingId: l.id, createdAt: at })
         const order: Order = {
           id: uid('O'), listingId: l.id, buyerId: buyer(), merchantId: l.merchantId, priceKobo: price, feeKobo: saleEconomics(price, l.feeBps).feeKobo,
-          delivery: { address: delivery.address.trim(), contactPhone: delivery.contactPhone.trim() }, status: 'paid', createdAt: at, dispatchedAt: null, deliveredAt: null,
+          delivery: { address: delivery.address.trim(), location: delivery.location, contactPhone: delivery.contactPhone.trim() }, status: 'paid', createdAt: at, dispatchedAt: null, deliveredAt: null,
         }
         db.orders.push(order)
         l.status = 'sold'

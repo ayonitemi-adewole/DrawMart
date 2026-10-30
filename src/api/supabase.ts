@@ -58,6 +58,8 @@ interface HandoverRow {
   method: Handover['method']
   address: string
   contact_phone: string
+  lat: number | null
+  lng: number | null
   date: string
   slot: Handover['slot']
 }
@@ -141,6 +143,8 @@ interface OrderRow {
   fee_kobo: number
   delivery_address: string
   delivery_phone: string
+  delivery_lat: number | null
+  delivery_lng: number | null
   status: OrderStatus
   created_at: string
   dispatched_at: string | null
@@ -195,6 +199,8 @@ function unwrap<T>(res: { data: T | null; error: PostgrestError | null }): T {
 // --------------------------------------------------------------- mappers
 
 const num = (v: number | string | null | undefined) => Number(v ?? 0)
+
+const toPoint = (lat: number | null, lng: number | null) => (lat === null || lng === null ? null : { lat, lng })
 
 function toMerchant(m: MerchantRow): Merchant {
   return { id: m.id, kind: m.kind, name: m.name, area: m.area, cacNumber: m.cac_number, verified: m.verified }
@@ -276,7 +282,7 @@ function toListingView(l: ListingRow, me: string | null, mine: Mine): ListingVie
     boostedUntil: l.boosted_until,
     pickupBatchId: l.pickup_batch_id,
     handover: l.handover
-      ? { method: l.handover.method, address: l.handover.address, contactPhone: l.handover.contact_phone, date: l.handover.date, slot: l.handover.slot }
+      ? { method: l.handover.method, address: l.handover.address, location: toPoint(l.handover.lat, l.handover.lng), contactPhone: l.handover.contact_phone, date: l.handover.date, slot: l.handover.slot }
       : null,
     merchant: toMerchant(l.merchant),
     myNumbers: mine.numbers.get(l.id) ?? [],
@@ -299,7 +305,7 @@ function toOrderView(o: OrderRow): OrderView {
     merchantId: o.merchant_id,
     priceKobo: num(o.price_kobo),
     feeKobo: num(o.fee_kobo),
-    delivery: { address: o.delivery_address, contactPhone: o.delivery_phone },
+    delivery: { address: o.delivery_address, location: toPoint(o.delivery_lat, o.delivery_lng), contactPhone: o.delivery_phone },
     status: o.status,
     createdAt: o.created_at,
     dispatchedAt: o.dispatched_at,
@@ -542,7 +548,7 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     },
 
     buyNow: async (listingId, delivery) => {
-      const id = await rpc<string>('buy_now', { p_listing_id: listingId, p_address: delivery.address, p_phone: delivery.contactPhone })
+      const id = await rpc<string>('buy_now', { p_listing_id: listingId, p_address: delivery.address, p_phone: delivery.contactPhone, p_lat: delivery.location?.lat ?? null, p_lng: delivery.location?.lng ?? null })
       return toOrderView(unwrap(await client.from('orders').select(ORDER_SELECT).eq('id', id).single<OrderRow>()))
     },
 

@@ -102,7 +102,7 @@ function listingInput(overrides: Record<string, unknown> = {}) {
     feeBps: 1000,
     durationDays: 7,
     unsoldPolicy: 'refund',
-    handover: { address: '12 Allen Avenue, Ikeja', contactPhone: '0803 123 4567', date: addDays(localDate(new Date()), 2), slot: 'morning' },
+    handover: { address: '12 Allen Avenue, Ikeja', location: { lat: 6.6, lng: 3.35 }, contactPhone: '0803 123 4567', date: addDays(localDate(new Date()), 2), slot: 'morning' },
     ...overrides,
   }
 }
@@ -289,7 +289,18 @@ describe('store → admin → draw', () => {
       expect(e.detail).toContain(text)
     const badHandover = listingInput({ handover: { address: 'Ikeja', contactPhone: '12345', date: localDate(new Date()), slot: 'night' } })
     const e2 = await expectFail(asUser(store, `select public.create_listing($1)`, [badHandover]), 'invalid_input')
-    for (const text of ['full address', 'Nigerian mobile', 'between tomorrow', 'time slot']) expect(e2.detail).toContain(text)
+    for (const text of ['full address', 'Pin the exact spot', 'Nigerian mobile', 'between tomorrow', 'time slot']) expect(e2.detail).toContain(text)
+  })
+
+  it('keeps the pinned pickup spot with the private booking, and refuses pins outside Lagos', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
+    const [h] = await asUser<{ lat: number; lng: number }>(store, `select lat, lng from public.listing_handovers where listing_id = $1`, [id])
+    expect(h).toEqual({ lat: 6.6, lng: 3.35 })
+    expect(await asUser(alice, `select lat from public.listing_handovers where listing_id = $1`, [id])).toEqual([])
+    const far = listingInput()
+    const e = await expectFail(asUser(store, `select public.create_listing($1)`, [{ ...far, handover: { ...(far.handover as object), location: { lat: 9.06, lng: 7.49 } } }]), 'invalid_input')
+    expect(e.detail).toContain('outside Lagos')
+    await asUser(adminUser, `select public.reject_listing($1)`, [id])
   })
 
   it('prices listings exactly like computeListingEconomics', async () => {
@@ -519,7 +530,7 @@ describe('regular products and orders', () => {
   let buyer: string
   let productId: string
   const product = { title: 'Office chair', description: 'Ergonomic, mesh back.', category: 'Home', priceKobo: 4_000_000, feeBps: 1250, images: ['/assets/x.jpg'] }
-  const delivery = ['15 Awolowo Road, Ikoyi', '0803 123 4567']
+  const delivery = ['15 Awolowo Road, Ikoyi', '0803 123 4567', 6.45, 3.43]
 
   beforeAll(async () => {
     store = await newUser('chairs@example.com', { merchantId: IKEJA })
@@ -546,25 +557,28 @@ describe('regular products and orders', () => {
   })
 
   it('checks the delivery details and the wallet before selling', async () => {
-    const e = await expectFail(asUser(buyer, `select public.buy_now($1, 'Ikoyi', '123')`, [productId]), 'invalid_input')
+    const e = await expectFail(asUser(buyer, `select public.buy_now($1, 'Ikoyi', '123', null, null)`, [productId]), 'invalid_input')
     expect(e.detail).toContain('full delivery address')
+    expect(e.detail).toContain('Pin the exact spot')
+    const far = await expectFail(asUser(buyer, `select public.buy_now($1, $2, $3, 9.06, 7.49)`, [productId, delivery[0], delivery[1]]), 'invalid_input')
+    expect(far.detail).toContain('outside Lagos')
     expect(e.detail).toContain('Nigerian mobile')
-    await expectFail(asUser(buyer, `select public.buy_now($1, $2, $3)`, [productId, ...delivery]), 'insufficient_funds') // ₦25,000 < ₦40,000
-    await expectFail(asUser(store, `select public.buy_now($1, $2, $3)`, [productId, ...delivery]), 'forbidden')
+    await expectFail(asUser(buyer, `select public.buy_now($1, $2, $3, $4, $5)`, [productId, ...delivery]), 'insufficient_funds') // ₦25,000 < ₦40,000
+    await expectFail(asUser(store, `select public.buy_now($1, $2, $3, $4, $5)`, [productId, ...delivery]), 'forbidden')
     const [live] = await admin<{ id: string }>(`select id from public.listings where status = 'live' limit 1`)
-    await expectFail(asUser(buyer, `select public.buy_now($1, $2, $3)`, [live.id, ...delivery]), 'not_for_sale')
+    await expectFail(asUser(buyer, `select public.buy_now($1, $2, $3, $4, $5)`, [live.id, ...delivery]), 'not_for_sale')
   })
 
   it('sells once, paying with credit first, and records the order', async () => {
     await admin(`insert into public.ledger_entries (user_id, kind, credit_kobo, memo) values ($1, 'store_credit', 300000, 'credit')`, [buyer])
     await asUser(buyer, `select public.top_up(1500000)`)
-    const [{ id }] = await asUser<{ id: string }>(buyer, `select public.buy_now($1, $2, $3) id`, [productId, ...delivery])
+    const [{ id }] = await asUser<{ id: string }>(buyer, `select public.buy_now($1, $2, $3, $4, $5) id`, [productId, ...delivery])
     expect(await balance(buyer)).toEqual({ cash: String(2_500_000 + 1_500_000 - 3_700_000), credit: '0' })
     const [order] = await asUser<{ status: string; price_kobo: number; fee_kobo: number; delivery_address: string }>(buyer, `select * from public.orders where id = $1`, [id])
-    expect(order).toMatchObject({ status: 'paid', price_kobo: 4_000_000, fee_kobo: 300_000, delivery_address: '15 Awolowo Road, Ikoyi' })
+    expect(order).toMatchObject({ status: 'paid', price_kobo: 4_000_000, fee_kobo: 300_000, delivery_address: '15 Awolowo Road, Ikoyi', delivery_lat: 6.45, delivery_lng: 3.43 })
     const [l] = await admin<{ status: string }>(`select status from public.listings where id = $1`, [productId])
     expect(l.status).toBe('sold')
-    await expectFail(asUser(buyer, `select public.buy_now($1, $2, $3)`, [productId, ...delivery]), 'not_for_sale')
+    await expectFail(asUser(buyer, `select public.buy_now($1, $2, $3, $4, $5)`, [productId, ...delivery]), 'not_for_sale')
     expect((await asUser(buyer, `select id from public.listings where id = $1`, [productId])).length).toBe(1) // still visible once sold
   })
 
@@ -593,7 +607,7 @@ describe('regular products and orders', () => {
     await asUser(rich, `select public.top_up(50000000)`)
     await asUser(rich, `select public.top_up(50000000)`)
     const [s26] = await admin<{ id: string }>(`select id from public.listings where kind = 'raffle' and status = 'for_sale' and title like 'Samsung Galaxy S26 Ultra, 256GB'`)
-    const [{ id }] = await asUser<{ id: string }>(rich, `select public.buy_now($1, $2, $3) id`, [s26.id, ...delivery])
+    const [{ id }] = await asUser<{ id: string }>(rich, `select public.buy_now($1, $2, $3, $4, $5) id`, [s26.id, ...delivery])
     const [o] = await asUser<{ price_kobo: string }>(rich, `select price_kobo from public.orders where id = $1`, [id])
     expect(Number(o.price_kobo)).toBe(165_000_000)
   })
@@ -669,13 +683,13 @@ describe('individual sellers', () => {
     await asUser(staff, `select public.approve_listing($1)`, [id])
 
     // Still a buyer: can buy tickets, but not their own item.
-    await expectFail(asUser(seller, `select public.buy_now($1, '12 Herbert Macaulay Way, Yaba', '0803 123 4567')`, [id]), 'forbidden')
+    await expectFail(asUser(seller, `select public.buy_now($1, '12 Herbert Macaulay Way, Yaba', '0803 123 4567', 6.5, 3.38)`, [id]), 'forbidden')
     const [live] = await admin<{ id: string }>(`select id from public.listings where status = 'live' limit 1`)
     await asUser(seller, `select public.buy_tickets($1, 1)`, [live.id])
 
     // A buyer buys it; the seller sees and dispatches the order.
     await asUser(shopper, `select public.top_up(1000000)`)
-    const [{ order }] = await asUser<{ order: string }>(shopper, `select public.buy_now($1, '4 Admiralty Way, Lekki', '0803 765 4321') "order"`, [id])
+    const [{ order }] = await asUser<{ order: string }>(shopper, `select public.buy_now($1, '4 Admiralty Way, Lekki', '0803 765 4321', 6.44, 3.47) "order"`, [id])
     expect((await asUser(seller, `select id from public.orders`)).map((o) => o.id)).toEqual([order])
     await asUser(seller, `select public.dispatch_order($1)`, [order])
   })
@@ -812,7 +826,7 @@ describe('seller metrics', () => {
     const buyer = await newUser('statbuyer@example.com')
     await asUser(buyer, `select public.record_listing_view($1, null)`, [productId])
     await asUser(buyer, `select public.send_first_message($1, 'Still available?')`, [productId])
-    await asUser(buyer, `select public.buy_now($1, '15 Awolowo Road, Ikoyi', '0803 123 4567')`, [productId])
+    await asUser(buyer, `select public.buy_now($1, '15 Awolowo Road, Ikoyi', '0803 123 4567', 6.45, 3.43)`, [productId])
     const m = await metrics(seller, 30)
     expect(m.listings[0]).toMatchObject({ views: 3, visitors: 3, chats: 1, units: 1, buyers: 1, salesKobo: 2_000_000 })
     expect(m.daily).toEqual([{ date: expect.any(String), views: 3, salesKobo: 2_000_000 }])
@@ -947,7 +961,7 @@ describe('boost results', () => {
 describe('shared pickups', () => {
   let store: string
   let staff: string
-  const handover = { address: '12 Allen Avenue, Ikeja', contactPhone: '0803 123 4567', date: addDays(localDate(new Date()), 2), slot: 'morning' }
+  const handover = { address: '12 Allen Avenue, Ikeja', location: { lat: 6.6, lng: 3.35 }, contactPhone: '0803 123 4567', date: addDays(localDate(new Date()), 2), slot: 'morning' }
   const item = (title: string, category = 'Phones', patch: Record<string, unknown> = {}) => {
     const { handover: _omit, ...rest } = listingInput({ title, category, ...patch })
     return rest

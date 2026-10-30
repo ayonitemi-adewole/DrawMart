@@ -1,6 +1,7 @@
 import { Link } from 'react-router'
 import { useConfirmOrder, useDispatchOrder } from '@/api/hooks'
 import type { OrderView } from '@/api/types'
+import { directionsUrl } from '@/domain/location'
 import { formatNaira } from '@/domain/money'
 import type { OrderStatus } from '@/domain/types'
 import { dateTime } from '@/lib/time'
@@ -51,6 +52,11 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
         <span className="flex items-start gap-2 text-muted">
           <MapPinIcon size={14} className="mt-0.5 shrink-0" /> {o.delivery.address}
         </span>
+        {audience === 'store' && o.delivery.location ? (
+          <a href={directionsUrl(o.delivery.location)} target="_blank" rel="noreferrer" className="flex min-h-11 w-fit items-center gap-2">
+            <MapPinIcon size={14} /> Directions to the pinned spot
+          </a>
+        ) : null}
         {audience === 'store' ? (
           <a href={`tel:${o.delivery.contactPhone.replace(/\s/g, '')}`} className="flex min-h-11 w-fit items-center gap-2">
             <PhoneIcon size={14} /> {o.delivery.contactPhone}

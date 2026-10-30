@@ -2,6 +2,7 @@
  * Rules for submitting a listing: draw terms, how the item reaches DrawMart,
  * and the caution fee the store pays up front.
  */
+import { LOCATION_ERROR_TEXT, locationError, type LocationError } from './location'
 import { formatNaira, nairaToKobo } from './money'
 import { RULES } from './rules'
 import type { CautionFee, Category, Handover, HandoverMethod, Kobo, Listing, ListingStatus, TimeSlot, UnsoldPolicy } from './types'
@@ -143,7 +144,7 @@ export const UNSOLD_POLICY_LABEL: Record<UnsoldPolicy, string> = {
 
 export type HandoverDetails = Omit<Handover, 'method'>
 
-export type HandoverError = 'address_required' | 'phone_invalid' | 'date_out_of_range'
+export type HandoverError = 'address_required' | 'phone_invalid' | 'date_out_of_range' | LocationError
 
 /** Nigerian mobile numbers: 080…, 0701…, +234 80… */
 export function isNigerianMobile(phone: string): boolean {
@@ -178,6 +179,8 @@ export function handoverDateRange(today: string): { min: string; max: string } {
 export function validateHandover(h: HandoverDetails, today: string): HandoverError[] {
   const errors: HandoverError[] = []
   if (h.address.trim().length < 10) errors.push('address_required')
+  const pin = locationError(h.location)
+  if (pin) errors.push(pin)
   if (!isNigerianMobile(h.contactPhone)) errors.push('phone_invalid')
   const { min, max } = handoverDateRange(today)
   if (!/^\d{4}-\d{2}-\d{2}$/.test(h.date) || h.date < min || h.date > max) errors.push('date_out_of_range')
@@ -185,6 +188,7 @@ export function validateHandover(h: HandoverDetails, today: string): HandoverErr
 }
 
 export const HANDOVER_ERROR_TEXT: Record<HandoverError, string> = {
+  ...LOCATION_ERROR_TEXT,
   address_required: 'Enter the full address, with street and area.',
   phone_invalid: 'Enter a Nigerian mobile number, e.g. 0803 123 4567.',
   date_out_of_range: `Pick a date between tomorrow and ${RULES.handoverMaxLeadDays} days from now.`,

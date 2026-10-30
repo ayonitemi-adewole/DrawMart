@@ -22,6 +22,7 @@ import {
   TruckIcon,
 } from '@/components/icons'
 import { BoostRow } from '@/components/BoostControl'
+import { AddressPicker } from '@/components/AddressPicker'
 import { useToast } from '@/components/toast'
 import { Badge, Button, Card, EmptyState, ErrorState, Field, Notice, ProductImage, ProgressBar, Segmented, Skeleton, StatTile, cx, errorMessage, inputCls, type Tone } from '@/components/ui'
 import { LISTING_ERROR_TEXT, computeListingEconomics, platformFeeBps, validateListingEconomics, type ListingValidationError } from '@/domain/fees'
@@ -43,10 +44,11 @@ import {
   type HandoverError,
   type ListingTermsError,
 } from '@/domain/listing'
+import { directionsUrl } from '@/domain/location'
 import { formatNaira, nairaToKobo, parseNairaInput } from '@/domain/money'
 import { saleEconomics, salePriceKobo } from '@/domain/orders'
 import { RULES } from '@/domain/rules'
-import { type Category, type FeeMode, type TimeSlot, type UnsoldPolicy } from '@/domain/types'
+import { type Category, type GeoPoint, type FeeMode, type TimeSlot, type UnsoldPolicy } from '@/domain/types'
 import { calendarDay, dateTime } from '@/lib/time'
 import { ListingKindChooser, MerchantOrders, NewProduct } from './NewProduct'
 import { CategoryPicker, PhotoPicker, Section } from './parts'
@@ -225,6 +227,7 @@ function NewListing({ onDone }: { onDone: () => void }) {
 
   // Step 2: handover
   const [address, setAddress] = useState('')
+  const [location, setLocation] = useState<GeoPoint | null>(null)
   const [phone, setPhone] = useState('')
   const [date, setDate] = useState(() => addDays(today, 2))
   const [slot, setSlot] = useState<TimeSlot>('morning')
@@ -261,7 +264,7 @@ function NewListing({ onDone }: { onDone: () => void }) {
   const method = sharing ? 'pickup' : handoverMethodFor(category)
   // One fee for the pickup, including the item being written (cars can't join a pickup).
   const cautionFee = pickupCautionFee([...items.map((i) => i.category), ...(sharing && !formBlank && category !== 'Cars' ? [category] : [])])
-  const handover = { address, contactPhone: phone, date, slot }
+  const handover = { address, location, contactPhone: phone, date, slot }
   const handoverErrors = validateHandover(handover, today)
   const handoverError = (e: HandoverError) => (showHandoverErrors && handoverErrors.includes(e) ? HANDOVER_ERROR_TEXT[e] : undefined)
 
@@ -572,22 +575,18 @@ function NewListing({ onDone }: { onDone: () => void }) {
                 }
               >
                 <HandoverSteps method={method} />
-                <Field
+                <AddressPicker
+                  id="address"
                   label={method === 'inspection' ? 'Where is the car?' : 'Pickup address'}
-                  htmlFor="address"
-                  error={handoverError('address_required')}
                   hint={method === 'inspection' ? 'Showroom or yard address. The inspector needs space to check the car.' : 'Street, building and area in Lagos.'}
-                >
-                  <textarea
-                    id="address"
-                    rows={2}
-                    value={address}
-                    onChange={(e) => setAddress(e.target.value)}
-                    className={cx(inputCls, 'py-3')}
-                    placeholder={merchant.data ? `e.g. 12 Allen Avenue, ${merchant.data.area}` : 'e.g. 12 Allen Avenue, Ikeja'}
-                    autoComplete="street-address"
-                  />
-                </Field>
+                  placeholder={merchant.data ? `e.g. 12 Allen Avenue, ${merchant.data.area}` : 'e.g. 12 Allen Avenue, Ikeja'}
+                  address={address}
+                  onAddress={setAddress}
+                  location={location}
+                  onLocation={setLocation}
+                  addressError={handoverError('address_required')}
+                  showPinError={showHandoverErrors}
+                />
                 <Field label="Contact phone on the day" htmlFor="phone" error={handoverError('phone_invalid')}>
                   <input
                     id="phone"
@@ -992,6 +991,11 @@ function SentForReview({ listings, onDone }: { listings: ListingView[]; onDone: 
             <dd className="font-bold">{h.address}</dd>
           </div>
         </dl>
+      ) : null}
+      {h?.location ? (
+        <a href={directionsUrl(h.location)} target="_blank" rel="noreferrer" className="flex min-h-11 items-center gap-1.5 text-sm font-bold">
+          <MapPinIcon size={14} /> Check the pin on a map
+        </a>
       ) : null}
       <p className="text-xs text-subtle">
         We’ll call the number above to confirm.{' '}

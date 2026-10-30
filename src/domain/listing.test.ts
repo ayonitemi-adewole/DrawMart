@@ -52,7 +52,7 @@ describe('validateListingTerms', () => {
 
 describe('validateHandover', () => {
   const today = '2026-10-28'
-  const ok = { address: '12 Allen Avenue, Ikeja', contactPhone: '0803 123 4567', date: '2026-10-30', slot: 'morning' as const }
+  const ok = { address: '12 Allen Avenue, Ikeja', location: { lat: 6.6, lng: 3.35 }, contactPhone: '0803 123 4567', date: '2026-10-30', slot: 'morning' as const }
 
   it('accepts a complete booking', () => {
     expect(validateHandover(ok, today)).toEqual([])
@@ -60,6 +60,8 @@ describe('validateHandover', () => {
   it('flags a missing address, bad phone and out-of-range dates', () => {
     expect(validateHandover({ ...ok, address: 'Ikeja' }, today)).toContain('address_required')
     expect(validateHandover({ ...ok, contactPhone: '12345' }, today)).toContain('phone_invalid')
+    expect(validateHandover({ ...ok, location: null }, today)).toContain('location_required')
+    expect(validateHandover({ ...ok, location: { lat: 9.06, lng: 7.49 } }, today)).toContain('outside_service_area')
     expect(validateHandover({ ...ok, date: today }, today)).toContain('date_out_of_range')
     expect(validateHandover({ ...ok, date: '2026-11-20' }, today)).toContain('date_out_of_range')
   })

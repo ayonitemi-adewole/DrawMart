@@ -21,8 +21,8 @@ describe('fixed-price sales', () => {
   })
 
   it('validates delivery details', () => {
-    expect(validateDelivery({ address: '4 Admiralty Way, Lekki', contactPhone: '0803 123 4567' })).toEqual([])
-    expect(validateDelivery({ address: 'Lekki', contactPhone: '123' })).toEqual(['address_required', 'phone_invalid'])
+    expect(validateDelivery({ address: '4 Admiralty Way, Lekki', location: { lat: 6.6, lng: 3.35 }, contactPhone: '0803 123 4567' })).toEqual([])
+    expect(validateDelivery({ address: 'Lekki', location: null, contactPhone: '123' })).toEqual(['address_required', 'location_required', 'phone_invalid'])
   })
 
   it('checks the item is for sale and the wallet covers it, credit included', () => {

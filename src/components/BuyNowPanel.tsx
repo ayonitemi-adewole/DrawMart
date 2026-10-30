@@ -8,9 +8,10 @@ import { DELIVERY_ERROR_TEXT, ORDER_ERROR_TEXT, checkOrder, salePriceKobo, valid
 import { splitPayment } from '@/domain/rules'
 import type { Delivery } from '@/domain/types'
 import { ChatIcon, CheckCircleIcon, LockIcon, MapPinIcon, PhoneIcon, ShieldIcon, TruckIcon } from './icons'
+import { AddressPicker } from './AddressPicker'
 import { Sheet } from './Sheet'
 import { useToast } from './toast'
-import { Button, Card, Field, Notice, buttonClass, cx, errorMessage, inputCls } from './ui'
+import { Button, Card, Field, Notice, buttonClass, errorMessage, inputCls } from './ui'
 
 const DELIVERY_KEY = 'drawmart:delivery'
 
@@ -18,11 +19,11 @@ const DELIVERY_KEY = 'drawmart:delivery'
 function savedDelivery(): Delivery {
   try {
     const d = JSON.parse(localStorage.getItem(DELIVERY_KEY) ?? 'null') as Delivery | null
-    if (d && typeof d.address === 'string' && typeof d.contactPhone === 'string') return d
+    if (d && typeof d.address === 'string' && typeof d.contactPhone === 'string') return { ...d, location: d.location ?? null }
   } catch {
     /* storage blocked */
   }
-  return { address: '', contactPhone: '' }
+  return { address: '', location: null, contactPhone: '' }
 }
 
 function saveDelivery(d: Delivery) {
@@ -96,21 +97,34 @@ export function BuyNowPanel({ listing: l }: { listing: ListingView }) {
   )
 }
 
+type CheckoutStep = 'where' | 'review'
+
+/** Two steps: where it's going, with a pin on the map; then review and pay. */
 function Checkout({ listing: l, price, onClose, onPlaced }: { listing: ListingView; price: number; onClose: () => void; onPlaced: (o: OrderView) => void }) {
   const wallet = useWallet()
   const buy = useBuyNow()
   const toast = useToast()
   const [delivery, setDelivery] = useState(savedDelivery)
-  const [showErrors, setShowErrors] = useState(false)
   const problems = validateDelivery(delivery)
+  // Repeat buyers land on the review, with their last details ready to change.
+  const [step, setStep] = useState<CheckoutStep>(problems.length ? 'where' : 'review')
+  const [showErrors, setShowErrors] = useState(false)
   const balance = wallet.data?.balance
   const pay = balance ? splitPayment(price, balance) : null
   const blocker = balance ? checkOrder(l, balance) : null
 
   function onSubmit(e: FormEvent) {
     e.preventDefault()
-    setShowErrors(true)
-    if (problems.length || blocker) return
+    if (step === 'where') {
+      setShowErrors(true)
+      if (!problems.length) setStep('review')
+      return
+    }
+    if (problems.length) {
+      setStep('where')
+      return
+    }
+    if (blocker) return
     buy.mutate(
       { listingId: l.id, delivery },
       {
@@ -129,69 +143,95 @@ function Checkout({ listing: l, price, onClose, onPlaced }: { listing: ListingVi
     <Sheet open onClose={() => !buy.isPending && onClose()} title="Checkout">
       <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
         <div className="flex flex-col gap-1 pr-10">
-          <span className="text-xs font-extrabold tracking-[0.14em] text-brand uppercase">Checkout</span>
-          <h2 className="font-display text-2xl leading-tight font-extrabold">{l.title}</h2>
-          <span className="text-sm text-muted">From {l.merchant.name}</span>
+          <span className="text-xs font-extrabold tracking-[0.14em] text-brand uppercase">Checkout · step {step === 'where' ? 1 : 2} of 2</span>
+          <h2 className="font-display text-2xl leading-tight font-extrabold">{step === 'where' ? 'Where should it go?' : 'Review and pay'}</h2>
+          <span className="text-sm text-muted">
+            {l.title} · from {l.merchant.name}
+          </span>
         </div>
 
-        <Field label={<span className="flex items-center gap-1.5"><MapPinIcon size={14} /> Delivery address</span>} htmlFor="delivery-address" error={err('address_required')} hint="Lagos only for now.">
-          <textarea
-            id="delivery-address"
-            rows={2}
-            autoComplete="street-address"
-            value={delivery.address}
-            onChange={(e) => setDelivery({ ...delivery, address: e.target.value })}
-            placeholder="e.g. 15 Awolowo Road, Ikoyi"
-            className={cx(inputCls, 'min-h-20 py-3')}
-          />
-        </Field>
-        <Field label={<span className="flex items-center gap-1.5"><PhoneIcon size={14} /> Phone for the rider</span>} htmlFor="delivery-phone" error={err('phone_invalid')}>
-          <input
-            id="delivery-phone"
-            type="tel"
-            inputMode="tel"
-            autoComplete="tel"
-            value={delivery.contactPhone}
-            onChange={(e) => setDelivery({ ...delivery, contactPhone: e.target.value })}
-            placeholder="0803 123 4567"
-            className={inputCls}
-          />
-        </Field>
-
-        <dl className="flex flex-col gap-1.5 rounded-2xl bg-ground p-4 text-sm">
-          <div className="flex justify-between">
-            <dt className="text-muted">Item</dt>
-            <dd className="font-bold tabular-nums">{formatNaira(price)}</dd>
-          </div>
-          <div className="flex justify-between">
-            <dt className="text-muted">Delivery in Lagos</dt>
-            <dd className="font-bold">Included</dd>
-          </div>
-          {pay && pay.fromCredit > 0 ? (
-            <div className="flex justify-between text-ticket-ink">
-              <dt>From store credit</dt>
-              <dd className="font-bold tabular-nums">−{formatNaira(pay.fromCredit)}</dd>
+        {step === 'where' ? (
+          <>
+            <AddressPicker
+              id="delivery-address"
+              label="Delivery address"
+              hint="Add your flat, gate colour or a landmark to help the rider. Lagos only for now."
+              placeholder="e.g. 15 Awolowo Road, Ikoyi"
+              address={delivery.address}
+              onAddress={(address) => setDelivery((d) => ({ ...d, address }))}
+              location={delivery.location}
+              onLocation={(location) => setDelivery((d) => ({ ...d, location }))}
+              addressError={err('address_required')}
+              showPinError={showErrors}
+            />
+            <Field label={<span className="flex items-center gap-1.5"><PhoneIcon size={14} /> Phone for the rider</span>} htmlFor="delivery-phone" error={err('phone_invalid')}>
+              <input
+                id="delivery-phone"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                value={delivery.contactPhone}
+                onChange={(e) => setDelivery({ ...delivery, contactPhone: e.target.value })}
+                placeholder="0803 123 4567"
+                className={inputCls}
+              />
+            </Field>
+            <Button type="submit" size="lg">
+              Continue to review
+            </Button>
+          </>
+        ) : (
+          <>
+            <div className="flex items-start gap-3 rounded-2xl border border-line p-4 text-sm">
+              <MapPinIcon size={18} className="mt-0.5 shrink-0 text-brand" />
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <strong>Delivering to</strong>
+                <span className="text-muted">{delivery.address.trim()}</span>
+                <span className="text-xs text-subtle">
+                  Pinned on the map · rider calls {delivery.contactPhone.trim()}
+                </span>
+              </div>
+              <Button type="button" variant="ghost" size="sm" className="min-h-11 shrink-0" disabled={buy.isPending} onClick={() => setStep('where')}>
+                Change
+              </Button>
             </div>
-          ) : null}
-          <div className="mt-1 flex justify-between border-t border-line pt-2">
-            <dt className="font-bold">From wallet cash</dt>
-            <dd className="font-extrabold tabular-nums">{formatNaira(pay ? pay.fromCash : price)}</dd>
-          </div>
-        </dl>
 
-        {blocker ? (
-          <Notice tone="hot" action={blocker === 'insufficient_funds' ? <Link to="/wallet">Top up</Link> : undefined}>
-            {ORDER_ERROR_TEXT[blocker]}
-          </Notice>
-        ) : null}
+            <dl className="flex flex-col gap-1.5 rounded-2xl bg-ground p-4 text-sm">
+              <div className="flex justify-between">
+                <dt className="text-muted">Item</dt>
+                <dd className="font-bold tabular-nums">{formatNaira(price)}</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-muted">Delivery in Lagos</dt>
+                <dd className="font-bold">Included</dd>
+              </div>
+              {pay && pay.fromCredit > 0 ? (
+                <div className="flex justify-between text-ticket-ink">
+                  <dt>From store credit</dt>
+                  <dd className="font-bold tabular-nums">−{formatNaira(pay.fromCredit)}</dd>
+                </div>
+              ) : null}
+              <div className="mt-1 flex justify-between border-t border-line pt-2">
+                <dt className="font-bold">From wallet cash</dt>
+                <dd className="font-extrabold tabular-nums">{formatNaira(pay ? pay.fromCash : price)}</dd>
+              </div>
+            </dl>
 
-        <Button type="submit" size="lg" loading={buy.isPending} disabled={!balance || !!blocker}>
-          Pay {formatNaira(price)}
-        </Button>
-        <p className="flex items-start gap-2 text-xs text-subtle">
-          <ShieldIcon size={14} className="mt-px shrink-0 text-brand" />
-          Your address and phone go only to {l.merchant.name} for this delivery. The store is paid once you confirm it arrived.
-        </p>
+            {blocker ? (
+              <Notice tone="hot" action={blocker === 'insufficient_funds' ? <Link to="/wallet">Top up</Link> : undefined}>
+                {ORDER_ERROR_TEXT[blocker]}
+              </Notice>
+            ) : null}
+
+            <Button type="submit" size="lg" loading={buy.isPending} disabled={!balance || !!blocker}>
+              Pay {formatNaira(price)}
+            </Button>
+            <p className="flex items-start gap-2 text-xs text-subtle">
+              <ShieldIcon size={14} className="mt-px shrink-0 text-brand" />
+              Your address, pin and phone go only to {l.merchant.name} for this delivery. The store is paid once you confirm it arrived.
+            </p>
+          </>
+        )}
       </form>
     </Sheet>
   )

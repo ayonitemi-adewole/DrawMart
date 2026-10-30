@@ -10,7 +10,7 @@ const make = (now = () => Date.now()) => createMockApi({ store: memoryStore(), l
 const newListing = (patch: Partial<NewListingInput> = {}): NewListingInput => ({
   title: 'Blender', description: '', category: 'Home', priceKobo: k(60_000), ticketPriceKobo: k(500),
   feeMode: 'seller', durationDays: 7, unsoldPolicy: 'refund',
-  handover: { address: '12 Allen Avenue, Ikeja', contactPhone: '0803 123 4567', date: addDays(localDate(new Date()), 2), slot: 'morning' },
+  handover: { address: '12 Allen Avenue, Ikeja', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567', date: addDays(localDate(new Date()), 2), slot: 'morning' },
   ...patch,
 })
 
@@ -165,7 +165,7 @@ describe('mock api', () => {
     await bad({ ticketPriceKobo: k(50) })
     await bad({ durationDays: 90 })
     await bad({ unsoldPolicy: 'convert_to_sale' })
-    await bad({ handover: { address: '', contactPhone: '123', date: '2020-01-01', slot: 'morning' } })
+    await bad({ handover: { address: '', location: null, contactPhone: '123', date: '2020-01-01', slot: 'morning' } })
     await expect(api.createListing(newListing({ durationDays: 21, unsoldPolicy: 'convert_to_sale', fallbackPriceKobo: k(65_000) }))).resolves.toMatchObject({
       durationDays: 21,
       fallbackPriceKobo: k(65_000),
@@ -198,8 +198,8 @@ describe('mock api', () => {
     await api.approveListing(p.id)
     expect((await api.getListing(p.id)).status).toBe('for_sale')
 
-    const delivery = { address: '15 Awolowo Road, Ikoyi', contactPhone: '0803 123 4567' }
-    await expect(api.buyNow(p.id, { address: 'Ikoyi', contactPhone: '1' })).rejects.toThrow(/full delivery address/)
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    await expect(api.buyNow(p.id, { address: 'Ikoyi', location: null, contactPhone: '1' })).rejects.toThrow(/full delivery address/)
     const before = (await api.getWallet()).balance.cashKobo
     const order = await api.buyNow(p.id, delivery)
     expect(order).toMatchObject({ status: 'paid', priceKobo: k(20_000), feeKobo: k(1_500), // 7.5% under ₦50,000
@@ -218,7 +218,7 @@ describe('mock api', () => {
   it('needs enough in the wallet to buy now', async () => {
     const api = make()
     const [mac] = (await api.listListings({ status: ['for_sale'] })).filter((l) => l.kind === 'product' && l.title.startsWith('MacBook'))
-    await expect(api.buyNow(mac.id, { address: '15 Awolowo Road, Ikoyi', contactPhone: '0803 123 4567' })).rejects.toMatchObject({ code: 'insufficient_funds' })
+    await expect(api.buyNow(mac.id, { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' })).rejects.toMatchObject({ code: 'insufficient_funds' })
   })
 
   it('verifies individual sellers, who sell products but never raffles', async () => {
@@ -246,7 +246,7 @@ describe('mock api', () => {
     const p = await api.createProduct({ title: 'PS5', description: '', category: 'Electronics', priceKobo: k(15_000) })
     expect((await api.listMerchantListings()).map((l) => l.id)).toEqual([p.id])
     await api.approveListing(p.id)
-    await expect(api.buyNow(p.id, { address: '12 Herbert Macaulay Way, Yaba', contactPhone: '0803 123 4567' })).rejects.toThrow(/your own item/)
+    await expect(api.buyNow(p.id, { address: '12 Herbert Macaulay Way, Yaba', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' })).rejects.toThrow(/your own item/)
   })
 
   it('lets buyers and sellers chat about products, with unread counts and opt-in calls', async () => {
