@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
+import { ProductId } from "@/components/ProductId";
 import {
   useBuyTickets,
   useListing,
@@ -128,6 +129,7 @@ function ProductDetail({ listing: l }: { listing: ListingView }) {
             <h1 className="font-display text-3xl leading-tight font-extrabold tracking-tight md:text-4xl">
               {l.title}
             </h1>
+            <ProductId code={l.productCode} copy />
             <div className="flex items-center gap-3">
               <span className="flex size-10 items-center justify-center rounded-xl bg-brand-soft font-display font-extrabold text-brand-ink">
                 {l.merchant.name.charAt(0)}
@@ -256,6 +258,7 @@ function ListingDetail({ listing: l }: { listing: ListingView }) {
             <h1 className="font-display text-3xl leading-tight font-extrabold tracking-tight md:text-4xl">
               {l.title}
             </h1>
+            <ProductId code={l.productCode} copy />
             <div className="flex items-center gap-3">
               <span className="flex size-10 items-center justify-center rounded-xl bg-brand-soft font-display font-extrabold text-brand-ink">
                 {l.merchant.name.charAt(0)}
@@ -626,7 +629,7 @@ function InfoTabs({ listing: l }: { listing: ListingView }) {
             </li>
             <li className="flex gap-3">
               <ShieldIcon size={20} className="shrink-0 text-brand" /> The store
-              is only paid after the winner confirms delivery.
+              is only paid after it’s delivered to the winner.
             </li>
             <li className="flex gap-3">
               <NairaIcon size={20} className="shrink-0 text-brand" /> Everyone

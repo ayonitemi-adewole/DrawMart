@@ -2,9 +2,11 @@ import { useState, type FormEvent } from 'react'
 import { useBoostStatus, useBoosts, useSetBoostSettings } from '@/api/hooks'
 import type { BoostSettings, BoostView } from '@/api/types'
 import { TrendingUpIcon, UsersIcon } from '@/components/icons'
+import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
 import { useToast } from '@/components/toast'
 import { Badge, Button, Card, EmptyState, ErrorState, Field, PageTitle, ProgressBar, Skeleton, errorMessage, inputCls } from '@/components/ui'
 import { formatNaira } from '@/domain/money'
+import { matchesProductSearch } from '@/domain/productCode'
 import { dateTime } from '@/lib/time'
 
 /** /admin/boosts: when paid promotion unlocks, how many run at once, and every boost. */
@@ -102,27 +104,37 @@ const STATUS: Record<BoostView['status'], string> = { pending: 'Awaiting payment
 
 function BoostList() {
   const q = useBoosts()
+  const [search, setSearch] = useState('')
   const now = new Date().toISOString()
   if (q.isPending) return <Skeleton className="h-40" />
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />
   if (q.data.length === 0) return <EmptyState icon={TrendingUpIcon} title="No boosts yet" body="Paid boosts will show up here." />
+  const found = q.data.filter((b) => matchesProductSearch(search, b.productCode, b.listingTitle, b.merchantName))
   return (
-    <Card className="divide-y divide-line overflow-hidden">
-      {q.data.map((b) => {
-        const running = b.status === 'paid' && !!b.endsAt && b.endsAt > now
-        return (
-          <div key={b.id} className="flex flex-wrap items-center gap-3 p-4 text-sm">
-            <div className="flex min-w-0 flex-1 flex-col">
-              <strong className="truncate">{b.listingTitle}</strong>
-              <span className="text-xs text-subtle">
-                {b.merchantName} · {b.days} days · {formatNaira(b.priceKobo)}
-                {b.endsAt ? ` · ${running ? 'until' : 'ended'} ${dateTime(b.endsAt)}` : ''}
-              </span>
-            </div>
-            <Badge tone={running ? 'ticket' : b.status === 'failed' ? 'hot' : 'neutral'}>{running ? 'Running' : b.status === 'paid' ? 'Finished' : STATUS[b.status]}</Badge>
-          </div>
-        )
-      })}
-    </Card>
+    <div className="flex flex-col gap-4">
+      <ProductSearch value={search} onChange={setSearch} placeholder="Search by product ID, name or seller" />
+      {found.length ? (
+        <Card className="divide-y divide-line overflow-hidden">
+          {found.map((b) => {
+            const running = b.status === 'paid' && !!b.endsAt && b.endsAt > now
+            return (
+              <div key={b.id} className="flex flex-wrap items-center gap-3 p-4 text-sm">
+                <div className="flex min-w-0 flex-1 flex-col">
+                  <strong className="truncate">{b.listingTitle}</strong>
+                  <ProductId code={b.productCode} copy />
+                  <span className="text-xs text-subtle">
+                    {b.merchantName} · {b.days} days · {formatNaira(b.priceKobo)}
+                    {b.endsAt ? ` · ${running ? 'until' : 'ended'} ${dateTime(b.endsAt)}` : ''}
+                  </span>
+                </div>
+                <Badge tone={running ? 'ticket' : b.status === 'failed' ? 'hot' : 'neutral'}>{running ? 'Running' : b.status === 'paid' ? 'Finished' : STATUS[b.status]}</Badge>
+              </div>
+            )
+          })}
+        </Card>
+      ) : (
+        <NoProductMatch query={search} />
+      )}
+    </div>
   )
 }

@@ -68,6 +68,7 @@ export function ResultPage() {
     <Result
       listingId={l.id}
       title={l.title}
+      productCode={l.productCode}
       category={l.category}
       image={l.images[0]}
       priceKobo={l.priceKobo}
@@ -131,6 +132,7 @@ function useReveal(id: string, ticketCount: number, winner: number, announced: b
 function Result({
   listingId,
   title,
+  productCode,
   category,
   image,
   priceKobo,
@@ -138,6 +140,7 @@ function Result({
 }: {
   listingId: string;
   title: string;
+  productCode: string;
   category: Category;
   image?: string;
   priceKobo: number;
@@ -216,6 +219,10 @@ function Result({
             <h1 className="font-display text-2xl leading-tight font-extrabold sm:text-3xl">
               {r.iWon ? `You won ${title}!` : title}
             </h1>
+            <span className="font-mono text-xs font-semibold opacity-80">
+              <span className="sr-only">Product ID </span>
+              {productCode}
+            </span>
             <p className="max-w-md text-sm leading-relaxed opacity-90">
               {r.iWon
                 ? "Add it to your cart to come with anything else you buy, or arrange it now. You can have it delivered or collect it."

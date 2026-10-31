@@ -1,4 +1,5 @@
 import { Link } from 'react-router'
+import { ProductId } from '@/components/ProductId'
 import { useCart, useRemoveFromCart } from '@/api/hooks'
 import { CartIcon, TrophyIcon, XIcon } from '@/components/icons'
 import { useToast } from '@/components/toast'
@@ -45,6 +46,7 @@ export function CartPage() {
                       {l.title}
                     </Link>
                     <span className="truncate text-xs text-subtle">{l.merchant.name}</span>
+                    <ProductId code={l.productCode} />
                     {prize ? (
                       <Badge tone="ticket" className="w-fit">
                         <TrophyIcon size={12} /> You won this · free

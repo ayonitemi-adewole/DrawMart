@@ -9,6 +9,7 @@ import {
   ShieldIcon,
   StoreIcon,
   TicketIcon,
+  TruckIcon,
   type IconComponent,
 } from "@/components/icons";
 import {
@@ -30,12 +31,14 @@ const ROLE_BUTTON: Record<AccountRole, { label: string; icon: IconComponent }> =
     buyer: { label: "Buyer", icon: TicketIcon },
     store: { label: "Store", icon: StoreIcon },
     admin: { label: "Admin", icon: ShieldIcon },
+    delivery: { label: "Delivery", icon: TruckIcon },
   };
 
 const ROLE_GROUP: Record<AccountRole, string> = {
   buyer: "Buyers (buyer app)",
   store: "Stores (store app)",
   admin: "Admin (admin app)",
+  delivery: "Delivery (delivery app)",
 };
 
 const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
@@ -94,7 +97,7 @@ export function SignInPage() {
           Sign in to DrawMart
         </h1>
         <p className="text-sm text-muted">
-          One sign-in for buyers, stores and the DrawMart team. We’ll open the
+          One sign-in for buyers, stores, riders and the DrawMart team. We’ll open the
           right app for your account.
           {method === "link"
             ? " No password needed: we’ll email you a link, and set up a buyer account the first time."
@@ -187,7 +190,7 @@ export function SignInPage() {
                 : "Data stays in this browser."}
             </span>
           </div>
-          {(["buyer", "store", "admin"] as const).map((role) => {
+          {(["buyer", "store", "delivery", "admin"] as const).map((role) => {
             const accounts = demoAccounts.filter((a) => a.role === role);
             if (!accounts.length) return null;
             const b = ROLE_BUTTON[role];

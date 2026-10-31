@@ -14,7 +14,7 @@ export interface ListingEconomics {
   buyerTicketKobo: Kobo
   /** Total buyers pay when every ticket sells. */
   poolKobo: Kobo
-  /** What the merchant receives after the winner confirms delivery. */
+  /** What the merchant receives after it's delivered to the winner. */
   sellerPayoutKobo: Kobo
   /** What the platform keeps (fee plus any rounding left in the pool). */
   platformKobo: Kobo

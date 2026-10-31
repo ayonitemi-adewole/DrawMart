@@ -1,10 +1,12 @@
 import { Link } from 'react-router'
-import { useConfirmOrder, useDispatchOrder } from '@/api/hooks'
+import { useDispatchOrder } from '@/api/hooks'
 import type { OrderView } from '@/api/types'
 import { directionsUrl } from '@/domain/location'
 import { formatNaira } from '@/domain/money'
 import { dateTime } from '@/lib/time'
-import { CheckCircleIcon, MapPinIcon, PhoneIcon, StoreIcon, TruckIcon } from './icons'
+import { ProductId } from './ProductId'
+import { DeliveryPin } from './DeliveryPin'
+import { MapPinIcon, PhoneIcon, StoreIcon, TruckIcon } from './icons'
 import { useToast } from './toast'
 import { Badge, Button, Card, ProductImage, errorMessage, type Tone } from './ui'
 
@@ -21,11 +23,11 @@ function statusOf(o: OrderView): { label: string; tone: Tone } {
 }
 
 /**
- * One order. Buyers confirm they have it; whoever sends it (the store, or an
- * admin for won items in escrow) sees the details and marks it as sent.
+ * One order. Whoever sends it (the store, or an admin for won items in escrow)
+ * sees the details and readies it for a rider. Buyers see the PIN they give the
+ * rider, the only way it can be marked delivered.
  */
 export function OrderCard({ order: o, audience }: { order: OrderView; audience: 'buyer' | 'store' | 'admin' }) {
-  const confirm = useConfirmOrder()
   const dispatch = useDispatchOrder()
   const toast = useToast()
   const s = statusOf(o)
@@ -34,7 +36,7 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
   const onError = (e: unknown) => toast(errorMessage(e), 'error')
 
   return (
-    <Card className="flex animate-fade-up flex-col gap-4 p-4 sm:p-5">
+    <Card className="flex min-w-0 animate-fade-up flex-col gap-4 p-4 sm:p-5">
       <div className="flex gap-4">
         <ProductImage category={o.category} src={o.listingImage ?? undefined} alt={o.listingTitle} size="sm" className="size-18 shrink-0" />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -45,6 +47,7 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
           ) : (
             <strong className="truncate">{o.listingTitle}</strong>
           )}
+          <ProductId code={o.productCode} copy />
           <span className="text-xs text-subtle">
             {audience === 'buyer' ? `${o.merchantName} · ` : ''}Ordered {dateTime(o.createdAt)}
           </span>
@@ -85,19 +88,15 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
         ) : null}
         {audience === 'store' && !o.isPrize ? (
           <span className="text-xs text-subtle">
-            Your payout {formatNaira(o.priceKobo - o.feeKobo)} after the {formatNaira(o.feeKobo)} platform fee, once the buyer confirms they have it.
+            Your payout {formatNaira(o.priceKobo - o.feeKobo)} after the {formatNaira(o.feeKobo)} platform fee, once it’s delivered.
           </span>
         ) : null}
       </div>
 
-      {audience === 'buyer' && o.status !== 'delivered' ? (
-        <Button variant={o.status === 'dispatched' ? 'primary' : 'outline'} loading={confirm.isPending} onClick={() => confirm.mutate(o.id, { onSuccess: () => toast('Thanks! Confirmed.'), onError })}>
-          <CheckCircleIcon size={16} /> {pickup ? 'I’ve collected it' : 'I’ve received it'}
-        </Button>
-      ) : null}
+      {audience === 'buyer' && o.deliveryPin ? <DeliveryPin pin={o.deliveryPin} pickup={pickup} /> : null}
       {sender && o.status === 'paid' ? (
-        <Button loading={dispatch.isPending} onClick={() => dispatch.mutate(o.id, { onSuccess: () => toast('Marked as sent. The buyer will confirm once they have it.'), onError })}>
-          <TruckIcon size={16} /> {pickup ? 'Mark as sent to the pickup location' : 'Mark as sent'}
+        <Button loading={dispatch.isPending} onClick={() => dispatch.mutate(o.id, { onSuccess: () => toast('A rider can now take it. They’ll confirm it with the buyer’s PIN.'), onError })}>
+          <TruckIcon size={16} /> {pickup ? 'Ready to go to the pickup location' : 'Ready for a rider'}
         </Button>
       ) : null}
       {o.status === 'delivered' && o.deliveredAt ? <span className="text-xs text-subtle">{pickup ? 'Collected' : 'Delivered'} {dateTime(o.deliveredAt)}</span> : null}

@@ -81,6 +81,8 @@ export interface Merchant {
 
 export interface Listing {
   id: string
+  /** The ID people see, type and search for, e.g. PRD-7K3Q9X. Never changes. See domain/productCode.ts. */
+  productCode: string
   kind: ListingKind
   merchantId: string
   title: string
@@ -158,7 +160,7 @@ export interface LedgerEntry {
   createdAt: ISODate
 }
 
-/** paid → the store dispatches it → the buyer confirms it arrived. */
+/** paid → the seller has it ready for a rider → the rider confirms it with the buyer's PIN. */
 export type OrderStatus = 'paid' | 'dispatched' | 'delivered'
 
 /** Where the buyer wants a fixed-price item sent. Seen only by the buyer, the store and admins. */

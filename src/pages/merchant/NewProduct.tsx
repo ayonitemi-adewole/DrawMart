@@ -1,5 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { api } from '@/api'
+import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
+import { matchesProductSearch } from '@/domain/productCode'
 import { useCreateProduct, useMerchant, useMerchantOrders } from '@/api/hooks'
 import type { ListingView } from '@/api/types'
 import { CheckIcon, ClipboardIcon, ShieldIcon, StoreIcon, TicketIcon, TruckIcon, type IconComponent } from '@/components/icons'
@@ -170,7 +172,7 @@ export function NewProduct({ onBack, onDone }: { onBack: () => void; onDone: () 
           </dl>
           <p className="flex gap-2 text-xs leading-relaxed text-on-brand-muted">
             <TruckIcon size={16} className="shrink-0 text-ticket" />
-            Paid once the buyer confirms delivery.
+            Paid once it’s delivered to the buyer.
           </p>
         </div>
         <div className="flex flex-col gap-2">
@@ -203,6 +205,7 @@ function ProductSent({ listing: l, onDone }: { listing: ListingView; onDone: () 
         <p className="text-sm text-muted">
           {l.title} · {formatNaira(l.priceKobo)}
         </p>
+        <ProductId code={l.productCode} copy className="mx-auto" />
       </div>
       <p className="text-xs text-subtle">An admin checks the listing, usually within a day. Once approved it goes on sale straight away. No pickup or caution fee needed.</p>
       {api.testMode ? <span className="text-xs text-subtle">Test mode: approve it yourself from an admin account.</span> : null}
@@ -216,23 +219,30 @@ function ProductSent({ listing: l, onDone }: { listing: ListingView; onDone: () 
 /** Orders for this store's fixed-price items. */
 export function MerchantOrders() {
   const q = useMerchantOrders()
+  const [search, setSearch] = useState('')
   if (q.isPending) return <Skeleton className="h-60" />
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />
   if (q.data.length === 0)
     return <EmptyState icon={TruckIcon} title="No orders yet" body="When a buyer buys one of your fixed-price items, it shows up here with their delivery address." />
   const toSend = q.data.filter((o) => o.status === 'paid')
+  const found = q.data.filter((o) => matchesProductSearch(search, o.productCode, o.listingTitle))
   return (
     <section className="flex flex-col gap-4">
       {toSend.length ? (
         <Notice tone="ticket" icon={TruckIcon}>
-          {toSend.length === 1 ? '1 order is' : `${toSend.length} orders are`} waiting to be sent. Mark each one as sent once it’s on its way.
+          {toSend.length === 1 ? '1 order is' : `${toSend.length} orders are`} waiting. Mark each one ready once a rider can collect it.
         </Notice>
       ) : null}
-      <div className="grid gap-3 md:grid-cols-2">
-        {q.data.map((o) => (
-          <OrderCard key={o.id} order={o} audience="store" />
-        ))}
-      </div>
+      <ProductSearch value={search} onChange={setSearch} />
+      {found.length ? (
+        <div className="grid gap-3 md:grid-cols-2">
+          {found.map((o) => (
+            <OrderCard key={o.id} order={o} audience="store" />
+          ))}
+        </div>
+      ) : (
+        <NoProductMatch query={search} />
+      )}
     </section>
   )
 }

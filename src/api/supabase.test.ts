@@ -25,7 +25,7 @@ describe('toApiError', () => {
 
 describe('toResultView', () => {
   const r = { listing_id: 'l1', commitment: 'c', seed: 's', closing_ref: 'P-1', winning_number: 4, drawn_at: '2026-10-02T00:00:00Z' }
-  const listing = { title: 'Phone', images: [], ticket_count: 200 }
+  const listing = { product_code: 'PRD-222222', title: 'Phone', images: [], ticket_count: 200 }
   const mine = (numbers: number[]) => ({ numbers: new Map([['l1', numbers]]), credits: new Map([['l1', 100]]) })
 
   it('works out "you won" from your own tickets', () => {

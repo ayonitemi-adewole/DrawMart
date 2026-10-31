@@ -38,7 +38,7 @@ export function SellPage() {
 const STEPS: { icon: IconComponent; title: string; body: string }[] = [
   { icon: IdCardIcon, title: 'Verify your ID', body: 'Your NIN, a photo of your ID and a selfie holding it. A DrawMart admin checks them, usually within a day.' },
   { icon: StoreIcon, title: 'List your items', body: 'Regular products at a fixed price. Each listing is reviewed before it goes on sale.' },
-  { icon: TruckIcon, title: 'Send it, get paid', body: 'When it sells, you get the buyer’s address. You’re paid once they confirm it arrived.' },
+  { icon: TruckIcon, title: 'Send it, get paid', body: 'When it sells, you get the buyer’s address. You’re paid once it’s delivered.' },
 ]
 
 function HowSellingWorks() {

@@ -5,7 +5,7 @@ import type { LedgerEntry, Listing, User } from './types'
 
 const user: User = { id: 'u1', displayName: 'Test', state: 'Lagos', weeklyLimitKobo: k(50_000), ageVerified: true, phone: null }
 const listing: Listing = {
-  id: 'l1', kind: 'raffle', merchantId: 'm1', title: 'Phone', description: '', category: 'Phones', images: [],
+  id: 'l1', productCode: 'PRD-222222', kind: 'raffle', merchantId: 'm1', title: 'Phone', description: '', category: 'Phones', images: [],
   priceKobo: k(1_000_000), ticketPriceKobo: k(5_000), buyerTicketPriceKobo: k(5_000),
   ticketCount: 200, ticketsSold: 190, feeMode: 'seller', feeBps: 1000, unsoldPolicy: 'refund', fallbackPriceKobo: null, durationDays: 7, extended: false,
   status: 'live', commitment: 'x',

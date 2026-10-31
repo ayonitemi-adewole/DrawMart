@@ -1,4 +1,6 @@
 import { useState, type ReactNode } from 'react'
+import { matchesProductSearch } from '@/domain/productCode'
+import { ProductId } from './ProductId'
 import { api } from '@/api'
 import { isRecentPending, useBoostInsights, useBoostStatus, useBoosts, useBuyBoost, useCheckDeposit } from '@/api/hooks'
 import type { BoostInsightsView, BoostView, DepositStatus, ListingView } from '@/api/types'
@@ -328,10 +330,10 @@ function Results({ data, running }: { data: BoostInsightsView; running: boolean 
 }
 
 /** Every boost this shop has paid for, newest first, with results. For the Insights page. */
-export function BoostHistory() {
+export function BoostHistory({ search = '' }: { search?: string }) {
   const q = useBoosts()
   const [open, setOpen] = useState<BoostView | null>(null)
-  const boosts = (q.data ?? []).filter((b) => b.status === 'paid' || (b.status === 'pending' && isRecentPending(b.createdAt)))
+  const boosts = (q.data ?? []).filter((b) => b.status === 'paid' || (b.status === 'pending' && isRecentPending(b.createdAt))).filter((b) => matchesProductSearch(search, b.productCode, b.listingTitle))
   if (!boosts.length) return null
   const now = Date.now()
   return (
@@ -346,6 +348,7 @@ export function BoostHistory() {
             <div key={b.id} className="flex flex-wrap items-center gap-3 p-4 text-sm">
               <div className="flex min-w-0 flex-1 flex-col">
                 <strong className="truncate">{b.listingTitle}</strong>
+                <ProductId code={b.productCode} copy />
                 <span className="text-xs text-subtle">
                   {b.days} days · {formatNaira(b.priceKobo)}
                   {b.endsAt ? ` · ${running ? 'until' : 'ended'} ${dateTime(b.endsAt)}` : ''}

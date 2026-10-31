@@ -24,6 +24,7 @@ export const keys = {
   savedPickup: ['saved-pickup'] as const,
   notifications: ['notifications'] as const,
   addresses: ['addresses'] as const,
+  deliveryJobs: ['delivery-jobs'] as const,
   cart: ['cart'] as const,
   pickupPoints: ['pickup-points'] as const,
   prizeOrders: ['prize-orders'] as const,
@@ -221,7 +222,8 @@ export function useBuyTickets() {
 
 export function useCheckout() {
   const invalidate = useInvalidateAll()
-  return useMutation({ mutationFn: (input: CheckoutInput) => api.checkout(input), onSettled: invalidate })
+  // Not awaited: the confirmation shows now, not after the item has refreshed as sold.
+  return useMutation({ mutationFn: (input: CheckoutInput) => api.checkout(input), onSettled: () => void invalidate() })
 }
 
 export function useAddToCart() {
@@ -234,9 +236,16 @@ export function useRemoveFromCart() {
   return useMutation({ mutationFn: (listingId: string) => api.removeFromCart(listingId), onSettled: () => qc.invalidateQueries({ queryKey: keys.cart }) })
 }
 
-export function useConfirmOrder() {
+// Delivery accounts. No push channel yet, so the pool polls.
+export const useDeliveryJobs = () => useQuery({ queryKey: keys.deliveryJobs, queryFn: () => api.listDeliveryJobs(), enabled: useIs('delivery'), refetchInterval: 30_000 })
+
+export function useDeliveryActions() {
   const invalidate = useInvalidateAll()
-  return useMutation({ mutationFn: (orderId: string) => api.confirmOrder(orderId), onSettled: invalidate })
+  return {
+    take: useMutation({ mutationFn: (orderId: string) => api.takeDelivery(orderId), onSettled: invalidate }),
+    release: useMutation({ mutationFn: (orderId: string) => api.releaseDelivery(orderId), onSettled: invalidate }),
+    confirm: useMutation({ mutationFn: ({ id, pin }: { id: string; pin: string }) => api.confirmDelivery(id, pin), onSettled: invalidate }),
+  }
 }
 
 export function useDispatchOrder() {

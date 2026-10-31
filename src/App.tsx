@@ -13,6 +13,8 @@ import { AuthLayout } from '@/layouts/AuthLayout'
 import { BackOfficeLayout } from '@/layouts/BackOfficeLayout'
 import { BuyerLayout } from '@/layouts/BuyerLayout'
 import { AccountPage } from '@/pages/AccountPage'
+import { DeliveryJobPage, DeliveryPage } from '@/pages/delivery/DeliveryPage'
+import { AdminProductsPage } from '@/pages/admin/AdminProductsPage'
 import { AdminBoostsPage } from '@/pages/admin/AdminBoostsPage'
 import { AdminDrawsPage } from '@/pages/admin/AdminDrawsPage'
 import { AdminPage } from '@/pages/admin/AdminPage'
@@ -164,11 +166,21 @@ const router = createBrowserRouter([
     errorElement: <RouteError />,
     children: [
       { index: true, element: <AdminPage /> },
+      { path: 'products', element: <AdminProductsPage /> },
       { path: 'draws', element: <AdminDrawsPage /> },
       { path: 'boosts', element: <AdminBoostsPage /> },
       { path: 'prizes', element: <AdminPrizesPage /> },
       { path: 'sellers', element: <AdminSellersPage /> },
       { path: '*', element: <NotFound /> },
+    ],
+  },
+  {
+    path: 'delivery',
+    element: <RequireSignIn role="delivery"><BackOfficeLayout app="delivery" /></RequireSignIn>,
+    errorElement: <RouteError />,
+    children: [
+      { index: true, element: <DeliveryPage /> },
+      { path: ':id', element: <DeliveryJobPage /> },
     ],
   },
   // Old address of the store app.

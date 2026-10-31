@@ -1,5 +1,7 @@
 import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router";
+import { useSearchParam } from "@/lib/useSearchParam";
+import { listingMatchesSearch } from "@/domain/productCode";
 import { useListings } from "@/api/hooks";
 import type { ListingView } from "@/api/types";
 import { AllCategoriesIcon, CATEGORY_STYLE } from "@/components/category";
@@ -60,6 +62,7 @@ export function HomePage() {
     ? (raw as Category)
     : undefined;
   const query = params.get("q") ?? "";
+  const search = useSearchParam();
   const sort = (
     SORTS.some((s) => s.value === params.get("sort"))
       ? params.get("sort")
@@ -82,18 +85,9 @@ export function HomePage() {
 
   const visible = useMemo(() => {
     if (!listings.data) return [];
-    const q = query.trim().toLowerCase();
-    const filtered = q
-      ? listings.data.filter((l) =>
-          [
-            l.title,
-            l.description,
-            l.merchant.name,
-            l.merchant.area,
-            l.category,
-          ].some((s) => s.toLowerCase().includes(q)),
-        )
-      : listings.data;
+    const filtered = listings.data.filter((l) =>
+      listingMatchesSearch(l, query),
+    );
     // Paid boosts sit on top whatever the sort, a few at a time.
     const { sponsored, rest } = withSponsoredFirst(
       sortListings(filtered, sort),
@@ -103,18 +97,18 @@ export function HomePage() {
   }, [listings.data, query, sort]);
   const shop = useMemo(() => {
     const { sponsored, rest } = withSponsoredFirst(
-      forSale.data ?? [],
+      (forSale.data ?? []).filter((l) => listingMatchesSearch(l, query)),
       Date.now(),
     );
     return [...sponsored, ...rest];
-  }, [forSale.data]);
+  }, [forSale.data, query]);
 
   return (
     <div className="flex flex-col gap-8">
       <Hero
         listings={all.data}
-        query={query}
-        onQuery={(q) => update({ q: q || undefined })}
+        query={search.text}
+        onQuery={search.change}
       />
 
       {!category && !query ? <SponsoredCarousel /> : null}
@@ -222,13 +216,17 @@ export function HomePage() {
             error={listings.error}
             onRetry={() => listings.refetch()}
           />
+        ) : visible.length === 0 && query && shop.length ? (
+          <p className="text-sm text-muted">
+            No live draws match that, but there’s something to buy below.
+          </p>
         ) : visible.length === 0 ? (
           <EmptyState
             icon={SearchIcon}
             title={query ? "No matches" : "Nothing live here yet"}
             body={
               query
-                ? `We couldn’t find a live draw matching “${query}”.`
+                ? `We couldn’t find anything matching “${query}”.`
                 : `No live draws in ${category ?? "this category"} right now. Check back soon.`
             }
             action={
@@ -260,7 +258,7 @@ export function HomePage() {
         )}
       </section>
 
-      {forSale.data?.length && !query ? (
+      {shop.length ? (
         <section
           className="flex flex-col gap-4"
           aria-labelledby="buy-now-heading"
@@ -282,11 +280,14 @@ export function HomePage() {
               without selling out. Pay from your wallet; the store delivers.
             </p>
           </div>
-          {category ? (
+          {category || query ? (
             <div className="flex flex-col gap-2">
-              <ListingRow listings={shop} label={`${category} to buy now`} />
+              <ListingRow
+                listings={shop}
+                label={category ? `${category} to buy now` : "Matching items"}
+              />
               <SeeAllLink
-                to={browseHref({ category, type: "buy" })}
+                to={browseHref({ category, q: query || undefined, type: "buy" })}
                 label={`See all ${shop.length} items`}
               />
             </div>
@@ -492,7 +493,7 @@ function Hero({
             className="relative max-w-md"
           >
             <label htmlFor="search" className="sr-only">
-              Search draws
+              Search products
             </label>
             <SearchIcon
               size={20}
@@ -503,7 +504,7 @@ function Hero({
               type="search"
               value={query}
               onChange={(e) => onQuery(e.target.value)}
-              placeholder="Search phones, TVs, cars…"
+              placeholder="Search items or a product ID"
               className="min-h-14 w-full rounded-2xl border-0 bg-surface pr-4 pl-12 text-base text-ink shadow-lift placeholder:text-subtle focus:ring-4 focus:ring-ticket/50 focus:outline-none"
             />
           </form>

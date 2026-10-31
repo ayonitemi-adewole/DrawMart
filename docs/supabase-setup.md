@@ -104,6 +104,11 @@ update public.profiles
 set role = 'store', merchant_id = '11111111-1111-4111-8111-000000000001'  -- Ikeja Partner Store from the seed
 where id = (select id from auth.users where email = 'you+store@example.com');
 
+-- Delivery app (/delivery): riders, drivers and pickup-counter staff
+update public.profiles
+set role = 'delivery', merchant_id = null
+where id = (select id from auth.users where email = 'you+rider@example.com');
+
 -- Admin app (/admin): review queue, live draws and demo controls
 update public.profiles
 set role = 'admin', merchant_id = null

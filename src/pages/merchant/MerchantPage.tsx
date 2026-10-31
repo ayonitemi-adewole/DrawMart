@@ -50,6 +50,8 @@ import { saleEconomics, salePriceKobo } from '@/domain/orders'
 import { RULES } from '@/domain/rules'
 import { type Category, type GeoPoint, type FeeMode, type TimeSlot, type UnsoldPolicy } from '@/domain/types'
 import { calendarDay, dateTime } from '@/lib/time'
+import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
+import { listingMatchesSearch } from '@/domain/productCode'
 import { ListingKindChooser, MerchantOrders, NewProduct } from './NewProduct'
 import { CategoryPicker, PhotoPicker, Section } from './parts'
 
@@ -85,8 +87,8 @@ export function MerchantPage() {
   const active = data.filter(isActive)
   const review = data.filter((l) => l.status === 'pending_review')
   const toSend = orders.data?.filter((o) => o.status === 'paid').length ?? 0
-  // Drawn raffles pay out the price plus the caution fee back once the winner confirms delivery;
-  // orders pay out the price less the fee once the buyer confirms.
+  // Drawn raffles pay out the price plus the caution fee back once it's delivered to the winner;
+  // orders pay out the price less the fee once it's delivered.
   const awaiting =
     data
       .filter((l) => l.status === 'drawn' || l.status === 'sold_out')
@@ -969,7 +971,10 @@ function SentForReview({ listings, onDone }: { listings: ListingView[]; onDone: 
           {listings.map((x) => (
             <li key={x.id} className="flex items-center gap-2">
               <CheckIcon size={14} className="shrink-0 text-brand" />
-              <span className="min-w-0 truncate font-semibold">{x.title}</span>
+              <span className="flex min-w-0 flex-col">
+                <span className="truncate font-semibold">{x.title}</span>
+                <ProductId code={x.productCode} />
+              </span>
             </li>
           ))}
         </ul>
@@ -1037,13 +1042,15 @@ type StatusFilter = 'all' | 'live' | 'pending_review' | 'done'
 export function MerchantListings({ onNew, emptyBody }: { onNew: () => void; emptyBody?: string }) {
   const q = useMerchantListings()
   const [filter, setFilter] = useState<StatusFilter>('all')
+  const [search, setSearch] = useState('')
   if (q.isPending) return <Skeleton className="h-60" />
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />
 
   const inFilter = (l: ListingView, f: StatusFilter) =>
     f === 'all' ? true : f === 'live' ? isActive(l) : f === 'pending_review' ? l.status === 'pending_review' : !isActive(l) && l.status !== 'pending_review'
-  const items = q.data.filter((l) => inFilter(l, filter))
-  const count = (f: StatusFilter) => q.data.filter((l) => inFilter(l, f)).length
+  const found = q.data.filter((l) => listingMatchesSearch(l, search))
+  const items = found.filter((l) => inFilter(l, filter))
+  const count = (f: StatusFilter) => found.filter((l) => inFilter(l, f)).length
 
   return (
     <section className="flex flex-col gap-4">
@@ -1054,14 +1061,17 @@ export function MerchantListings({ onNew, emptyBody }: { onNew: () => void; empt
           onChange={setFilter}
           size="sm"
           options={[
-            { value: 'all', label: 'All', count: q.data.length },
+            { value: 'all', label: 'All', count: found.length },
             { value: 'live', label: 'Live & on sale', count: count('live') },
             { value: 'pending_review', label: 'In review', count: count('pending_review') },
             { value: 'done', label: 'Finished', count: count('done') },
           ]}
         />
       </div>
-      {items.length === 0 ? (
+      {q.data.length ? <ProductSearch value={search} onChange={setSearch} /> : null}
+      {items.length === 0 && search.trim() ? (
+        <NoProductMatch query={search} />
+      ) : items.length === 0 ? (
         <EmptyState
           icon={TicketIcon}
           title="Nothing here"
@@ -1088,6 +1098,7 @@ export function MerchantListings({ onNew, emptyBody }: { onNew: () => void; empt
                       <strong className="leading-tight">{l.title}</strong>
                       <Badge tone={s.tone}>{s.label}</Badge>
                     </div>
+                    <ProductId code={l.productCode} copy />
                     <span className="text-xs text-subtle">
                       {formatNaira(l.buyerTicketPriceKobo)} / ticket · {l.ticketCount.toLocaleString('en-NG')} tickets
                     </span>
@@ -1147,6 +1158,7 @@ function ProductCard({ listing: l }: { listing: ListingView }) {
             <strong className="leading-tight">{l.title}</strong>
             <Badge tone={s.tone}>{s.label}</Badge>
           </div>
+          <ProductId code={l.productCode} copy />
           <span className="flex items-center gap-1 text-xs text-subtle">
             <StoreIcon size={12} /> Regular product · no draw
           </span>

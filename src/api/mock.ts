@@ -37,6 +37,8 @@ import {
   splitPayment,
   topUpError,
 } from '@/domain/rules'
+import { checkPin, isDeliveryPin, newDeliveryPin, type PinState } from '@/domain/delivery'
+import { newProductCode } from '@/domain/productCode'
 import { MAX_SAVED_ADDRESSES, SAVED_ADDRESS_ERROR_TEXT, sortAddresses, validateSavedAddress, type SavedAddress, type SavedAddressInput } from '@/domain/addresses'
 import { CART_ERROR_TEXT, CHECKOUT_ERROR_TEXT, cartError, checkoutTotalKobo, isCar, isWonPrize, lineAmountKobo, validateCheckout } from '@/domain/cart'
 import { ORDER_ERROR_TEXT, PRODUCT_ERROR_TEXT, saleEconomics, validateProduct } from '@/domain/orders'
@@ -54,6 +56,7 @@ import {
   type NewListingInput,
   type WalletView,
   type NewPickupInput,
+  type DeliveryJob,
   type NotificationView,
   type PickupItemInput,
   type SavedPickupView,
@@ -72,7 +75,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v17' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v19' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -82,6 +85,9 @@ const CROWD = 'u-crowd'
 const TOLU = 'u-tolu'
 const TOLU_SHOP = 'm-tolu'
 const DAY = 24 * 60 * 60 * 1000
+
+/** The PIN and who's carrying it stay out of the order everyone else sees. */
+type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState }
 
 interface Db {
   users: User[]
@@ -96,7 +102,7 @@ interface Db {
   ledger: LedgerEntry[]
   results: DrawResult[]
   pendingLimits: Record<string, { amountKobo: number; effectiveAt: string }>
-  orders: Order[]
+  orders: MockOrder[]
   /** Each buyer's saved delivery addresses, oldest first. */
   addresses: Record<string, SavedAddress[]>
   /** Listing ids in each buyer's cart, oldest first. */
@@ -115,7 +121,7 @@ interface Db {
   savedPickups: Record<string, SavedPickupView>
   /** One per visitor per listing per Lagos day. */
   views: { listingId: string; visitor: string; day: string }[]
-  boosts: (Omit<BoostView, 'listingTitle' | 'merchantName'> & { merchantId: string })[]
+  boosts: (Omit<BoostView, 'productCode' | 'listingTitle' | 'merchantName'> & { merchantId: string })[]
   boostSettings: BoostSettings
 }
 
@@ -427,7 +433,7 @@ const SEED_PRODUCTS: { merchantId: string; title: string; description: string; c
 
 function productListing(input: NewProductInput & { merchantId: string; status: ListingStatus }, at: number): Listing {
   return {
-    id: uid('L'), kind: 'product', merchantId: input.merchantId, title: input.title.trim(), description: input.description.trim(), category: input.category,
+    id: uid('L'), productCode: newProductCode(), kind: 'product', merchantId: input.merchantId, title: input.title.trim(), description: input.description.trim(), category: input.category,
     images: input.images ?? [], priceKobo: input.priceKobo, ticketPriceKobo: 0, buyerTicketPriceKobo: 0, ticketCount: 0, ticketsSold: 0,
     feeMode: 'seller', feeBps: platformFeeBps(input.priceKobo), unsoldPolicy: 'refund', fallbackPriceKobo: null, durationDays: 0, extended: false,
     status: input.status, handover: null, cautionFee: { amountKobo: 0, status: 'none' }, commitment: '', createdAt: iso(at), closesAt: iso(at), boostedUntil: null, soldOutAt: null, drawAt: null, pickupBatchId: null,
@@ -444,6 +450,7 @@ async function makeListing(s: SeedListing, now: number, seeds: Record<string, st
   const econ = computeListingEconomics({ priceKobo: nairaToKobo(s.price), ticketPriceKobo: nairaToKobo(s.ticket), feeBps, feeMode: 'seller' })
   return {
     id,
+    productCode: newProductCode(),
     kind: 'raffle',
     merchantId: s.merchantId,
     title: s.title,
@@ -720,7 +727,7 @@ function resultView(db: Db, r: DrawResult): DrawResultView {
   const l = db.listings.find((x) => x.id === r.listingId)!
   const myNumbers = db.tickets.filter((t) => t.listingId === l.id && t.userId === me).map((t) => t.number)
   const myCreditKobo = db.ledger.filter((e) => e.userId === me && e.kind === 'store_credit' && e.listingId === l.id).reduce((s, e) => s + e.creditKobo, 0)
-  return { ...r, listingTitle: l.title, listingImage: l.images[0] ?? null, ticketCount: l.ticketCount, iWon: r.winnerUserId === me, myNumbers, myCreditKobo }
+  return { ...r, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, ticketCount: l.ticketCount, iWon: r.winnerUserId === me, myNumbers, myCreditKobo }
 }
 
 /**
@@ -740,7 +747,7 @@ function conversationView(db: Db, c: MockConversation, me: ChatSide): Conversati
   const last = msgs[msgs.length - 1]
   const readAt = me === 'buyer' ? c.buyerReadAt : c.sellerReadAt
   return {
-    id: c.id, listingId: l.id, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category,
+    id: c.id, listingId: l.id, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category,
     priceKobo: l.kind === 'product' ? l.priceKobo : (l.fallbackPriceKobo ?? l.priceKobo), listingStatus: l.status,
     merchantName: db.merchants.find((m) => m.id === c.merchantId)!.name,
     buyerName: db.users.find((u) => u.id === c.buyerId)?.displayName ?? 'Buyer',
@@ -773,10 +780,12 @@ function statsBetween(db: Db, l: Listing, from: string, to: string) {
   }
 }
 
-function orderView(db: Db, o: Order): OrderView {
+/** `forBuyer`: the buyer's own screens, the only place a PIN may go. */
+function orderView(db: Db, order: MockOrder, forBuyer = false): OrderView {
+  const { pin, riderId: _riderId, pinState: _pinState, ...o } = order
   const l = db.listings.find((x) => x.id === o.listingId)!
   const merchant = db.merchants.find((m) => m.id === o.merchantId)!
-  return { ...o, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, merchantName: merchant.name }
+  return { ...o, deliveryPin: forBuyer && o.status !== 'delivered' ? pin : null, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, merchantName: merchant.name }
 }
 
 // -------------------------------------------------------------------- API
@@ -885,6 +894,11 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
   const makeDefault = (list: SavedAddress[], id: string) => {
     for (const a of list) a.isDefault = a.id === id
   }
+  function rider(): string {
+    const s = readSession()
+    if (s?.role !== 'delivery') throw new ApiError('forbidden', 'Only delivery accounts can do this.')
+    return s.userId
+  }
   /** The shop whose side of chats the signed-in user sees, if any. */
   const myShop = (db: Db): string | null => {
     const role = readSession()?.role
@@ -960,7 +974,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     db.seeds[id] = seed
     const at = now()
     const listing: Listing = {
-      id, kind: 'raffle', merchantId: shopId(db), title: input.title.trim(), description: input.description.trim(), category: input.category, images: input.images ?? [],
+      id, productCode: newProductCode(), kind: 'raffle', merchantId: shopId(db), title: input.title.trim(), description: input.description.trim(), category: input.category, images: input.images ?? [],
       priceKobo: input.priceKobo, ticketPriceKobo: input.ticketPriceKobo, buyerTicketPriceKobo: econ.buyerTicketKobo,
       ticketCount: econ.ticketCount, ticketsSold: 0, feeMode: input.feeMode, feeBps,
       unsoldPolicy: input.unsoldPolicy, fallbackPriceKobo: input.unsoldPolicy === 'convert_to_sale' ? input.fallbackPriceKobo! : null,
@@ -1149,30 +1163,73 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
             db.ledger.push({ id: uid('E'), userId: buyer(), kind: 'order_payment', cashKobo: -pay.fromCash, creditKobo: -pay.fromCredit, memo: `Bought · ${l.title}`, listingId: l.id, createdAt: at })
             l.status = 'sold'
           }
-          const order: Order = {
+          const order: MockOrder = {
+            pin: newDeliveryPin(), riderId: null, pinState: { attempts: 0, lockedUntil: null },
             id: uid('O'), listingId: l.id, buyerId: buyer(), merchantId: l.merchantId, priceKobo: price, feeKobo: prize ? 0 : saleEconomics(price, l.feeBps).feeKobo,
             delivery: pickup ? { address: '', location: null, contactPhone: details.delivery.contactPhone.trim() } : { address: details.delivery.address.trim(), location: details.delivery.location, contactPhone: details.delivery.contactPhone.trim() },
             fulfilment: details.fulfilment, pickupPoint, isPrize: prize, handledBy: prize && !isCar(l) ? 'drawmart' : 'store',
             status: 'paid', createdAt: at, dispatchedAt: null, deliveredAt: null,
           }
           db.orders.push(order)
-          return orderView(db, order)
+          return orderView(db, order, true)
         })
         db.carts[buyer()] = (db.carts[buyer()] ?? []).filter((id) => !listingIds.includes(id))
         return orders
       }),
 
     listMyOrders: () =>
-      tx((db) => db.orders.filter((o) => o.buyerId === buyer()).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((o) => orderView(db, o))),
+      tx((db) => db.orders.filter((o) => o.buyerId === buyer()).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((o) => orderView(db, o, true))),
 
-    confirmOrder: (orderId) =>
+    listDeliveryJobs: () =>
+      tx((db): DeliveryJob[] => {
+        const me = rider()
+        return db.orders
+          .filter((o) => (o.status === 'dispatched' && !o.riderId) || o.riderId === me)
+          .sort((a, b) => (b.deliveredAt ?? '9').localeCompare(a.deliveredAt ?? '9') || (a.dispatchedAt ?? '').localeCompare(b.dispatchedAt ?? ''))
+          .map((o) => {
+            const l = db.listings.find((x) => x.id === o.listingId)!
+            const merchant = db.merchants.find((m) => m.id === o.merchantId)!
+            const carrying = o.riderId === me && o.status === 'dispatched'
+            return {
+              id: o.id, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, fulfilment: o.fulfilment, status: o.status,
+              dispatchedAt: o.dispatchedAt, deliveredAt: o.deliveredAt, mine: !!o.riderId,
+              collectFrom: o.handledBy === 'drawmart' ? { name: 'DrawMart escrow', area: 'Lagos' } : { name: merchant.name, area: merchant.area },
+              pickupPoint: o.pickupPoint,
+              dropOff: carrying ? { buyerName: db.users.find((u) => u.id === o.buyerId)?.displayName ?? 'Buyer', address: o.delivery.address, location: o.delivery.location, contactPhone: o.delivery.contactPhone } : null,
+              pinLockedUntil: o.status === 'dispatched' && o.pinState.lockedUntil && Date.parse(o.pinState.lockedUntil) > now() ? o.pinState.lockedUntil : null,
+            }
+          })
+      }),
+
+    takeDelivery: (orderId) =>
       tx((db) => {
-        const o = db.orders.find((x) => x.id === orderId && x.buyerId === buyer() && x.status !== 'delivered')
-        if (!o) throw new ApiError('invalid_input', 'Only your own orders that are on the way can be confirmed.')
-        const at = iso(now())
-        o.status = 'delivered'
-        o.dispatchedAt ??= at
-        o.deliveredAt = at
+        const me = rider()
+        const o = db.orders.find((x) => x.id === orderId && x.status === 'dispatched' && !x.riderId)
+        if (!o) throw new ApiError('invalid_input', 'Another rider has taken this delivery.')
+        o.riderId = me
+      }),
+
+    releaseDelivery: (orderId) =>
+      tx((db) => {
+        const me = rider()
+        const o = db.orders.find((x) => x.id === orderId && x.status === 'dispatched' && x.riderId === me)
+        if (!o) throw new ApiError('invalid_input', 'Only deliveries you’re carrying can be handed back.')
+        o.riderId = null
+      }),
+
+    confirmDelivery: (orderId, pin) =>
+      tx((db) => {
+        const me = rider()
+        const o = db.orders.find((x) => x.id === orderId && x.status === 'dispatched' && x.riderId === me)
+        if (!o) throw new ApiError('invalid_input', 'Only deliveries you’re carrying can be confirmed.')
+        if (!isDeliveryPin(pin)) throw new ApiError('invalid_input', 'Enter the buyer’s 6-digit PIN.')
+        const { result, state } = checkPin(o.pin, pin, o.pinState, now())
+        o.pinState = state
+        if (result.confirmed) {
+          o.status = 'delivered'
+          o.deliveredAt = iso(now())
+        }
+        return result
       }),
 
     listNotifications: () =>
@@ -1385,7 +1442,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
               daily.get(d.date)!.views += day.views
               daily.get(d.date)!.salesKobo += day.salesKobo
             }
-            return { listingId: l.id, title: l.title, image: l.images[0] ?? null, category: l.category, kind: l.kind, status: l.status, ...statsBetween(db, l, from, today) }
+            return { listingId: l.id, productCode: l.productCode, title: l.title, image: l.images[0] ?? null, category: l.category, kind: l.kind, status: l.status, ...statsBetween(db, l, from, today) }
           })
           .sort((a, b) => b.views - a.views)
         return { days, listings, daily: [...daily.values()] }
@@ -1432,6 +1489,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
           .map(({ merchantId, ...b }) => ({
             ...b,
+            productCode: db.listings.find((l) => l.id === b.listingId)?.productCode ?? '',
             listingTitle: db.listings.find((l) => l.id === b.listingId)?.title ?? '',
             merchantName: db.merchants.find((m) => m.id === merchantId)?.name ?? '',
           }))

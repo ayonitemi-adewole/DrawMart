@@ -5,7 +5,7 @@ export const DEMO_PASSWORD = 'drawmart-demo'
 
 /**
  * Test accounts. The mock always has these. On Supabase,
- * private.seed_test_accounts() creates the buyer and store ones (test mode
+ * private.seed_test_accounts() creates the buyer, store and delivery ones (test mode
  * only, see supabase/migrations/…_test_data_reset.sql); the admin only exists
  * on a local database (supabase/seed-local-accounts.sql).
  *
@@ -25,5 +25,6 @@ export const DEMO_ACCOUNTS: readonly DemoAccount[] = [
   { email: 'surulere@drawmart.test', password: DEMO_PASSWORD, role: 'store', name: 'Surulere Partner Store', mockId: 'm-surulere' },
   { email: 'yaba@drawmart.test', password: DEMO_PASSWORD, role: 'store', name: 'Yaba Partner Store', mockId: 'm-yaba' },
   { email: 'vi@drawmart.test', password: DEMO_PASSWORD, role: 'store', name: 'Victoria Island Partner Dealer', mockId: 'm-vi' },
+  { email: 'rider@drawmart.test', password: DEMO_PASSWORD, role: 'delivery', name: 'Bayo Rider', mockId: 'u-rider' },
   { email: 'admin@drawmart.test', password: DEMO_PASSWORD, role: 'admin', name: 'DrawMart Admin', mockId: 'u-admin' },
 ]

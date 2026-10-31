@@ -10,6 +10,7 @@ import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
 import { fillDays, lagosDay, type DayMetrics } from '@/domain/metrics'
 import { sortAddresses, type SavedAddress } from '@/domain/addresses'
+import type { PinResult } from '@/domain/delivery'
 import { lineAmountKobo } from '@/domain/cart'
 import { ORDER_ERROR_TEXT } from '@/domain/orders'
 import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication } from '@/domain/sellers'
@@ -28,6 +29,7 @@ import {
   type ListingView,
   type NewListingInput,
   type NewPickupInput,
+  type DeliveryJob,
   type NotificationView,
   type PickupItemInput,
   type SavedPickupView,
@@ -78,6 +80,7 @@ interface DrawResultRow {
 
 interface ListingRow {
   id: string
+  product_code: string
   kind: ListingKind
   merchant_id: string
   title: string
@@ -169,7 +172,7 @@ interface OrderRow {
   is_prize: boolean
   handled_by: 'store' | 'drawmart'
   pickup_point: PickupPointRow | null
-  listing: { title: string; images: string[]; category: Category }
+  listing: { product_code: string; title: string; images: string[]; category: Category }
   merchant: { name: string }
 }
 
@@ -187,7 +190,7 @@ interface LedgerRow {
 // draw_results.winner_user_id isn't readable by clients, so name the columns.
 const RESULT_COLUMNS = 'listing_id, commitment, seed, closing_ref, winning_number, drawn_at'
 const LISTING_SELECT = `*, merchant:merchants(*), result:draw_results(${RESULT_COLUMNS}), handover:listing_handovers(*)`
-const ORDER_SELECT = '*, listing:listings(title, images, category), merchant:merchants(name), pickup_point:pickup_points(*)'
+const ORDER_SELECT = '*, listing:listings(product_code, title, images, category), merchant:merchants(name), pickup_point:pickup_points(*)'
 const PHOTO_BUCKET = 'listing-photos'
 /** Private: ID photos for seller checks. */
 const ID_BUCKET = 'seller-ids'
@@ -251,7 +254,7 @@ export interface Mine {
 /** "You won" comes from your own tickets; who else won is never sent to the browser. */
 export function toResultView(
   r: DrawResultRow,
-  listing: { title: string; images: string[]; ticket_count: number },
+  listing: { product_code: string; title: string; images: string[]; ticket_count: number },
   me: string | null,
   mine: Mine,
 ): DrawResultView {
@@ -265,6 +268,7 @@ export function toResultView(
     winningNumber: r.winning_number,
     winnerUserId: iWon ? me! : '',
     drawnAt: r.drawn_at,
+    productCode: listing.product_code,
     listingTitle: listing.title,
     listingImage: listing.images[0] ?? null,
     ticketCount: listing.ticket_count,
@@ -277,6 +281,7 @@ export function toResultView(
 function toListingView(l: ListingRow, me: string | null, mine: Mine): ListingView {
   return {
     id: l.id,
+    productCode: l.product_code,
     kind: l.kind,
     merchantId: l.merchant_id,
     title: l.title,
@@ -338,10 +343,12 @@ function toOrderView(o: OrderRow): OrderView {
     createdAt: o.created_at,
     dispatchedAt: o.dispatched_at,
     deliveredAt: o.delivered_at,
+    productCode: o.listing.product_code,
     listingTitle: o.listing.title,
     listingImage: o.listing.images?.[0] ?? null,
     category: o.listing.category,
     merchantName: o.merchant.name,
+    deliveryPin: null,
   }
 }
 
@@ -433,6 +440,12 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
   async function readSavedPickup(): Promise<SavedPickupView | null> {
     const row = unwrap(await client.from('saved_pickups').select('items, saved_at, expires_at').maybeSingle<{ items: PickupItemInput[]; saved_at: string; expires_at: string }>())
     return row ? { items: row.items, savedAt: row.saved_at, expiresAt: row.expires_at } : null
+  }
+
+  /** The buyer's own PINs, which the orders table doesn't hold. */
+  async function withPins(orders: OrderView[]): Promise<OrderView[]> {
+    const pins = await rpc<Record<string, string>>('my_delivery_pins')
+    return orders.map((o) => ({ ...o, deliveryPin: pins[o.id] ?? null }))
   }
 
   /** Row security limits these to the signed-in buyer's own. */
@@ -598,9 +611,9 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     },
 
     listResults: async () => {
-      type Row = DrawResultRow & { listing: { title: string; images: string[]; ticket_count: number } }
+      type Row = DrawResultRow & { listing: { product_code: string; title: string; images: string[]; ticket_count: number } }
       const rows = unwrap(
-        await client.from('draw_results').select(`${RESULT_COLUMNS}, listing:listings(title, images, ticket_count)`).order('drawn_at', { ascending: false }).limit(100).returns<Row[]>(),
+        await client.from('draw_results').select(`${RESULT_COLUMNS}, listing:listings(product_code, title, images, ticket_count)`).order('drawn_at', { ascending: false }).limit(100).returns<Row[]>(),
       ).filter((r) => r.listing)
       const [me, mine] = await Promise.all([myId(), mineFor(rows.map((r) => r.listing_id))])
       return rows.map((r) => toResultView(r, r.listing, me, mine))
@@ -636,15 +649,13 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
           pickupPointId: input.pickupPointId,
         },
       })
-      return unwrap(await client.from('orders').select(ORDER_SELECT).in('id', ids).returns<OrderRow[]>()).map(toOrderView)
+      return withPins(unwrap(await client.from('orders').select(ORDER_SELECT).in('id', ids).returns<OrderRow[]>()).map(toOrderView))
     },
 
     listMyOrders: async () => {
       const me = await requireId()
-      return unwrap(await client.from('orders').select(ORDER_SELECT).eq('user_id', me).order('created_at', { ascending: false }).returns<OrderRow[]>()).map(toOrderView)
+      return withPins(unwrap(await client.from('orders').select(ORDER_SELECT).eq('user_id', me).order('created_at', { ascending: false }).returns<OrderRow[]>()).map(toOrderView))
     },
-
-    confirmOrder: (orderId) => rpc('confirm_order', { p_order_id: orderId }),
 
     // Messages
     sendFirstMessage: async (listingId, body) => {
@@ -717,13 +728,13 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       const rows = unwrap(
         await client
           .from('boosts')
-          .select('id, tx_ref, listing_id, days, price_kobo, status, starts_at, ends_at, created_at, listing:listings(title), merchant:merchants(name)')
+          .select('id, tx_ref, listing_id, days, price_kobo, status, starts_at, ends_at, created_at, listing:listings(product_code, title), merchant:merchants(name)')
           .order('created_at', { ascending: false })
           .limit(200)
-          .returns<{ id: string; tx_ref: string; listing_id: string; days: number; price_kobo: number; status: BoostView['status']; starts_at: string | null; ends_at: string | null; created_at: string; listing: { title: string }; merchant: { name: string } }[]>(),
+          .returns<{ id: string; tx_ref: string; listing_id: string; days: number; price_kobo: number; status: BoostView['status']; starts_at: string | null; ends_at: string | null; created_at: string; listing: { product_code: string; title: string }; merchant: { name: string } }[]>(),
       )
       return rows.map((b) => ({
-        id: b.id, txRef: b.tx_ref, listingId: b.listing_id, listingTitle: b.listing.title, merchantName: b.merchant.name, days: b.days, priceKobo: num(b.price_kobo),
+        id: b.id, txRef: b.tx_ref, listingId: b.listing_id, productCode: b.listing.product_code, listingTitle: b.listing.title, merchantName: b.merchant.name, days: b.days, priceKobo: num(b.price_kobo),
         status: b.status, startsAt: b.starts_at, endsAt: b.ends_at, createdAt: b.created_at,
       }))
     },
@@ -879,6 +890,12 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
 
     listPrizeOrders: async () =>
       unwrap(await client.from('orders').select(ORDER_SELECT).eq('handled_by', 'drawmart').order('created_at', { ascending: false }).returns<OrderRow[]>()).map(toOrderView),
+
+    // Delivery accounts
+    listDeliveryJobs: () => rpc<DeliveryJob[]>('delivery_jobs'),
+    takeDelivery: (orderId) => rpc('take_delivery', { p_order_id: orderId }),
+    releaseDelivery: (orderId) => rpc('release_delivery', { p_order_id: orderId }),
+    confirmDelivery: (orderId, pin) => rpc<PinResult>('confirm_delivery', { p_order_id: orderId, p_pin: pin }),
 
     listSellerApplications: async () => {
       const rows = unwrap(await client.from('seller_applications').select('*').eq('status', 'pending').order('updated_at').returns<SellerApplicationRow[]>())

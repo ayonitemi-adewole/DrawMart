@@ -1,14 +1,20 @@
 import { NavLink, Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router'
 import { api } from '@/api'
 import { useAccess, useMerchant, usePendingListings, usePrizeOrders, useSellerApplications, useSignOut, useUnreadMessages } from '@/api/hooks'
-import { ChartIcon, ChatIcon, TrendingUpIcon, TrophyIcon, CheckIcon, ClipboardIcon, DiceIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
+import { ChartIcon, ChatIcon, TrendingUpIcon, TrophyIcon, TruckIcon, CheckIcon, ClipboardIcon, DiceIcon, HashIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
 import { NavMenu } from '@/components/NavMenu'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { cx } from '@/components/ui'
 import { APP_HOME } from '@/lib/apps'
 import { Logo, TestModeBanner } from './BuyerLayout'
 
-type BackOfficeApp = 'store' | 'admin'
+type BackOfficeApp = 'store' | 'admin' | 'delivery'
+
+const APP_NAME: Record<BackOfficeApp, { suffix: string; label: string }> = {
+  store: { suffix: 'Stores', label: 'Store' },
+  admin: { suffix: 'Admin', label: 'Admin' },
+  delivery: { suffix: 'Delivery', label: 'Delivery' },
+}
 
 interface NavItem {
   to: string
@@ -17,7 +23,7 @@ interface NavItem {
   count?: number
 }
 
-/** Desktop-first shell shared by the store app and the admin app. Each only links to its own pages. */
+/** Desktop-first shell shared by the store, admin and delivery apps. Each only links to its own pages. */
 export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
   const { pathname } = useLocation()
   const navigate = useNavigate()
@@ -30,7 +36,9 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
   const signOut = useSignOut()
 
   const nav: NavItem[] =
-    app === 'store'
+    app === 'delivery'
+      ? [{ to: '/delivery', label: 'Deliveries', icon: TruckIcon }]
+      : app === 'store'
       ? [
           { to: '/store', label: 'Dashboard', icon: LayoutIcon },
           { to: '/store/insights', label: 'Insights', icon: ChartIcon },
@@ -38,6 +46,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
         ]
       : [
           { to: '/admin', label: 'Review queue', icon: ClipboardIcon, count: pending.data?.length ?? 0 },
+          { to: '/admin/products', label: 'All products', icon: HashIcon },
           { to: '/admin/sellers', label: 'Seller ID checks', icon: IdCardIcon, count: sellers.data?.length ?? 0 },
           { to: '/admin/prizes', label: 'Won items', icon: TrophyIcon, count: prizes.data?.filter((o) => o.status === 'paid').length ?? 0 },
           { to: '/admin/boosts', label: 'Boosts', icon: TrendingUpIcon },
@@ -67,14 +76,14 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
         <aside className="sticky top-0 z-30 border-b border-line bg-surface/90 backdrop-blur-xl lg:h-dvh lg:w-64 lg:shrink-0 lg:border-r lg:border-b-0">
           <div className="flex items-center justify-between gap-2 px-4 py-2.5 lg:h-full lg:flex-col lg:items-stretch lg:gap-6 lg:p-5">
             <div className="flex items-center justify-between">
-              <Logo suffix={app === 'store' ? 'Stores' : 'Admin'} to={APP_HOME[app]} />
+              <Logo suffix={APP_NAME[app].suffix} to={APP_HOME[app]} />
               <div className="hidden lg:block">
                 <ThemeToggle />
               </div>
             </div>
             {/* Below lg all of this lives in the menu. */}
             <NavMenu
-              title={app === 'store' ? 'Store menu' : 'Admin menu'}
+              title={`${APP_NAME[app].label} menu`}
               className="lg:hidden"
               links={nav}
               top={shopCard}
@@ -89,7 +98,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
                 })
               }
             />
-            <nav className="hidden flex-col items-stretch gap-1 lg:flex" aria-label={app === 'store' ? 'Store' : 'Admin'}>
+            <nav className="hidden flex-col items-stretch gap-1 lg:flex" aria-label={APP_NAME[app].label}>
               {nav.map((n) => (
                 <NavLink
                   key={n.to}

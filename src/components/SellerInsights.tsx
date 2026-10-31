@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { useMerchantMetrics } from '@/api/hooks'
+import { matchesProductSearch } from '@/domain/productCode'
+import { ProductId, ProductSearch } from './ProductId'
 import { BoostHistory } from './BoostControl'
 import type { ListingMetrics } from '@/api/types'
 import { formatNaira } from '@/domain/money'
@@ -56,6 +58,7 @@ export function SellerInsights() {
 function Report({ listings, daily, days }: { listings: ListingMetrics[]; daily: DayMetrics[]; days: MetricRange }) {
   const t = sumMetrics(listings)
   const hasProducts = listings.some((l) => l.kind === 'product')
+  const [search, setSearch] = useState('')
   return (
     <>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -70,8 +73,9 @@ function Report({ listings, daily, days }: { listings: ListingMetrics[]; daily: 
         <DailyBars title="Sales per day" daily={daily} value={(d) => d.salesKobo} format={(n) => formatNaira(n)} days={days} />
       </div>
 
-      <ListingTable listings={listings} />
-      <BoostHistory />
+      <ProductSearch value={search} onChange={setSearch} />
+      <ListingTable listings={listings.filter((l) => matchesProductSearch(search, l.productCode, l.title))} />
+      <BoostHistory search={search} />
     </>
   )
 }
@@ -164,6 +168,11 @@ function ListingTable({ listings }: { listings: ListingMetrics[] }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
+            {listings.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="px-5 py-8 text-center text-muted">No listings match that.</td>
+              </tr>
+            ) : null}
             {listings.map((l) => {
               const tip = ['live', 'for_sale'].includes(l.status) ? insightTip(l) : null
               return (
@@ -173,6 +182,7 @@ function ListingTable({ listings }: { listings: ListingMetrics[] }) {
                       <ProductImage category={l.category} src={l.image ?? undefined} alt="" size="sm" className="size-12 shrink-0" />
                       <div className="flex min-w-0 flex-col gap-1">
                         <strong className="leading-tight">{l.title}</strong>
+                        <ProductId code={l.productCode} copy />
                         <span className="flex flex-wrap gap-1">
                           <Badge tone="neutral">{l.kind === 'raffle' ? 'Raffle' : 'Product'}</Badge>
                           {STATUS_TEXT[l.status] ? <Badge tone={l.status === 'live' || l.status === 'for_sale' ? 'brand' : 'neutral'}>{STATUS_TEXT[l.status]}</Badge> : null}

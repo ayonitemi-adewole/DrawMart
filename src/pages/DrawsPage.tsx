@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router'
+import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
+import { matchesProductSearch } from '@/domain/productCode'
 import { useListings, useResults } from '@/api/hooks'
 import { ListingRow } from '@/components/ListingGrid'
 import { ChevronRightIcon, HashIcon, LockIcon, TrophyIcon, UnlockIcon } from '@/components/icons'
@@ -19,10 +21,11 @@ export function DrawsPage() {
   const results = useResults()
   const upcoming = useListings({ status: ['sold_out'] })
   const [filter, setFilter] = useState<Filter>('all')
+  const [search, setSearch] = useState('')
   const data = results.data ?? []
   const mine = data.filter((r) => r.myNumbers.length > 0)
   const won = data.filter((r) => r.iWon)
-  const shown = filter === 'mine' ? mine : filter === 'won' ? won : data
+  const shown = (filter === 'mine' ? mine : filter === 'won' ? won : data).filter((r) => matchesProductSearch(search, r.productCode, r.listingTitle))
 
   return (
     <div className="flex flex-col gap-6">
@@ -75,6 +78,8 @@ export function DrawsPage() {
         />
       </div>
 
+      {data.length ? <ProductSearch value={search} onChange={setSearch} /> : null}
+
       {results.isPending ? (
         <div className="grid gap-3 sm:grid-cols-2">
           {[0, 1, 2, 3].map((i) => (
@@ -83,6 +88,8 @@ export function DrawsPage() {
         </div>
       ) : results.isError ? (
         <ErrorState error={results.error} onRetry={() => results.refetch()} />
+      ) : shown.length === 0 && search.trim() ? (
+        <NoProductMatch query={search} />
       ) : shown.length === 0 ? (
         <EmptyState
           icon={TrophyIcon}
@@ -134,6 +141,7 @@ export function DrawsPage() {
                   {r.myNumbers.length && !r.iWon ? ` · you had ${r.myNumbers.length}` : ''}
                   {r.myCreditKobo > 0 ? ` · +${formatNaira(r.myCreditKobo)} credit` : ''}
                 </span>
+                <ProductId code={r.productCode} />
                 <span className="truncate font-mono text-[11px] text-subtle">
                   lock {r.commitment.slice(0, 10)}… · ref {r.closingRef}
                 </span>

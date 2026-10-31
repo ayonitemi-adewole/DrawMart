@@ -75,7 +75,7 @@ export function BuyNowPanel({ listing: l }: { listing: ListingView }) {
       <MessageSellerButton listing={l} />
       <Notice icon={product ? ShieldIcon : LockIcon}>
         {product ? `Admin-reviewed listing from ${l.merchant.kind === 'individual' ? 'an ID-verified seller' : 'a verified store'}.` : handoverMethodFor(l.category) === 'inspection' ? 'Inspected by DrawMart.' : 'Still held in DrawMart escrow.'} The store is
-        paid only after you confirm delivery.
+        paid only after it’s delivered to you.
       </Notice>
     </Card>
   )
@@ -83,7 +83,7 @@ export function BuyNowPanel({ listing: l }: { listing: ListingView }) {
 
 const ORDER_STEP: Record<OrderView['status'], string> = {
   paid: 'Paid. The store is getting it ready.',
-  dispatched: 'On its way. Confirm once you have it.',
+  dispatched: 'On its way. Give the rider your PIN once you have it.',
   delivered: 'You have it. Enjoy!',
 }
 

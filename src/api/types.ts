@@ -6,6 +6,7 @@
  * implements the same interface and nothing in src/pages has to change.
  */
 import type { HandoverDetails } from '@/domain/listing'
+import type { PinResult } from '@/domain/delivery'
 import type { SavedAddress, SavedAddressInput } from '@/domain/addresses'
 import type { CheckoutDetails } from '@/domain/cart'
 import type { OrderError } from '@/domain/orders'
@@ -27,12 +28,16 @@ import type {
   NotificationKind,
   PickupPoint,
   Order,
+  GeoPoint,
+  OrderStatus,
+  Fulfilment,
   UnsoldPolicy,
   User,
   WalletBalance,
 } from '@/domain/types'
 
 export interface DrawResultView extends DrawResult {
+  productCode: string
   listingTitle: string
   /** Cover photo of the listing, if it has one. */
   listingImage: string | null
@@ -125,10 +130,33 @@ export interface NewProductInput {
 }
 
 export interface OrderView extends Order {
+  productCode: string
   listingTitle: string
   listingImage: string | null
   category: Category
   merchantName: string
+  /** What the buyer gives the rider on delivery. Only ever sent to the buyer, until it's delivered. */
+  deliveryPin: string | null
+}
+
+/** An order as a delivery account sees it. */
+export interface DeliveryJob {
+  id: string
+  productCode: string
+  listingTitle: string
+  listingImage: string | null
+  category: Category
+  fulfilment: Fulfilment
+  status: OrderStatus
+  dispatchedAt: string | null
+  deliveredAt: string | null
+  /** This rider has taken it. The rest are in the pool for anyone to take. */
+  mine: boolean
+  collectFrom: { name: string; area: string }
+  pickupPoint: PickupPoint | null
+  /** Only for the rider carrying it. Never in the pool, and gone once delivered. */
+  dropOff: { buyerName: string; address: string; location: GeoPoint | null; contactPhone: string } | null
+  pinLockedUntil: string | null
 }
 
 /** An individual's request to sell. Only the applicant and admins ever see it. */
@@ -157,6 +185,7 @@ export type ChatSide = 'buyer' | 'seller'
 export interface ConversationView {
   id: string
   listingId: string
+  productCode: string
   listingTitle: string
   listingImage: string | null
   category: Category
@@ -185,6 +214,7 @@ export interface ChatMessage {
 /** One listing's views and sales over the chosen range. */
 export interface ListingMetrics extends ListingMetricsInput {
   listingId: string
+  productCode: string
   title: string
   image: string | null
   category: Category
@@ -223,6 +253,7 @@ export interface BoostView {
   /** Payment reference, to ask the provider again while it's pending. */
   txRef: string
   listingId: string
+  productCode: string
   listingTitle: string
   merchantName: string
   days: number
@@ -286,7 +317,7 @@ export class ApiError extends Error {
 }
 
 /** Buyer, store and admin are separate apps; every account belongs to exactly one. */
-export type AccountRole = 'buyer' | 'store' | 'admin'
+export type AccountRole = 'buyer' | 'store' | 'admin' | 'delivery'
 
 export interface AuthSession {
   userId: string
@@ -372,8 +403,6 @@ export interface DrawMartApi {
    */
   checkout(input: CheckoutInput): Promise<OrderView[]>
   listMyOrders(): Promise<OrderView[]>
-  /** The buyer confirms the item arrived. */
-  confirmOrder(orderId: string): Promise<void>
 
   /** Views and sales of the signed-in shop's listings (store or individual seller). */
   getMerchantMetrics(days: MetricRange): Promise<MerchantMetricsView>
@@ -446,6 +475,15 @@ export interface DrawMartApi {
   rejectListing(id: string): Promise<void>
   /** Won items DrawMart sends from escrow, newest first. */
   listPrizeOrders(): Promise<OrderView[]>
+
+  // Delivery accounts
+  /** Orders ready to be taken, and this rider's own. */
+  listDeliveryJobs(): Promise<DeliveryJob[]>
+  takeDelivery(orderId: string): Promise<void>
+  /** Back in the pool. */
+  releaseDelivery(orderId: string): Promise<void>
+  /** The only way an order becomes delivered. A wrong PIN isn't an error: see the result. */
+  confirmDelivery(orderId: string, pin: string): Promise<PinResult>
   /** Applications waiting for an ID check, oldest first. */
   listSellerApplications(): Promise<SellerApplicationView[]>
   /** Creates the seller's shop. */

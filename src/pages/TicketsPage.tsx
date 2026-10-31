@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router";
+import { NoProductMatch, ProductId, ProductSearch } from "@/components/ProductId";
+import { listingMatchesSearch, matchesProductSearch } from "@/domain/productCode";
 import { useMyListings, useMyOrders } from "@/api/hooks";
 import type { ListingView } from "@/api/types";
 import { Countdown } from "@/components/Countdown";
@@ -91,7 +93,7 @@ export function TicketsPage() {
         eyebrow={view === "orders" ? "My orders" : "My tickets"}
         sub={
           view === "orders"
-            ? "Items you bought at a fixed price. Confirm when they arrive so the store gets paid."
+            ? "Items you bought. Give the rider your delivery PIN once you have each one."
             : "Every ticket you hold, and how each draw turned out."
         }
       >
@@ -114,6 +116,7 @@ export function TicketsPage() {
 
 function MyOrders() {
   const q = useMyOrders();
+  const [search, setSearch] = useState("");
   if (q.isPending) return <Skeleton className="h-40" />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
   if (q.data.length === 0)
@@ -129,11 +132,21 @@ function MyOrders() {
         }
       />
     );
+  const found = q.data.filter((o) =>
+    matchesProductSearch(search, o.productCode, o.listingTitle, o.merchantName),
+  );
   return (
-    <div className="grid gap-3 lg:grid-cols-2">
-      {q.data.map((o) => (
-        <OrderCard key={o.id} order={o} audience="buyer" />
-      ))}
+    <div className="flex flex-col gap-4">
+      <ProductSearch value={search} onChange={setSearch} />
+      {found.length ? (
+        <div className="grid gap-3 lg:grid-cols-2">
+          {found.map((o) => (
+            <OrderCard key={o.id} order={o} audience="buyer" />
+          ))}
+        </div>
+      ) : (
+        <NoProductMatch query={search} />
+      )}
     </div>
   );
 }
@@ -144,7 +157,10 @@ function DrawTickets() {
   const live = q.data?.filter(waiting) ?? [];
   const past = q.data?.filter((l) => !waiting(l)) ?? [];
   const [tab, setTab] = useState<Tab>("active");
-  const items = tab === "active" ? live : past;
+  const [search, setSearch] = useState("");
+  const items = (tab === "active" ? live : past).filter((l) =>
+    listingMatchesSearch(l, search),
+  );
   const ticketsHeld = live.reduce((s, l) => s + l.myNumbers.length, 0);
   const wins = past.filter((l) => l.result?.iWon).length;
   const credit = past.reduce((s, l) => s + (l.result?.myCreditKobo ?? 0), 0);
@@ -209,7 +225,11 @@ function DrawTickets() {
             ]}
           />
 
-          {items.length === 0 ? (
+          <ProductSearch value={search} onChange={setSearch} />
+
+          {items.length === 0 && search.trim() ? (
+            <NoProductMatch query={search} />
+          ) : items.length === 0 ? (
             <EmptyState
               icon={tab === "active" ? TicketIcon : TrophyIcon}
               title={
@@ -269,6 +289,7 @@ function TicketCard({
             <Badge tone={s.tone}>{s.label}</Badge>
           </div>
           <span className="text-xs text-subtle">{s.detail}</span>
+          <ProductId code={l.productCode} />
         </div>
         <ChevronRightIcon className="shrink-0 text-subtle transition group-hover:translate-x-0.5" />
       </div>

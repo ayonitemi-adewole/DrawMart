@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
+import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
+import { matchesProductSearch } from '@/domain/productCode'
 import { useCallPhone, useConversations, useHasShop, useListing, useMarkConversationRead, useMessages, useSendFirstMessage, useSendMessage, useSetCallPhone } from '@/api/hooks'
 import type { ChatMessage, ConversationView } from '@/api/types'
 import { AlertIcon, BackIcon, ChatIcon, PhoneIcon, SendIcon, ShieldIcon } from '@/components/icons'
@@ -20,6 +22,8 @@ const otherName = (c: ConversationView) => (c.me === 'buyer' ? c.merchantName : 
 export function MessagesPage({ basePath }: { basePath: string }) {
   const q = useConversations()
   const hasShop = useHasShop()
+  const [search, setSearch] = useState('')
+  const found = (q.data ?? []).filter((c) => matchesProductSearch(search, c.productCode, c.listingTitle, c.merchantName, c.buyerName))
 
   return (
     <div className="flex flex-col gap-6">
@@ -38,11 +42,18 @@ export function MessagesPage({ basePath }: { basePath: string }) {
             body={hasShop ? 'When a buyer messages you about one of your items, it shows up here.' : 'Open a product and tap “Message seller” to ask about it.'}
           />
         ) : (
-          <Card className="divide-y divide-line overflow-hidden">
-            {q.data.map((c) => (
-              <InboxRow key={c.id} conversation={c} to={`${basePath}/${c.id}`} />
-            ))}
-          </Card>
+          <div className="flex min-w-0 flex-col gap-4">
+            <ProductSearch value={search} onChange={setSearch} placeholder="Search by name, item or product ID" />
+            {found.length ? (
+              <Card className="divide-y divide-line overflow-hidden">
+                {found.map((c) => (
+                  <InboxRow key={c.id} conversation={c} to={`${basePath}/${c.id}`} />
+                ))}
+              </Card>
+            ) : (
+              <NoProductMatch query={search} />
+            )}
+          </div>
         )}
         {hasShop ? <CallSettings /> : null}
       </div>
@@ -64,6 +75,7 @@ function InboxRow({ conversation: c, to }: { conversation: ConversationView; to:
           {c.me === 'seller' ? 'Asking about ' : ''}
           {c.listingTitle} · {formatNaira(c.priceKobo)}
         </span>
+        <ProductId code={c.productCode} />
         <span className={cx('truncate text-sm', c.unread ? 'font-semibold text-ink' : 'text-muted')}>
           {last ? `${last.sender === c.me ? 'You: ' : ''}${last.body}` : 'No messages yet'}
         </span>
@@ -201,6 +213,7 @@ function Thread({ conversation: c, basePath }: { conversation: ConversationView;
               {c.listingTitle} · {formatNaira(c.priceKobo)}
             </span>
           )}
+          <ProductId code={c.productCode} />
         </div>
         {c.listingStatus === 'sold' ? <Badge tone="neutral">Sold</Badge> : null}
         {c.me === 'buyer' && c.callPhone ? (
@@ -212,7 +225,7 @@ function Thread({ conversation: c, basePath }: { conversation: ConversationView;
 
       <Notice tone="neutral" icon={ShieldIcon}>
         {c.me === 'buyer'
-          ? 'Always pay through DrawMart: your money is only released to the seller after you confirm delivery. Never send money to an account number from a chat.'
+          ? 'Always pay through DrawMart: your money is only released to the seller after it’s delivered to you. Never send money to an account number from a chat.'
           : 'Keep sales on DrawMart so you’re covered. Never ask buyers to pay you directly.'}
       </Notice>
 
@@ -355,7 +368,7 @@ export function NewConversationPage({ basePath }: { basePath: string }) {
         </div>
       </Card>
       <Notice tone="neutral" icon={ShieldIcon}>
-        Always pay through DrawMart: your money is only released to the seller after you confirm delivery. Never send money to an account number from a chat.
+        Always pay through DrawMart: your money is only released to the seller after it’s delivered to you. Never send money to an account number from a chat.
       </Notice>
       <Card className="flex min-h-60 flex-col p-4">
         <p className="m-auto max-w-xs text-center text-sm text-subtle">Ask {seller} anything about the item. They’ll see the chat once you send your first message.</p>

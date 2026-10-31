@@ -2,11 +2,13 @@ import { useState } from 'react'
 import { usePendingListings, useReviewListing } from '@/api/hooks'
 import type { ListingView } from '@/api/types'
 import { CalendarIcon, CarIcon, CheckIcon, ClipboardIcon, LockIcon, MapPinIcon, TruckIcon, XIcon } from '@/components/icons'
+import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
 import { Sheet } from '@/components/Sheet'
 import { useToast } from '@/components/toast'
 import { Badge, Button, Card, EmptyState, ErrorState, PageTitle, ProductImage, Skeleton, cx, errorMessage } from '@/components/ui'
 import { computeListingEconomics } from '@/domain/fees'
 import { saleEconomics } from '@/domain/orders'
+import { listingMatchesSearch } from '@/domain/productCode'
 import { TIME_SLOTS, UNSOLD_POLICY_LABEL } from '@/domain/listing'
 import { directionsUrl } from '@/domain/location'
 import { formatNaira } from '@/domain/money'
@@ -41,6 +43,8 @@ const FEE_MODE_TEXT = { seller: 'store pays', buyer: 'buyer pays', split: 'split
 /** Admin queue: approve a listing only once the item is in escrow. */
 export function AdminPage() {
   const q = usePendingListings()
+  const [search, setSearch] = useState('')
+  const found = q.data?.filter((l) => listingMatchesSearch(l, search)) ?? []
 
   return (
     <div className="flex flex-col gap-6">
@@ -59,8 +63,13 @@ export function AdminPage() {
         <EmptyState icon={CheckIcon} title="All caught up" body="Nothing waiting. New merchant listings will appear here." />
       ) : (
         <div className="flex flex-col gap-4">
+          <ProductSearch value={search} onChange={setSearch} placeholder="Search by product ID, name or seller" />
+          {found.length ? null : <NoProductMatch query={search} />}
+          {/* Hidden, not removed: a half-finished checklist shouldn't reset because of a search. */}
           {q.data.map((l) => (
-            <ReviewCard key={l.id} listing={l} />
+            <div key={l.id} hidden={!found.includes(l)}>
+              <ReviewCard listing={l} />
+            </div>
           ))}
         </div>
       )}
@@ -98,6 +107,7 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
           <ProductImage category={l.category} src={l.images[0]} alt={l.title} size="sm" className="size-24 shrink-0" />
           <div className="flex min-w-0 flex-col gap-1">
             <strong className="text-lg leading-tight">{l.title}</strong>
+            <ProductId code={l.productCode} copy />
             <span className="text-sm text-subtle">
               {l.merchant.name} · {l.merchant.area} · {l.merchant.cacNumber}
             </span>

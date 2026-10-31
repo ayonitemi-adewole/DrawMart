@@ -4,15 +4,19 @@ import { useDemoActions, useListings } from '@/api/hooks'
 import type { ListingView } from '@/api/types'
 import { Countdown } from '@/components/Countdown'
 import { DiceIcon, FastForwardIcon, RefreshIcon, TicketIcon, TrophyIcon } from '@/components/icons'
+import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
 import { Sheet } from '@/components/Sheet'
 import { useToast } from '@/components/toast'
 import { Badge, Button, Card, EmptyState, ErrorState, Notice, PageTitle, ProductImage, ProgressBar, Skeleton, errorMessage } from '@/components/ui'
 import { formatNaira } from '@/domain/money'
+import { listingMatchesSearch } from '@/domain/productCode'
 import { dateTime } from '@/lib/time'
 
 /** Admin view of every live draw. In test mode, also the demo controls (the database only lets admins use them). */
 export function AdminDrawsPage() {
   const q = useListings({ status: ['live', 'sold_out'] })
+  const [search, setSearch] = useState('')
+  const found = q.data?.filter((l) => listingMatchesSearch(l, search)) ?? []
 
   return (
     <div className="flex flex-col gap-6">
@@ -35,11 +39,18 @@ export function AdminDrawsPage() {
       ) : q.data.length === 0 ? (
         <EmptyState icon={TicketIcon} title="No live draws" body="Approved listings show up here while they take tickets." />
       ) : (
-        <Card className="divide-y divide-line overflow-hidden">
-          {q.data.map((l) => (
-            <DrawRow key={l.id} listing={l} />
-          ))}
-        </Card>
+        <div className="flex flex-col gap-4">
+          <ProductSearch value={search} onChange={setSearch} placeholder="Search by product ID, name or seller" />
+          {found.length ? (
+            <Card className="divide-y divide-line overflow-hidden">
+              {found.map((l) => (
+                <DrawRow key={l.id} listing={l} />
+              ))}
+            </Card>
+          ) : (
+            <NoProductMatch query={search} />
+          )}
+        </div>
       )}
       {api.testMode ? <ResetTestData /> : null}
     </div>
@@ -106,6 +117,7 @@ function DrawRow({ listing: l }: { listing: ListingView }) {
         <ProductImage category={l.category} src={l.images[0]} alt={l.title} size="sm" className="size-16 shrink-0" />
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <strong className="truncate">{l.title}</strong>
+          <ProductId code={l.productCode} copy />
           <span className="flex flex-wrap items-center gap-x-2 text-xs text-subtle">
             {l.merchant.name} · {formatNaira(l.buyerTicketPriceKobo)} a ticket · {soldOut && l.drawAt ? <>Sold out, winner on {dateTime(l.drawAt)}</> : <Countdown closesAt={l.closesAt} />}
           </span>

@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useSearchParams } from 'react-router'
+import { DeliveryPin } from '@/components/DeliveryPin'
 import { useAddressActions, useAddresses, useCart, useCheckout, useListing, useMe, usePickupPoints, useWallet } from '@/api/hooks'
 import type { ListingView, OrderView } from '@/api/types'
 import { AddressPicker } from '@/components/AddressPicker'
@@ -276,7 +277,7 @@ function CheckoutForm({ items, addresses, accountPhone }: { items: ListingView[]
               </Button>
               <p className="flex items-start gap-2 text-xs text-subtle">
                 <ShieldIcon size={14} className="mt-px shrink-0 text-brand" />
-                {fulfilment === 'delivery' ? 'Your address, pin and phone go only to whoever delivers each item.' : 'Your phone number goes only to whoever handles each item.'} Stores are paid once you confirm you have it.
+                {fulfilment === 'delivery' ? 'Your address, pin and phone go only to whoever delivers each item.' : 'Your phone number goes only to whoever handles each item.'} You’ll get a PIN to give them when it arrives; stores are paid only after that.
               </p>
             </>
           )}
@@ -338,6 +339,9 @@ function Placed({ orders }: { orders: OrderView[] }) {
           </li>
         ))}
       </ul>
+      {orders.map((o) =>
+        o.deliveryPin ? <DeliveryPin key={o.id} pin={o.deliveryPin} pickup={o.fulfilment === 'pickup'} title={orders.length > 1 ? o.listingTitle : undefined} className="w-full text-left" /> : null,
+      )}
       <Link to="/tickets?view=orders" className={buttonClass('primary', 'lg', 'w-full')}>
         <span className="text-on-brand">Track your order</span>
       </Link>

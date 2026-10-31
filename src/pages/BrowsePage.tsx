@@ -5,10 +5,13 @@ import type { ListingView } from '@/api/types'
 import { BackIcon, SearchIcon } from '@/components/icons'
 import { ListingGrid } from '@/components/ListingGrid'
 import { Pagination } from '@/components/Pagination'
+import { NoProductMatch, ProductSearch } from '@/components/ProductId'
 import { EmptyState, ErrorState, PageTitle, Segmented, Skeleton, buttonClass } from '@/components/ui'
 import { withSponsoredFirst } from '@/domain/boosts'
+import { listingMatchesSearch } from '@/domain/productCode'
 import { CATEGORIES, type Category } from '@/domain/types'
 import { paginate } from '@/lib/paginate'
+import { useSearchParam } from '@/lib/useSearchParam'
 
 /** Five rows of three: the explore page's per-category cap, one page at a time. */
 export const BROWSE_PAGE_SIZE = 15
@@ -36,17 +39,17 @@ export function BrowsePage() {
   const category = CATEGORIES.includes(raw as Category) ? (raw as Category) : undefined
   const seller = params.get('seller') ?? undefined
   const query = (params.get('q') ?? '').trim()
+  const search = useSearchParam()
   const kind: Kind = KINDS.find((k) => k === params.get('type')) ?? 'all'
   const page = Number(params.get('page') ?? '1')
   const q = useListings({ status: ['live', 'for_sale'] })
 
   const matching = useMemo(() => {
-    const needle = query.toLowerCase()
     const list = (q.data ?? []).filter(
       (l) =>
         (!category || l.category === category) &&
         (!seller || l.merchant.id === seller) &&
-        (!needle || [l.title, l.description, l.merchant.name, l.merchant.area, l.category].some((s) => s.toLowerCase().includes(needle))),
+        listingMatchesSearch(l, query),
     )
     const { sponsored, rest } = withSponsoredFirst(list, Date.now())
     return [...sponsored, ...rest]
@@ -73,6 +76,7 @@ export function BrowsePage() {
       <PageTitle eyebrow={eyebrow} sub={q.data ? `${shown.length.toLocaleString('en-NG')} ${shown.length === 1 ? 'item' : 'items'}` : undefined}>
         {title}
       </PageTitle>
+      <ProductSearch value={search.text} onChange={search.change} />
       <Segmented<Kind>
         label="Show"
         value={kind}
@@ -92,6 +96,8 @@ export function BrowsePage() {
         </div>
       ) : q.isError ? (
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
+      ) : shown.length === 0 && query ? (
+        <NoProductMatch query={query} />
       ) : shown.length === 0 ? (
         <EmptyState
           icon={SearchIcon}

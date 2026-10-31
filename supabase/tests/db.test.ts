@@ -5,6 +5,7 @@
  * Calls are made as the `authenticated` role with a user id, the same way
  * Supabase runs API requests, so grants and row-level security are exercised.
  */
+import { isProductCode } from '../../src/domain/productCode'
 import { readFileSync, readdirSync } from 'node:fs'
 import { PGlite } from '@electric-sql/pglite'
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto'
@@ -78,7 +79,7 @@ async function expectFail(p: Promise<unknown>, code: string): Promise<PgError> {
   throw new Error(`expected ${code}`)
 }
 
-async function newUser(email: string, opts: { role?: 'admin'; merchantId?: string } = {}): Promise<string> {
+async function newUser(email: string, opts: { role?: 'admin' | 'delivery'; merchantId?: string } = {}): Promise<string> {
   const [u] = await admin<{ id: string }>(`insert into auth.users (email) values ($1) returning id`, [email])
   if (opts.role) await admin(`update public.profiles set role = $2 where id = $1`, [u.id, opts.role])
   if (opts.merchantId) await admin(`update public.profiles set role = 'store', merchant_id = $2 where id = $1`, [u.id, opts.merchantId])
@@ -643,12 +644,16 @@ describe('regular products and orders', () => {
     expect(await asUser(null, `select * from public.orders`).catch(() => [])).toEqual([])
   })
 
-  it('is dispatched by its store and confirmed by its buyer', async () => {
+  it('is dispatched by its store and delivered with the buyer’s PIN', async () => {
     const [{ id }] = await admin<{ id: string }>(`select id from public.orders where listing_id = $1`, [productId])
     await expectFail(asUser(otherStore, `select public.dispatch_order($1)`, [id]), 'invalid_input')
-    await expectFail(asUser(store, `select public.confirm_order($1)`, [id]), 'invalid_input')
     await asUser(store, `select public.dispatch_order($1)`, [id])
-    await asUser(buyer, `select public.confirm_order($1)`, [id])
+    await expectFail(asUser(buyer, `select public.confirm_order($1)`, [id]), 'forbidden')
+    await expectFail(asUser(store, `select public.confirm_order($1)`, [id]), 'forbidden')
+    const rider = await newUser('rider1@example.com', { role: 'delivery' })
+    await asUser(rider, `select public.take_delivery($1)`, [id])
+    const [{ pins }] = await asUser<{ pins: Record<string, string> }>(buyer, `select public.my_delivery_pins() pins`)
+    expect((await asUser<{ r: { confirmed: boolean } }>(rider, `select public.confirm_delivery($1, $2) r`, [id, pins[id]]))[0].r.confirmed).toBe(true)
     const [o] = await admin<{ status: string; delivered_at: string | null }>(`select * from public.orders where id = $1`, [id])
     expect(o.status).toBe('delivered')
     expect(o.delivered_at).not.toBeNull()
@@ -1245,12 +1250,155 @@ describe('cart and checkout', () => {
     expect(await asUser(store, `select * from public.orders where id = $1`, [row.id])).toEqual([])
     await expectFail(asUser(store, `select public.dispatch_order($1)`, [row.id]), 'invalid_input')
     await asUser(staff, `select public.dispatch_order($1)`, [row.id])
-    await asUser(winner, `select public.confirm_order($1)`, [row.id])
+    const prizeRider = await newUser('prizerider@example.com', { role: 'delivery' })
+    await asUser(prizeRider, `select public.take_delivery($1)`, [row.id])
+    const [{ pins }] = await asUser<{ pins: Record<string, string> }>(winner, `select public.my_delivery_pins() pins`)
+    await asUser(prizeRider, `select public.confirm_delivery($1, $2)`, [row.id, pins[row.id]])
     await expectFail(add(winner, prize), 'invalid_input') // already arranged
     await expectFail(checkout(winner, details([prize])), 'invalid_input')
     // A free prize isn't a sale in the store's insights.
     const [{ m }] = await asUser<{ m: { listings: { listingId: string; units: number }[] } }>(store, `select public.merchant_metrics(30) m`)
     expect(m.listings.find((l) => l.listingId === prize)?.units).toBe(1) // just the ticket
+  })
+
+  it('gives every product a permanent, unique ID, whichever way it was created', async () => {
+    const code = async (id: string) => (await admin<{ product_code: string }>(`select product_code from public.listings where id = $1`, [id]))[0].product_code
+    const lamp = await newProduct('Lamp with an ID')
+    const first = await code(lamp)
+    expect(isProductCode(first)).toBe(true)
+    const rows = await admin<{ product_code: string }>(`select product_code from public.listings`)
+    expect(rows.every((r) => isProductCode(r.product_code))).toBe(true)
+    expect(new Set(rows.map((r) => r.product_code)).size).toBe(rows.length)
+
+    // Nobody chooses or changes one.
+    await expectFail(admin(`update public.listings set product_code = 'PRD-222222' where id = $1`, [lamp]), 'forbidden')
+    await expectFail(asUser(store, `update public.listings set product_code = 'PRD-222222' where id = $1`, [lamp]), 'permission denied for table listings')
+    expect(await code(lamp)).toBe(first)
+
+    // Anyone who can see the product can see and search by its ID.
+    expect(await asUser(null, `select id from public.listings where product_code = $1`, [first])).toEqual([{ id: lamp }])
+
+    // It comes with the views built by functions.
+    const buyer = await newUser('idbuyer@example.com')
+    await asUser(buyer, `select public.send_first_message($1, 'Is this still available?')`, [lamp])
+    const [{ c }] = await asUser<{ c: { listingId: string; productCode: string }[] }>(buyer, `select public.list_conversations() c`)
+    expect(c.find((x) => x.listingId === lamp)?.productCode).toBe(first)
+    const [{ m }] = await asUser<{ m: { listings: { listingId: string; productCode: string }[] } }>(store, `select public.merchant_metrics(30) m`)
+    expect(m.listings.find((l) => l.listingId === lamp)?.productCode).toBe(first)
+  })
+
+  describe('deliveries', () => {
+    type Job = { id: string; mine: boolean; status: string; dropOff: { buyerName: string; address: string; contactPhone: string } | null; collectFrom: { name: string }; productCode: string; pinLockedUntil: string | null }
+    let rider: string
+    let otherRider: string
+    const jobs = async (who: string) => (await asUser<{ j: Job[] }>(who, `select public.delivery_jobs() j`))[0].j
+    const pinsOf = async (who: string) => (await asUser<{ p: Record<string, string> }>(who, `select public.my_delivery_pins() p`))[0].p
+    const tryPin = async (who: string, id: string, pin: string) => (await asUser<{ r: { confirmed: boolean; attemptsLeft: number; lockedUntil: string | null } }>(who, `select public.confirm_delivery($1, $2) r`, [id, pin]))[0].r
+    /** A paid order, ready for a rider. */
+    async function readyOrder(email: string) {
+      const b = await newUser(email)
+      await asUser(b, `select public.top_up(5000000)`)
+      const listing = await newProduct(`For ${email}`)
+      await add(b, listing)
+      const [id] = await checkout(b, details([listing]))
+      await asUser(store, `select public.dispatch_order($1)`, [id])
+      return { b, id }
+    }
+
+    beforeAll(async () => {
+      rider = await newUser('rider2@example.com', { role: 'delivery' })
+      otherRider = await newUser('rider3@example.com', { role: 'delivery' })
+    })
+
+    it('gives every order a PIN only its buyer can read', async () => {
+      const { b, id } = await readyOrder('pin1@example.com')
+      const pin = (await pinsOf(b))[id]
+      expect(pin).toMatch(/^[0-9]{6}$/)
+      for (const who of [store, staff, rider]) expect((await pinsOf(who))[id]).toBeUndefined()
+      await expect(asUser(b, `select * from private.order_pins`)).rejects.toThrow(/permission denied/)
+      await expect(asUser(rider, `select * from private.order_pins`)).rejects.toThrow(/permission denied/)
+      for (const who of [b, store, staff]) expect(JSON.stringify(await asUser(who, `select * from public.orders where id = $1`, [id]))).not.toMatch(new RegExp(`"${pin}"`))
+    })
+
+    it('keeps buyer details from riders until they take it, and afterwards', async () => {
+      const { b, id } = await readyOrder('pin2@example.com')
+      const waiting = (await jobs(rider)).find((j) => j.id === id)!
+      expect(waiting).toMatchObject({ mine: false, dropOff: null, status: 'dispatched' })
+      expect(waiting.productCode).toMatch(/^PRD-/)
+
+      // Only delivery accounts see the pool or act on it, and riders can't read orders directly.
+      for (const who of [b, store, staff]) {
+        await expectFail(asUser(who, `select public.delivery_jobs()`), 'forbidden')
+        await expectFail(asUser(who, `select public.take_delivery($1)`, [id]), 'forbidden')
+        await expectFail(asUser(who, `select public.confirm_delivery($1, '123456')`, [id]), 'forbidden')
+      }
+      expect(await asUser(rider, `select * from public.orders where id = $1`, [id])).toEqual([])
+
+      await expectFail(tryPin(rider, id, '123456'), 'invalid_input') // hasn't taken it
+      await asUser(rider, `select public.take_delivery($1)`, [id])
+      await expectFail(asUser(otherRider, `select public.take_delivery($1)`, [id]), 'invalid_input')
+      const [row] = await admin<{ delivery_address: string; delivery_phone: string }>(`select delivery_address, delivery_phone from public.orders where id = $1`, [id])
+      expect((await jobs(rider)).find((j) => j.id === id)?.dropOff).toMatchObject({ address: row.delivery_address, contactPhone: row.delivery_phone })
+      expect((await jobs(otherRider)).find((j) => j.id === id)).toBeUndefined()
+      await expectFail(tryPin(otherRider, id, '123456'), 'invalid_input')
+      await expectFail(asUser(otherRider, `select public.release_delivery($1)`, [id]), 'invalid_input')
+
+      // Handed back: in the pool again, for anyone, without the details.
+      await asUser(rider, `select public.release_delivery($1)`, [id])
+      expect((await jobs(otherRider)).find((j) => j.id === id)).toMatchObject({ mine: false, dropOff: null })
+      await asUser(otherRider, `select public.take_delivery($1)`, [id])
+      const pin = (await pinsOf(b))[id]
+      expect((await tryPin(otherRider, id, pin)).confirmed).toBe(true)
+
+      // Done: no buyer details left, the PIN's gone, and it can't be confirmed twice.
+      expect((await jobs(otherRider)).find((j) => j.id === id)).toMatchObject({ status: 'delivered', dropOff: null })
+      expect((await pinsOf(b))[id]).toBeUndefined()
+      await expectFail(tryPin(otherRider, id, pin), 'invalid_input')
+      const [o] = await admin<{ status: string; delivered_at: string | null; rider_id: string }>(`select status, delivered_at, rider_id from public.orders where id = $1`, [id])
+      expect(o).toMatchObject({ status: 'delivered', rider_id: otherRider })
+      expect(o.delivered_at).not.toBeNull()
+    })
+
+    it('can’t be delivered before it’s dispatched', async () => {
+      const b = await newUser('pin3@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const listing = await newProduct('Not ready yet')
+      await add(b, listing)
+      const [id] = await checkout(b, details([listing]))
+      expect((await jobs(rider)).find((j) => j.id === id)).toBeUndefined()
+      await expectFail(asUser(rider, `select public.take_delivery($1)`, [id]), 'invalid_input')
+    })
+
+    it('pauses after too many wrong PINs, and keeps the count even though nothing is raised', async () => {
+      const { b, id } = await readyOrder('pin4@example.com')
+      await asUser(rider, `select public.take_delivery($1)`, [id])
+      const pin = (await pinsOf(b))[id]
+      const wrong = pin === '000000' ? '111111' : '000000'
+      await expectFail(tryPin(rider, id, '12'), 'invalid_input')
+      await expectFail(tryPin(rider, id, 'abcdef'), 'invalid_input')
+      for (let left = 4; left > 0; left--) expect(await tryPin(rider, id, wrong)).toEqual({ confirmed: false, attemptsLeft: left, lockedUntil: null })
+      const locked = await tryPin(rider, id, wrong)
+      expect(locked.lockedUntil).toBeTruthy()
+      expect(await tryPin(rider, id, pin)).toMatchObject({ confirmed: false, attemptsLeft: 0 }) // even the right one waits
+      expect((await jobs(rider)).find((j) => j.id === id)?.pinLockedUntil).toBeTruthy()
+
+      // Handing it to another rider doesn't reset the count.
+      await asUser(rider, `select public.release_delivery($1)`, [id])
+      await asUser(otherRider, `select public.take_delivery($1)`, [id])
+      expect(await tryPin(otherRider, id, pin)).toMatchObject({ confirmed: false })
+
+      await admin(`update private.order_pins set locked_until = now() - interval '1 minute' where order_id = $1`, [id])
+      expect(await tryPin(otherRider, id, wrong)).toEqual({ confirmed: false, attemptsLeft: 4, lockedUntil: null })
+      expect((await tryPin(otherRider, id, pin)).confirmed).toBe(true)
+    })
+
+    it('gives orders placed the older way a PIN too', async () => {
+      const b = await newUser('pin5@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const listing = await newProduct('Bought the old way')
+      const [{ id }] = await asUser<{ id: string }>(b, `select public.buy_now($1, '4 Admiralty Way, Lekki', '0803 765 4321', 6.44, 3.47) id`, [listing])
+      expect((await pinsOf(b))[id]).toMatch(/^[0-9]{6}$/)
+    })
   })
 
   it('arranges cars alone, by delivery, and a won car with the dealer', async () => {
@@ -1380,6 +1528,21 @@ describe('reset_test_data', () => {
     expect(role).toBe('admin')
     const [{ seller }] = await admin<{ seller: string | null }>(`select p.seller_id seller from public.profiles p join auth.users u on u.id = p.id where u.email = 'seller@drawmart.test'`)
     expect(seller).not.toBeNull()
+
+    // A database set up before delivery accounts gets the test rider from its migration, with the shared password.
+    const riderLogin = () =>
+      admin<{ role: string; password_ok: boolean; identities: number }>(
+        `select p.role, u.encrypted_password = extensions.crypt('drawmart-demo', u.encrypted_password) password_ok,
+                (select count(*)::int from auth.identities i where i.user_id = u.id and i.provider = 'email') identities
+           from auth.users u join public.profiles p on p.id = u.id where u.email = 'rider@drawmart.test'`,
+      )
+    expect(await riderLogin()).toEqual([{ role: 'delivery', password_ok: true, identities: 1 }])
+    await admin(`delete from auth.identities where user_id in (select id from auth.users where email = 'rider@drawmart.test')`)
+    await admin(`delete from public.ledger_entries where user_id in (select id from auth.users where email = 'rider@drawmart.test')`)
+    await admin(`delete from auth.users where email = 'rider@drawmart.test'`)
+    expect(await riderLogin()).toEqual([])
+    await db.exec(sql('migrations/20261101220000_create_test_rider.sql'))
+    expect(await riderLogin()).toEqual([{ role: 'delivery', password_ok: true, identities: 1 }])
 
     await admin(`update public.app_settings set test_mode = false`)
     try {

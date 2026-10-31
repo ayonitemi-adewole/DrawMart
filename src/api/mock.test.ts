@@ -1,3 +1,4 @@
+import { isProductCode } from '@/domain/productCode'
 import { describe, expect, it } from 'vitest'
 import { verifyDraw } from '@/domain/draw'
 import { addDays, cautionFeeFor, localDate } from '@/domain/listing'
@@ -215,9 +216,68 @@ describe('mock api', () => {
 
     expect((await api.listMerchantOrders()).map((o) => o.id)).toEqual([order.id])
     await api.dispatchOrder(order.id)
-    await api.confirmOrder(order.id)
-    expect((await api.listMyOrders())[0]).toMatchObject({ status: 'delivered' })
     await expect(api.dispatchOrder(order.id)).rejects.toThrow(ApiError)
+  })
+
+  it('only marks an order delivered through a delivery account and the buyer’s PIN', async () => {
+    let t = Date.now()
+    const api = make(() => t)
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const p = await api.createProduct({ title: 'Lamp to deliver', description: 'A lamp', category: 'Home', priceKobo: k(20_000) })
+    await api.approveListing(p.id)
+
+    await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    await api.topUp(k(50_000))
+    const placed = await buyNow(api, p.id, delivery)
+    expect(placed.deliveryPin).toMatch(/^[0-9]{6}$/)
+    const pin = placed.deliveryPin!
+    expect((await api.listMyOrders())[0].deliveryPin).toBe(pin)
+    expect('confirmOrder' in api).toBe(false)
+    await expect(api.listDeliveryJobs()).rejects.toMatchObject({ code: 'forbidden' })
+
+    // Nobody but the buyer gets the PIN.
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const [forStore] = (await api.listMerchantOrders()).filter((o) => o.id === placed.id)
+    expect(forStore.deliveryPin).toBeNull()
+    expect(JSON.stringify(forStore)).not.toContain(pin)
+    await api.dispatchOrder(placed.id)
+
+    // In the pool: no buyer details until a rider takes it.
+    await api.auth.signInWithPassword('rider@drawmart.test', 'drawmart-demo')
+    const [waiting] = (await api.listDeliveryJobs()).filter((j) => j.id === placed.id)
+    expect(waiting).toMatchObject({ mine: false, dropOff: null, productCode: p.productCode })
+    expect(JSON.stringify(waiting)).not.toContain('Awolowo')
+    await expect(api.confirmDelivery(placed.id, pin)).rejects.toThrow(/carrying/)
+
+    await api.takeDelivery(placed.id)
+    await expect(api.takeDelivery(placed.id)).rejects.toThrow(/Another rider/)
+    const [taken] = (await api.listDeliveryJobs()).filter((j) => j.id === placed.id)
+    expect(taken).toMatchObject({ mine: true, dropOff: { buyerName: 'Funke Ade', address: delivery.address, location: delivery.location, contactPhone: delivery.contactPhone } })
+    expect(JSON.stringify(taken)).not.toContain(pin)
+
+    // Handed back, it's anyone's again, without the details.
+    await api.releaseDelivery(placed.id)
+    expect((await api.listDeliveryJobs()).find((j) => j.id === placed.id)).toMatchObject({ mine: false, dropOff: null })
+    await api.takeDelivery(placed.id)
+
+    // Wrong PINs count, and pause it.
+    await expect(api.confirmDelivery(placed.id, '12')).rejects.toThrow(/6-digit/)
+    const wrong = pin === '000000' ? '111111' : '000000'
+    for (let left = 4; left > 0; left--) expect(await api.confirmDelivery(placed.id, wrong)).toEqual({ confirmed: false, attemptsLeft: left, lockedUntil: null })
+    const locked = await api.confirmDelivery(placed.id, wrong)
+    expect(locked.lockedUntil).toBeTruthy()
+    expect(await api.confirmDelivery(placed.id, pin)).toMatchObject({ confirmed: false })
+    expect((await api.listDeliveryJobs()).find((j) => j.id === placed.id)?.pinLockedUntil).toBe(locked.lockedUntil)
+
+    t += 31 * 60_000
+    expect(await api.confirmDelivery(placed.id, pin)).toEqual({ confirmed: true, attemptsLeft: 0, lockedUntil: null })
+    await expect(api.confirmDelivery(placed.id, pin)).rejects.toThrow(/carrying/)
+    expect((await api.listDeliveryJobs()).find((j) => j.id === placed.id)).toMatchObject({ status: 'delivered', dropOff: null })
+
+    await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    expect((await api.listMyOrders())[0]).toMatchObject({ status: 'delivered', deliveryPin: null })
+    expect((await api.listMyOrders())[0].deliveredAt).toBeTruthy()
   })
 
   it('needs enough in the wallet to buy now', async () => {
@@ -479,6 +539,33 @@ describe('mock api', () => {
     expect(notes.map((n) => n.kind).sort()).toEqual([drawn.result!.iWon ? 'draw_won' : 'draw_lost', 'draw_sold_out'].sort())
     await api.markNotificationsRead()
     expect((await api.listNotifications()).every((n) => n.read)).toBe(true)
+  })
+
+  it('gives every product a permanent ID, shown wherever the product is', async () => {
+    const api = make()
+    const all = await api.listListings({ status: ['live', 'for_sale'] })
+    expect(all.every((l) => isProductCode(l.productCode))).toBe(true)
+    expect(new Set(all.map((l) => l.productCode)).size).toBe(all.length)
+
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const created = await api.createProduct({ title: 'New lamp', description: 'A lamp', category: 'Home', priceKobo: k(20_000) })
+    expect(isProductCode(created.productCode)).toBe(true)
+    const [pending] = (await api.listMerchantListings()).filter((l) => l.id === created.id)
+    expect(pending.productCode).toBe(created.productCode)
+    await api.approveListing(created.id)
+    expect((await api.getListing(created.id)).productCode).toBe(created.productCode) // approval keeps it
+
+    await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    await api.topUp(k(50_000))
+    await api.sendFirstMessage(created.id, 'Still available?')
+    expect((await api.listConversations())[0].productCode).toBe(created.productCode)
+    const [order] = await api.checkout({ listingIds: [created.id], fulfilment: 'delivery', delivery: { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }, pickupPointId: null })
+    expect(order.productCode).toBe(created.productCode)
+    expect((await api.listMyOrders())[0].productCode).toBe(created.productCode)
+
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    expect((await api.getMerchantMetrics(7)).listings.find((l) => l.listingId === created.id)?.productCode).toBe(created.productCode)
+    expect((await api.listMerchantOrders()).find((o) => o.listingId === created.id)?.productCode).toBe(created.productCode)
   })
 
   it('keeps a win to celebrate until it has been shown, for that buyer only', async () => {
