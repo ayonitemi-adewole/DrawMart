@@ -68,6 +68,13 @@ function PracticeRound({ onAgain }: { onAgain: () => void }) {
     }
     let current = PRACTICE.soldBefore + quantity
     setSold(current)
+    // Taking every ticket left means there's nothing to wait for.
+    if (current >= PRACTICE.ticketCount) {
+      finish()
+      return () => {
+        live = false
+      }
+    }
     const timer = setInterval(() => {
       current += 1
       setSold(current)

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useBalanceText } from "@/lib/balanceVisibility";
 import { SaveButton } from "@/components/SaveButton";
+import { ShareButtons } from "@/components/ShareButtons";
 import { ProductId } from "@/components/ProductId";
 import {
   useBuyTickets,
@@ -28,7 +29,6 @@ import {
   MapPinIcon,
   MinusIcon,
   PlusIcon,
-  ShareIcon,
   ShieldIcon,
   TicketIcon,
   TrophyIcon,
@@ -43,7 +43,6 @@ import {
   Button,
   Card,
   ErrorState,
-  IconButton,
   Notice,
   ProductImage,
   ProgressBar,
@@ -105,7 +104,10 @@ function ProductDetail({ listing: l }: { listing: ListingView }) {
         >
           <BackIcon size={18} /> Back
         </button>
-        <SaveButton listingId={l.id} title={l.title} />
+        <div className="flex items-center gap-1">
+          <SaveButton listingId={l.id} title={l.title} />
+          <ShareButtons listing={l} />
+        </div>
       </div>
       <div className="grid gap-6 md:grid-cols-[1fr_380px] md:items-start">
         <div className="flex min-w-0 flex-col gap-5">
@@ -186,30 +188,11 @@ function ProductDetail({ listing: l }: { listing: ListingView }) {
 
 function ListingDetail({ listing: l }: { listing: ListingView }) {
   const navigate = useNavigate();
-  const toast = useToast();
   const buyRef = useRef<HTMLDivElement>(null);
   const panelVisible = useInView(buyRef);
   const left = l.ticketCount - l.ticketsSold;
   const pct = percentSold(l.ticketsSold, l.ticketCount);
   const hot = isAlmostGone(l);
-
-  async function share() {
-    const url = window.location.href;
-    try {
-      if (navigator.share)
-        await navigator.share({
-          title: l.title,
-          text: `Win ${l.title} for ${formatNaira(l.buyerTicketPriceKobo)} on DrawMart`,
-          url,
-        });
-      else {
-        await navigator.clipboard.writeText(url);
-        toast("Link copied. Share it with a friend.", "info");
-      }
-    } catch {
-      /* share sheet dismissed */
-    }
-  }
 
   return (
     <div className="flex flex-col gap-5">
@@ -222,9 +205,7 @@ function ListingDetail({ listing: l }: { listing: ListingView }) {
         </button>
         <div className="flex items-center gap-1">
           <SaveButton listingId={l.id} title={l.title} />
-          <IconButton aria-label="Share this draw" onClick={share}>
-            <ShareIcon />
-          </IconButton>
+          <ShareButtons listing={l} />
         </div>
       </div>
 

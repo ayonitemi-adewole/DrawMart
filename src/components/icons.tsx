@@ -80,6 +80,12 @@ export const CheckCircleIcon = (p: IconProps) => (
     <path d="M8 12l3 3 5-6" />
   </Icon>
 );
+export const WhatsAppIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M3.5 20.5 4.8 16A8.5 8.5 0 1 1 8 19.2l-4.5 1.3Z" />
+    <path d="M9 8.5c-.5 0-1 .6-1 1.4 0 2.6 3.4 6 6.1 6 .8 0 1.4-.5 1.4-1v-.9l-2-.9-.8.9c-1-.4-2-1.4-2.5-2.5l.9-.8-.9-2.2H9Z" />
+  </Icon>
+);
 export const HeartIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M12 20.5s-8-4.9-8-11A4.6 4.6 0 0 1 12 6.6a4.6 4.6 0 0 1 8 2.9c0 6.1-8 11-8 11Z" />

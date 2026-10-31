@@ -5,6 +5,8 @@
  * Calls are made as the `authenticated` role with a user id, the same way
  * Supabase runs API requests, so grants and row-level security are exercised.
  */
+// @ts-expect-error A plain .mjs file: api/ deploys on its own, without TypeScript.
+import { LISTING_COLUMNS } from '../../api/_lib/preview.mjs'
 import { isProductCode } from '../../src/domain/productCode'
 import { readFileSync, readdirSync } from 'node:fs'
 import { PGlite } from '@electric-sql/pglite'
@@ -1538,6 +1540,21 @@ describe('saved addresses and account phone', () => {
     expect(await read()).toBe('0803 123 4567')
     await asUser(buyer, `select public.set_contact_phone('')`)
     expect(await read()).toBeNull()
+  })
+})
+
+describe('link previews', () => {
+  it('lets anyone read the columns a preview uses, for listings buyers can see', async () => {
+    const [{ id }] = await admin<{ id: string }>(`select id from public.listings where status = 'live' and kind = 'raffle' limit 1`)
+    const [row] = await asUser<Record<string, unknown>>(null, `select ${LISTING_COLUMNS} from public.listings where id = $1`, [id])
+    expect(Object.keys(row).sort()).toEqual(LISTING_COLUMNS.split(',').sort())
+    expect(row.title).toBeTruthy()
+    expect(Number(row.ticket_count)).toBeGreaterThan(0)
+  })
+
+  it('shows nothing for a listing buyers can’t see', async () => {
+    const [{ id }] = await admin<{ id: string }>(`select id from public.listings where status = 'pending_review' limit 1`)
+    expect(await asUser(null, `select ${LISTING_COLUMNS} from public.listings where id = $1`, [id])).toEqual([])
   })
 })
 

@@ -1,6 +1,22 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/listing-preview-image.mjs": {
+      "includeFiles": "api/_lib/fonts/**"
+    }
+  },
   "rewrites": [
+    {
+      "source": "/listings/:id",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": ".*(WhatsApp|facebookexternalhit|Facebot|Twitterbot|TelegramBot|LinkedInBot|Slackbot|Discordbot|SkypeUriPreview|Pinterestbot).*"
+        }
+      ],
+      "destination": "/api/listing-preview?id=:id"
+    },
     {
       "source": "/(.*)",
       "destination": "/index.html"
