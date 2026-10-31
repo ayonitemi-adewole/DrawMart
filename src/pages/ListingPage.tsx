@@ -52,6 +52,7 @@ import {
   cx,
   errorMessage,
 } from "@/components/ui";
+import { chancePercentText, chanceText, percentSold } from "@/domain/chance";
 import { formatNaira } from "@/domain/money";
 import { describeUnsoldPolicy, handoverMethodFor } from "@/domain/listing";
 import {
@@ -189,7 +190,7 @@ function ListingDetail({ listing: l }: { listing: ListingView }) {
   const buyRef = useRef<HTMLDivElement>(null);
   const panelVisible = useInView(buyRef);
   const left = l.ticketCount - l.ticketsSold;
-  const pct = Math.round((l.ticketsSold / l.ticketCount) * 100);
+  const pct = percentSold(l.ticketsSold, l.ticketCount);
   const hot = isAlmostGone(l);
 
   async function share() {
@@ -285,8 +286,8 @@ function ListingDetail({ listing: l }: { listing: ListingView }) {
               { k: "Worth", v: formatNaira(l.priceKobo) },
               { k: "Per ticket", v: formatNaira(l.buyerTicketPriceKobo) },
               {
-                k: "Odds per ticket",
-                v: `1 in ${l.ticketCount.toLocaleString("en-NG")}`,
+                k: "Chance per ticket",
+                v: chanceText(1, l.ticketCount),
               },
               {
                 k: l.status === "live" ? "Closes in" : l.status === "sold_out" ? "Winner in" : "Status",
@@ -763,7 +764,6 @@ function BuyPanel({
           spentThisWeekKobo: wallet.data.spentThisWeekKobo,
         })
       : null;
-  const oddsPct = ((held + q) / l.ticketCount) * 100;
   const presets = [...new Set([1, 5, 10, max])].filter(
     (n) => n >= 1 && n <= max,
   );
@@ -883,17 +883,13 @@ function BuyPanel({
               <GaugeIcon size={22} className="shrink-0" />
               <div className="flex flex-col text-sm leading-tight">
                 <span>
-                  Your odds:{" "}
-                  <strong>
-                    {(held + q).toLocaleString("en-NG")} in{" "}
-                    {l.ticketCount.toLocaleString("en-NG")}
-                  </strong>
+                  Your chance with {held + q}{" "}
+                  {held + q === 1 ? "ticket" : "tickets"}:{" "}
+                  <strong>{chanceText(held + q, l.ticketCount)}</strong>
                 </span>
                 <span className="text-xs opacity-80">
-                  {oddsPct < 0.01
-                    ? "<0.01"
-                    : oddsPct.toFixed(oddsPct < 1 ? 2 : 1)}
-                  % chance to win
+                  {chancePercentText(held + q, l.ticketCount)}
+                  {held > 0 ? `, counting the ${held} you already hold` : ""}
                 </span>
               </div>
             </div>

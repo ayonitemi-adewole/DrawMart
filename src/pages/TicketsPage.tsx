@@ -27,6 +27,7 @@ import {
   buttonClass,
   type Tone,
 } from "@/components/ui";
+import { chanceText, percentSold } from "@/domain/chance";
 import { formatNaira } from "@/domain/money";
 import { dateTime, ticketNo } from "@/lib/time";
 
@@ -72,7 +73,7 @@ function status(l: ListingView): { tone: Tone; label: string; detail: string } {
   return {
     tone: "brand",
     label: `${(l.ticketCount - l.ticketsSold).toLocaleString("en-NG")} left`,
-    detail: `Odds ${l.myNumbers.length} in ${l.ticketCount.toLocaleString("en-NG")}`,
+    detail: `Your chance: ${chanceText(l.myNumbers.length, l.ticketCount)}`,
   };
 }
 
@@ -303,7 +304,7 @@ function TicketCard({
           />
           <div className="flex justify-between text-xs text-subtle">
             <span>
-              {Math.round((l.ticketsSold / l.ticketCount) * 100)}% sold
+              {percentSold(l.ticketsSold, l.ticketCount)}% sold
             </span>
             <Countdown closesAt={l.closesAt} className="font-bold" />
           </div>

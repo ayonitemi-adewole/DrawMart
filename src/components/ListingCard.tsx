@@ -1,5 +1,6 @@
 import { Link } from "react-router";
 import type { ListingView } from "@/api/types";
+import { chanceText, percentSold } from "@/domain/chance";
 import { formatNaira } from "@/domain/money";
 import { salePriceKobo } from "@/domain/orders";
 import { isBoosted } from "@/domain/boosts";
@@ -29,6 +30,31 @@ export function valueMultiple(
   return Math.round(l.priceKobo / l.buyerTicketPriceKobo);
 }
 
+/** One of a live draw's four numbers: never wraps, even on the narrowest phone card. */
+function PlainNumber({
+  label,
+  className,
+  children,
+}: {
+  label: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col-reverse whitespace-nowrap">
+      <dt className="text-[11px] leading-tight text-subtle">{label}</dt>
+      <dd
+        className={cx(
+          "text-[13px] leading-tight font-extrabold tabular-nums sm:text-sm",
+          className,
+        )}
+      >
+        {children}
+      </dd>
+    </div>
+  );
+}
+
 /** `compact`: for the scrolling rows, where cards are narrower than in a grid. */
 export function ListingCard({
   listing: l,
@@ -41,9 +67,8 @@ export function ListingCard({
   style?: React.CSSProperties;
   compact?: boolean;
 }) {
-  const left = l.ticketCount - l.ticketsSold;
   const hot = isAlmostGone(l);
-  const pct = Math.round((l.ticketsSold / l.ticketCount) * 100);
+  const pct = percentSold(l.ticketsSold, l.ticketCount);
   const mine = l.myNumbers.length;
   const price = salePriceKobo(l);
   // Fixed-price cards: regular products, and draws that ended unsold.
@@ -154,18 +179,18 @@ export function ListingCard({
 
           {!forSale && (
             <div className="flex flex-col gap-1.5">
-              <div className="flex justify-between text-xs font-semibold">
-                <span className={hot ? "text-hot-ink" : "text-muted"}>
-                  {pct}% sold
-                </span>
-                <span className="text-subtle">
-                  {l.status === "live"
-                    ? `${left.toLocaleString("en-NG")} left`
-                    : l.status === "sold_out"
+              {l.status === "live" ? null : (
+                <div className="flex justify-between text-xs font-semibold">
+                  <span className={hot ? "text-hot-ink" : "text-muted"}>
+                    {pct}% sold
+                  </span>
+                  <span className="text-subtle">
+                    {l.status === "sold_out"
                       ? "Winner coming soon"
                       : "Draw complete"}
-                </span>
-              </div>
+                  </span>
+                </div>
+              )}
               <ProgressBar
                 value={l.ticketsSold}
                 max={l.ticketCount}
@@ -175,37 +200,63 @@ export function ListingCard({
             </div>
           )}
 
-          <div className="mt-auto flex flex-wrap items-end justify-between gap-2 border-t border-dashed border-line pt-3">
-            {forSale ? (
-              <div className="flex flex-col">
-                <span className="text-[11px] text-subtle">
-                  {l.status === "sold" ? "Sold for" : "Buy now"}
-                </span>
-                <span className="text-lg leading-tight font-extrabold">
-                  {formatNaira(price ?? l.fallbackPriceKobo ?? l.priceKobo)}
-                </span>
-              </div>
-            ) : (
-              <div className="flex flex-col">
-                <span className="text-[11px] text-subtle line-through decoration-subtle/50">
-                  Worth {formatNaira(l.priceKobo)}
-                </span>
-                <span className="text-lg leading-tight font-extrabold">
+          {!forSale && l.status === "live" ? (
+            <div className="mt-auto flex flex-col gap-1.5 border-t border-dashed border-line pt-3">
+              <span className="text-[11px] text-subtle line-through decoration-subtle/50">
+                Worth {formatNaira(l.priceKobo)}
+              </span>
+              <dl className="grid grid-cols-[auto_auto] justify-between gap-x-2 gap-y-1.5">
+                <PlainNumber label="per ticket">
                   {formatNaira(l.buyerTicketPriceKobo)}
-                  <span className="text-xs font-semibold text-subtle">
-                    {" "}
-                    / ticket
+                </PlainNumber>
+                <PlainNumber label="chance">
+                  {chanceText(1, l.ticketCount)}
+                </PlainNumber>
+                <PlainNumber label="sold" className={hot ? "text-hot-ink" : undefined}>
+                  {pct}%
+                </PlainNumber>
+                <PlainNumber label="left">
+                  <Countdown
+                    closesAt={l.closesAt}
+                    icon={false}
+                    closingText="00:00:00"
+                  />
+                </PlainNumber>
+              </dl>
+            </div>
+          ) : (
+            <div className="mt-auto flex flex-wrap items-end justify-between gap-2 border-t border-dashed border-line pt-3">
+              {forSale ? (
+                <div className="flex flex-col">
+                  <span className="text-[11px] text-subtle">
+                    {l.status === "sold" ? "Sold for" : "Buy now"}
                   </span>
-                </span>
-              </div>
-            )}
-            {l.status === "live" || (l.status === "sold_out" && l.drawAt) ? (
-              <Countdown
-                closesAt={l.status === "live" ? l.closesAt : l.drawAt!}
-                className="rounded-full bg-sunken px-2.5 py-1 text-xs font-bold"
-              />
-            ) : null}
-          </div>
+                  <span className="text-lg leading-tight font-extrabold">
+                    {formatNaira(price ?? l.fallbackPriceKobo ?? l.priceKobo)}
+                  </span>
+                </div>
+              ) : (
+                <div className="flex flex-col">
+                  <span className="text-[11px] text-subtle line-through decoration-subtle/50">
+                    Worth {formatNaira(l.priceKobo)}
+                  </span>
+                  <span className="text-lg leading-tight font-extrabold">
+                    {formatNaira(l.buyerTicketPriceKobo)}
+                    <span className="text-xs font-semibold text-subtle">
+                      {" "}
+                      / ticket
+                    </span>
+                  </span>
+                </div>
+              )}
+              {l.status === "sold_out" && l.drawAt ? (
+                <Countdown
+                  closesAt={l.drawAt}
+                  className="rounded-full bg-sunken px-2.5 py-1 text-xs font-bold"
+                />
+              ) : null}
+            </div>
+          )}
         </div>
       </Link>
       {/* Beside the link, not in it: a button inside a link isn't valid and would open the listing. */}
