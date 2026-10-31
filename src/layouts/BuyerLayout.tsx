@@ -38,16 +38,16 @@ import { WinCelebration } from "@/components/WinCelebration";
 import { buttonClass, cx } from "@/components/ui";
 import { formatNaira } from "@/domain/money";
 import { APP_HOME } from "@/lib/apps";
+import { useBalanceHidden, useBalanceText } from "@/lib/balanceVisibility";
 
 const NAV = [
   { to: "/", label: "Explore", icon: HomeIcon, end: true },
   { to: "/tickets", label: "Tickets", icon: TicketIcon },
   { to: "/draws", label: "Results", icon: TrophyIcon },
-  { to: "/wallet", label: "Wallet", icon: WalletIcon },
   { to: "/sell", label: "Sell", icon: StoreIcon },
 ];
 
-/** Phones and tablets: the rest of NAV is in the menu. */
+/** Phones and tablets: Sell is in the menu. */
 const BOTTOM_NAV = [
   { to: "/", label: "Explore", icon: HomeIcon, end: true },
   { to: "/tickets", label: "Tickets", icon: TicketIcon },
@@ -104,10 +104,16 @@ function WalletChip({
   /** In the menu, where it needs to look like the link it is. */
   showArrow?: boolean;
 }) {
+  const [hidden] = useBalanceHidden();
+  const money = useBalanceText();
   return (
     <Link
       to="/wallet"
-      aria-label={`Wallet: ${cash === null ? "loading" : formatNaira(cash)} cash${credit ? `, ${formatNaira(credit)} credit` : ""}`}
+      aria-label={
+        hidden
+          ? "Wallet: balance hidden"
+          : `Wallet: ${cash === null ? "loading" : formatNaira(cash)} cash${credit ? `, ${formatNaira(credit)} credit` : ""}`
+      }
       className={cx(
         "items-center gap-2 rounded-2xl bg-ink py-1 pr-3.5 pl-1.5 text-sm font-extrabold text-ground no-underline shadow-card transition hover:opacity-90",
         className,
@@ -118,11 +124,11 @@ function WalletChip({
       </span>
       <span className="flex flex-col leading-none">
         <span className="tabular-nums">
-          {cash === null ? "…" : formatNaira(cash)}
+          {cash === null ? "…" : money(cash)}
         </span>
         {credit > 0 ? (
           <span className="mt-0.5 text-[10px] font-bold text-ticket">
-            +{formatNaira(credit)} credit
+            +{money(credit)} credit
           </span>
         ) : null}
       </span>

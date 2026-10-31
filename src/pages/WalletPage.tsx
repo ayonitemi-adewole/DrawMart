@@ -19,6 +19,8 @@ import {
   GiftIcon,
   PlusIcon,
   RefreshIcon,
+  EyeIcon,
+  EyeOffIcon,
   SettingsIcon,
   ShieldIcon,
   StoreIcon,
@@ -27,6 +29,7 @@ import {
   type IconComponent,
 } from "@/components/icons";
 import { Sheet } from "@/components/Sheet";
+import { useBalanceHidden, useBalanceText } from "@/lib/balanceVisibility";
 import { useToast } from "@/components/toast";
 import {
   Button,
@@ -134,6 +137,8 @@ function BalanceCard({ w }: { w: WalletView }) {
   const deposit = useDeposit();
   const toast = useToast();
   const [custom, setCustom] = useState(false);
+  const [hidden, setHidden] = useBalanceHidden();
+  const money = useBalanceText();
   const total = w.balance.cashKobo + w.balance.creditKobo;
   const payments = api.payments;
   const busy = topUp.isPending || deposit.isPending;
@@ -171,14 +176,24 @@ function BalanceCard({ w }: { w: WalletView }) {
 
       <div className="flex items-start justify-between gap-3">
         <div className="flex flex-col">
-          <span className="text-xs font-semibold text-on-brand-muted">
+          <span className="flex items-center gap-1 text-xs font-semibold text-on-brand-muted">
             Available to spend
+            <button
+              type="button"
+              onClick={() => setHidden(!hidden)}
+              aria-pressed={hidden}
+              aria-label={hidden ? "Show your balance" : "Hide your balance"}
+              title={hidden ? "Show your balance" : "Hide your balance"}
+              className="-my-3 flex size-11 cursor-pointer items-center justify-center rounded-xl text-on-hero transition hover:bg-white/10"
+            >
+              {hidden ? <EyeOffIcon size={18} /> : <EyeIcon size={18} />}
+            </button>
           </span>
           <span
-            key={total}
+            key={`${total}-${hidden}`}
             className="animate-fade-in font-display text-5xl font-extrabold tracking-tight tabular-nums"
           >
-            {formatNaira(total)}
+            {money(total)}
           </span>
         </div>
         <span className="flex size-12 items-center justify-center rounded-2xl bg-white/10 text-ticket ring-1 ring-white/15">
@@ -192,7 +207,7 @@ function BalanceCard({ w }: { w: WalletView }) {
             Cash
           </span>
           <span className="text-lg font-extrabold tabular-nums">
-            {formatNaira(w.balance.cashKobo)}
+            {money(w.balance.cashKobo)}
           </span>
         </div>
         <div className="flex flex-col rounded-2xl bg-ticket/15 p-3 ring-1 ring-ticket/30">
@@ -200,7 +215,7 @@ function BalanceCard({ w }: { w: WalletView }) {
             <NairaIcon size={12} /> Store credit
           </span>
           <span className="text-lg font-extrabold text-ticket tabular-nums">
-            {formatNaira(w.balance.creditKobo)}
+            {money(w.balance.creditKobo)}
           </span>
         </div>
       </div>

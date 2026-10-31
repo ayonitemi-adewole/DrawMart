@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
+import { useBalanceText } from "@/lib/balanceVisibility";
 import { ProductId } from "@/components/ProductId";
 import {
   useBuyTickets,
@@ -742,6 +743,7 @@ function BuyPanel({
 
   const cost = q * l.buyerTicketPriceKobo;
   const balance = wallet.data?.balance;
+  const balanceText = useBalanceText();
   const pay = balance ? splitPayment(cost, balance) : null;
   const blocker: PurchaseError | null =
     me.data && wallet.data
@@ -919,7 +921,7 @@ function BuyPanel({
                 <div className="flex justify-between text-xs text-subtle">
                   <dt>Wallet after</dt>
                   <dd className="tabular-nums">
-                    {formatNaira(
+                    {balanceText(
                       Math.max(0, balance.cashKobo + balance.creditKobo - cost),
                     )}
                   </dd>

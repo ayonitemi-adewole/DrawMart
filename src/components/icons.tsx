@@ -377,6 +377,14 @@ export const EyeIcon = (p: IconProps) => (
   </Icon>
 );
 
+export const EyeOffIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z" />
+    <circle cx="12" cy="12" r="3" />
+    <path d="m4 4 16 16" />
+  </Icon>
+);
+
 export const ChartIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
