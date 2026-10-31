@@ -9,6 +9,7 @@ import type { HandoverDetails } from '@/domain/listing'
 import type { PinResult } from '@/domain/delivery'
 import type { SavedAddress, SavedAddressInput } from '@/domain/addresses'
 import type { CheckoutDetails } from '@/domain/cart'
+import type { PushCategory, PushPreferences, PushSubscriptionKeys } from '@/domain/push'
 import type { OrderError } from '@/domain/orders'
 import type { PurchaseError } from '@/domain/rules'
 import type { BoostPackage, BoostWindow } from '@/domain/boosts'
@@ -401,6 +402,8 @@ export interface DrawMartApi {
   readonly auth: AuthAdapter
   /** Present when top-ups go through a payment provider. */
   readonly payments?: PaymentsAdapter
+  /** What this device signs up for phone notifications with. Null when they aren't set up. */
+  readonly pushPublicKey: string | null
 
   // Session
   getCurrentUser(): Promise<User>
@@ -427,6 +430,13 @@ export interface DrawMartApi {
   /** Regular products and draws the buyer has won. Never cars. */
   addToCart(listingId: string): Promise<void>
   removeFromCart(listingId: string): Promise<void>
+  /** Which kinds of phone notification this buyer wants. Everything's on until they say otherwise. */
+  getPushPreferences(): Promise<PushPreferences>
+  setPushPreference(category: PushCategory, enabled: boolean): Promise<void>
+  /** Only the browsers' own push services. Sending is Supabase only: the mock just keeps the record. */
+  savePushSubscription(subscription: PushSubscriptionKeys): Promise<void>
+  /** Your own device only. Fine if it's already gone. */
+  deletePushSubscription(endpoint: string): Promise<void>
   /** Public: winners who chose to be shown and were approved. First name only. */
   listWinnersWall(): Promise<WinnerWallEntry[]>
   /** This buyer's own stories, not counting any withdrawn. */

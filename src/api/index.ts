@@ -12,7 +12,8 @@ import type { DrawMartApi } from './types'
  */
 function createApi(): DrawMartApi {
   const env = import.meta.env
-  if (env.VITE_BACKEND !== 'supabase') return createMockApi()
+  const pushPublicKey = env.VITE_VAPID_PUBLIC_KEY || null
+  if (env.VITE_BACKEND !== 'supabase') return createMockApi({ pushPublicKey })
 
   const url = env.VITE_SUPABASE_URL
   const key = env.VITE_SUPABASE_PUBLISHABLE_KEY
@@ -29,7 +30,7 @@ function createApi(): DrawMartApi {
         : 'VITE_TEST_MODE is off, so VITE_FLUTTERWAVE_PUBLIC_KEY must be a live key.',
     )
   }
-  return createSupabaseApi(createClient(url, key), { testMode, flutterwavePublicKey })
+  return createSupabaseApi(createClient(url, key), { testMode, flutterwavePublicKey, pushPublicKey })
 }
 
 export const api: DrawMartApi = createApi()

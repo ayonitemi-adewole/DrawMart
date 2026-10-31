@@ -8,11 +8,12 @@
 // @ts-expect-error A plain .mjs file: api/ deploys on its own, without TypeScript.
 import { LISTING_COLUMNS } from '../../api/_lib/preview.mjs'
 import { WINNER_CONSENT_VERSION, winnerStoryError } from '../../src/domain/winnerStories'
+import { pushSubscriptionValid } from '../../src/domain/push'
 import { isProductCode } from '../../src/domain/productCode'
 import { readFileSync, readdirSync } from 'node:fs'
 import { PGlite } from '@electric-sql/pglite'
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto'
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { verifyDraw, winningTicketNumber, createSeed } from '@/domain/draw'
 import { computeListingEconomics, platformFeeBps } from '@/domain/fees'
 import { addDays, localDate } from '@/domain/listing'
@@ -1556,6 +1557,203 @@ describe('link previews', () => {
   it('shows nothing for a listing buyers can’t see', async () => {
     const [{ id }] = await admin<{ id: string }>(`select id from public.listings where status = 'pending_review' limit 1`)
     expect(await asUser(null, `select ${LISTING_COLUMNS} from public.listings where id = $1`, [id])).toEqual([])
+  })
+})
+
+describe('phone notifications', () => {
+  let buyer: string, other: string, store: string, staff: string
+  const device = (name: string) => ({ endpoint: `https://fcm.googleapis.com/fcm/send/${name}`, p256dh: 'B'.repeat(87), auth: 'a'.repeat(22) })
+  const subscribe = (who: string, d: ReturnType<typeof device>) => asUser(who, `select public.save_push_subscription($1, $2, $3)`, [d.endpoint, d.p256dh, d.auth])
+  const queued = (who: string) => admin<{ title: string; body: string; url: string; tag: string }>(`select title, body, url, tag from private.push_outbox where user_id = $1 order by created_at`, [who])
+  const clearQueue = () => admin(`delete from private.push_outbox where id is not null`)
+  const draw = async (title: string, tickets = 2) => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ title, priceKobo: 100_000 * tickets, ticketPriceKobo: 100_000 })])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    return id
+  }
+  const claim = async (limit = 50) => (await asService<{ b: { id: string; title: string; subscriptions: { endpoint: string }[] }[] }>(`select public.claim_push_batch($1) b`, [limit]))[0].b
+
+  beforeAll(async () => {
+    buyer = await newUser('pusher@example.com')
+    other = await newUser('pusher2@example.com')
+    store = await newUser('pushstore@example.com', { merchantId: IKEJA })
+    staff = await newUser('pushstaff@example.com', { role: 'admin' })
+    await asUser(staff, `select public.set_boost_settings(1000, false, 12)`)
+    await subscribe(buyer, device('buyer'))
+    await subscribe(other, device('other'))
+  })
+  beforeEach(clearQueue)
+
+  it('tells a winner and the other ticket holders, with nothing about how close it came', async () => {
+    const id = await draw('Push prize')
+    await asUser(buyer, `select public.buy_tickets($1, 1)`, [id])
+    await asUser(other, `select public.buy_tickets($1, 1)`, [id])
+    expect((await queued(buyer)).map((q) => q.title)).toEqual(['All tickets sold'])
+    expect((await queued(buyer))[0]).toMatchObject({ url: `/listings/${id}`, tag: `draw-${id}` })
+    await clearQueue()
+
+    await asUser(staff, `select public.demo_run_draw($1)`, [id])
+    const [a, b] = [(await queued(buyer))[0], (await queued(other))[0]]
+    const [won, lost] = a.title === 'You won a draw' ? [a, b] : [b, a]
+    expect(won).toMatchObject({ title: 'You won a draw', body: 'Push prize. Open DrawMart to arrange it.', url: `/draws/${id}` })
+    expect(lost).toMatchObject({ title: 'Draw result', body: 'The result for Push prize is in.', url: `/draws/${id}` })
+    expect(JSON.stringify([won, lost])).not.toMatch(/close|nearly|almost|unlucky/i)
+  })
+
+  it('says nothing before the result is announced', async () => {
+    const id = await draw('Push secret')
+    await asUser(buyer, `select public.buy_tickets($1, 1)`, [id])
+    await asUser(other, `select public.buy_tickets($1, 1)`, [id])
+    const all = [...(await queued(buyer)), ...(await queued(other))]
+    expect(all.map((q) => q.title)).toEqual(['All tickets sold', 'All tickets sold'])
+    expect(JSON.stringify(all)).not.toMatch(/you won|draw result|the result for/i)
+  })
+
+  it('never puts a delivery PIN on the lock screen', async () => {
+    const [{ id: item }] = await admin<{ id: string }>(`select id from public.listings where status = 'for_sale' and kind = 'product' and category <> 'Cars' limit 1`)
+    await admin(`insert into public.ledger_entries (user_id, kind, cash_kobo, memo) values ($1, 'topup', 10000000000, 'test')`, [buyer])
+    await asUser(buyer, `select public.set_weekly_limit(100000000000)`)
+    const [{ ids }] = await asUser<{ ids: string[] }>(buyer, `select public.checkout($1) ids`, [{ listingIds: [item], fulfilment: 'delivery', address: '15 Awolowo Road, Ikoyi', phone: '0803 123 4567', lat: 6.45, lng: 3.43, pickupPointId: null }])
+    const [{ pin }] = await admin<{ pin: string }>(`select pin from private.order_pins where order_id = $1`, [ids[0]])
+    await admin(`update public.orders set status = 'dispatched' where id = $1`, [ids[0]])
+    await admin(`update public.orders set status = 'delivered' where id = $1`, [ids[0]])
+    const q = await queued(buyer)
+    expect(q.map((x) => x.title)).toEqual(['Your order is on its way', 'Order delivered'])
+    expect(q[0].url).toBe('/tickets?view=orders')
+    expect(q[0].body).toContain('delivery PIN')
+    expect(JSON.stringify(q)).not.toContain(pin)
+  })
+
+  it('says a message arrived, never what it says, and only to the other side', async () => {
+    const [{ id: item }] = await admin<{ id: string }>(`select id from public.listings where status = 'for_sale' and kind = 'product' and merchant_id = $1 limit 1`, [IKEJA])
+    const [{ id: convo }] = await asUser<{ id: string }>(other, `select public.send_first_message($1, 'SecretWordOne') id`, [item])
+    expect(await queued(other)).toEqual([])
+    await asUser(store, `select public.send_message($1, 'SecretWordTwo')`, [convo])
+    const [q] = await queued(other)
+    expect(q).toMatchObject({ title: 'New message', url: `/messages/${convo}`, tag: `chat-${convo}` })
+    expect(q.body).toMatch(/^About /)
+    expect(JSON.stringify(await queued(other))).not.toContain('SecretWord')
+  })
+
+  it('reaches an individual seller when a buyer writes', async () => {
+    const [{ id: shop }] = await admin<{ id: string }>(`insert into public.merchants (kind, name, area, cac_number, verified) values ('individual', 'Push shop', 'Yaba', '', true) returning id`)
+    const seller = await newUser('pushseller@example.com')
+    await admin(`update public.profiles set seller_id = $1 where id = $2`, [shop, seller])
+    await subscribe(seller, device('seller'))
+    const [{ id: item }] = await admin<{ id: string }>(`select id from public.listings limit 1`)
+    const [{ id: convo }] = await admin<{ id: string }>(`insert into public.conversations (listing_id, buyer_id, merchant_id) values ($1, $2, $3) returning id`, [item, other, shop])
+    await admin(`insert into public.messages (conversation_id, sender, sender_user_id, body) values ($1, 'buyer', $2, 'hello')`, [convo, other])
+    expect((await queued(seller)).map((q) => q.title)).toEqual(['New message'])
+  })
+
+  it('respects what each buyer has turned off', async () => {
+    await asUser(buyer, `select public.set_push_preference('drawResults', false)`)
+    const id = await draw('Push quiet')
+    await asUser(buyer, `select public.buy_tickets($1, 1)`, [id])
+    await asUser(other, `select public.buy_tickets($1, 1)`, [id])
+    expect(await queued(buyer)).toEqual([])
+    expect(await queued(other)).toHaveLength(1)
+    const [prefs] = await asUser<{ draw_results: boolean; wins: boolean }>(buyer, `select * from public.push_preferences`)
+    expect(prefs).toMatchObject({ draw_results: false, wins: true })
+    await asUser(buyer, `select public.set_push_preference('drawResults', true)`)
+    await expectFail(asUser(buyer, `select public.set_push_preference('nonsense', false)`), 'invalid_input')
+  })
+
+  it('queues nothing for someone with no device', async () => {
+    const quiet = await newUser('pushquiet@example.com')
+    const id = await draw('Push none')
+    await asUser(quiet, `select public.buy_tickets($1, 1)`, [id])
+    await asUser(other, `select public.buy_tickets($1, 1)`, [id])
+    expect(await queued(quiet)).toEqual([])
+  })
+
+  it('only signs up real push services, for buyers', async () => {
+    for (const endpoint of ['https://evil.example/abc', 'http://fcm.googleapis.com/abc', 'https://fcm.googleapis.com.evil.example/abc', 'https://169.254.169.254/x', '']) {
+      expect(pushSubscriptionValid({ ...device('x'), endpoint })).toBe(false)
+      await expectFail(subscribe(other, { ...device('x'), endpoint }), 'invalid_input')
+    }
+    for (const endpoint of ['https://fcm.googleapis.com/fcm/send/ok1', 'https://updates.push.services.mozilla.com/wpush/v2/ok2', 'https://web.push.apple.com/ok3', 'https://wns2.notify.windows.com/w/?token=ok4']) {
+      expect(pushSubscriptionValid({ ...device('x'), endpoint })).toBe(true)
+      await subscribe(other, { ...device('x'), endpoint })
+      await asUser(other, `select public.delete_push_subscription($1)`, [endpoint])
+    }
+    await expectFail(subscribe(store, device('s')), 'forbidden')
+    await expectFail(subscribe(staff, device('a')), 'forbidden')
+    await expect(asUser(null, `select public.save_push_subscription('a', 'b', 'c')`)).rejects.toThrow(/permission denied/)
+  })
+
+  it('moves a shared phone to whoever turned it on last, and only lets you remove your own', async () => {
+    const shared = device('shared')
+    await subscribe(buyer, shared)
+    await asUser(other, `select public.delete_push_subscription($1)`, [shared.endpoint])
+    expect(await admin(`select 1 from public.push_subscriptions where endpoint = $1`, [shared.endpoint])).toHaveLength(1)
+    await subscribe(other, shared)
+    const [{ user_id }] = await admin<{ user_id: string }>(`select user_id from public.push_subscriptions where endpoint = $1`, [shared.endpoint])
+    expect(user_id).toBe(other)
+    await asUser(other, `select public.delete_push_subscription($1)`, [shared.endpoint])
+    expect(await admin(`select 1 from public.push_subscriptions where endpoint = $1`, [shared.endpoint])).toEqual([])
+  })
+
+  it('keeps device keys and the queue from every client', async () => {
+    for (const who of [null, buyer, store, staff]) {
+      await expect(asUser(who, `select * from public.push_subscriptions`)).rejects.toThrow(/permission denied/)
+      await expect(asUser(who, `select * from private.push_outbox`)).rejects.toThrow(/permission denied/)
+    }
+    await expect(asUser(buyer, `select public.claim_push_batch(10)`)).rejects.toThrow(/permission denied/)
+    await expect(asUser(buyer, `select public.finish_push(gen_random_uuid(), true, '{}')`)).rejects.toThrow(/permission denied/)
+    await expect(asUser(staff, `select public.claim_push_batch(10)`)).rejects.toThrow(/permission denied/)
+    expect(await asUser(other, `select * from public.push_preferences where user_id = $1`, [buyer])).toEqual([])
+  })
+
+  it('hands each message to one sender at a time, and retries a failure a few times', async () => {
+    const id = await draw('Push retry')
+    await asUser(buyer, `select public.buy_tickets($1, 1)`, [id])
+    await asUser(other, `select public.buy_tickets($1, 1)`, [id])
+    const [first] = (await claim()).filter((b) => b.subscriptions.some((s) => s.endpoint.endsWith('/buyer')))
+    expect(first.title).toBe('All tickets sold')
+    expect(await claim()).toEqual([]) // already being sent
+
+    for (let attempt = 2; attempt <= 3; attempt++) {
+      await asService(`select public.finish_push($1, false, '{}')`, [first.id])
+      await admin(`update private.push_outbox set claimed_at = now() - interval '3 minutes' where id = $1`, [first.id])
+      expect((await claim()).some((b) => b.id === first.id)).toBe(true)
+    }
+    await admin(`update private.push_outbox set claimed_at = now() - interval '3 minutes' where id = $1`, [first.id])
+    expect((await claim()).some((b) => b.id === first.id)).toBe(false) // gave up after three
+  })
+
+  it('stops once sent, and forgets a device the browser has dropped', async () => {
+    const dead = device('dead')
+    await subscribe(other, dead)
+    const id = await draw('Push done')
+    await asUser(buyer, `select public.buy_tickets($1, 1)`, [id])
+    await asUser(other, `select public.buy_tickets($1, 1)`, [id])
+    const batch = await claim()
+    const mine = batch.find((b) => b.subscriptions.some((s) => s.endpoint === dead.endpoint))!
+    expect(mine.subscriptions.map((s) => s.endpoint).sort()).toEqual([device('dead').endpoint, device('other').endpoint])
+    await asService(`select public.finish_push($1, true, $2)`, [mine.id, [dead.endpoint]])
+    expect(await admin(`select 1 from public.push_subscriptions where endpoint = $1`, [dead.endpoint])).toEqual([])
+    const [{ sent_at }] = await admin<{ sent_at: string | null }>(`select sent_at from private.push_outbox where id = $1`, [mine.id])
+    expect(sent_at).toBeTruthy()
+    await admin(`update private.push_outbox set claimed_at = now() - interval '3 minutes' where id = $1`, [mine.id])
+    expect((await claim()).some((b) => b.id === mine.id)).toBe(false)
+  })
+
+  it('drops old news rather than sending it late', async () => {
+    const id = await draw('Push stale')
+    await asUser(buyer, `select public.buy_tickets($1, 1)`, [id])
+    await asUser(other, `select public.buy_tickets($1, 1)`, [id])
+    await admin(`update private.push_outbox set created_at = now() - interval '25 hours' where id is not null`)
+    expect(await claim()).toEqual([])
+    expect(await queued(buyer)).toEqual([])
+  })
+
+  it('stays quiet until sending is set up, rather than failing', async () => {
+    const id = await draw('Push job')
+    await asUser(buyer, `select public.buy_tickets($1, 1)`, [id])
+    await asUser(other, `select public.buy_tickets($1, 1)`, [id])
+    await admin(`select private.send_pending_push()`)
+    expect((await queued(buyer)).length).toBe(1)
   })
 })
 

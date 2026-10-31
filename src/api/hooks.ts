@@ -5,6 +5,8 @@ import { api } from './index'
 import type { MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput } from '@/domain/sellers'
 import { visitorId } from '@/lib/visitor'
+import { pushDeviceState, subscribeThisDevice, unsubscribeThisDevice } from '@/lib/push'
+import type { PushCategory } from '@/domain/push'
 import type { SavedAddressInput } from '@/domain/addresses'
 import type { AccountRole, BoostSettings, CheckoutInput, ListingFilter, NewListingInput, NewPickupInput, NewProductInput, PickupItemInput } from './types'
 
@@ -26,6 +28,8 @@ export const keys = {
   addresses: ['addresses'] as const,
   deliveryJobs: ['delivery-jobs'] as const,
   cart: ['cart'] as const,
+  pushPreferences: ['push-preferences'] as const,
+  pushDevice: ['push-device'] as const,
   winnersWall: ['winners-wall'] as const,
   myWinnerStories: ['my-winner-stories'] as const,
   pendingWinnerStories: ['pending-winner-stories'] as const,
@@ -135,6 +139,11 @@ export function useAddressActions() {
 // Cart and checkout
 export const useCart = () => useQuery({ queryKey: keys.cart, queryFn: () => api.listCart(), enabled: useIs('buyer') })
 
+// Phone notifications
+export const usePushPreferences = () => useQuery({ queryKey: keys.pushPreferences, queryFn: () => api.getPushPreferences(), enabled: useIs('buyer') })
+/** This device's own state, so it's only ever asked of the browser, not the server. */
+export const usePushDeviceState = () => useQuery({ queryKey: keys.pushDevice, queryFn: () => pushDeviceState(), enabled: useIs('buyer') })
+
 // Winners wall
 export const useWinnersWall = () => useQuery({ queryKey: keys.winnersWall, queryFn: () => api.listWinnersWall() })
 export const useMyWinnerStories = () => useQuery({ queryKey: keys.myWinnerStories, queryFn: () => api.listMyWinnerStories(), enabled: useIs('buyer') })
@@ -211,7 +220,13 @@ export const usePasswordSignIn = () => useMutation({ mutationFn: ({ email, passw
 export function useSignOut() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: () => api.auth.signOut(),
+    mutationFn: async () => {
+      // So the next person to use this phone doesn't get this account's wins and messages.
+      await unsubscribeThisDevice()
+        .then((endpoint) => (endpoint ? api.deletePushSubscription(endpoint) : undefined))
+        .catch(() => {})
+      await api.auth.signOut()
+    },
     // Don't wait for SessionSync: whatever opens next must already see "signed out".
     onSuccess: () => {
       qc.clear()
@@ -248,6 +263,40 @@ export function useAddToCart() {
 export function useRemoveFromCart() {
   const qc = useQueryClient()
   return useMutation({ mutationFn: (listingId: string) => api.removeFromCart(listingId), onSettled: () => qc.invalidateQueries({ queryKey: keys.cart }) })
+}
+
+export function useSetPushPreference() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ category, enabled }: { category: PushCategory; enabled: boolean }) => api.setPushPreference(category, enabled),
+    onSettled: () => qc.invalidateQueries({ queryKey: keys.pushPreferences }),
+  })
+}
+
+/** Resolves to whether it's now on: false if the buyer said no to the browser's question. */
+export function useEnablePush() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      if (!api.pushPublicKey) return false
+      const subscription = await subscribeThisDevice(api.pushPublicKey)
+      if (!subscription) return false
+      await api.savePushSubscription(subscription)
+      return true
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: keys.pushDevice }),
+  })
+}
+
+export function useDisablePush() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const endpoint = await unsubscribeThisDevice()
+      if (endpoint) await api.deletePushSubscription(endpoint)
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: keys.pushDevice }),
+  })
 }
 
 export function useShareWinnerStory() {

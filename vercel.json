@@ -5,6 +5,12 @@
       "includeFiles": "api/_lib/fonts/**"
     }
   },
+  "headers": [
+    {
+      "source": "/sw.js",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+    }
+  ],
   "rewrites": [
     {
       "source": "/listings/:id",

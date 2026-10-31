@@ -8,6 +8,7 @@
  */
 import { catalogDraws, catalogProducts } from './seedCatalog'
 import { canSaveListing } from '@/domain/saved'
+import { DEFAULT_PUSH_PREFERENCES, pushSubscriptionValid, type PushPreferences, type PushSubscriptionKeys } from '@/domain/push'
 import { WINNER_CONSENT_VERSION, WINNER_STORY_ERROR_TEXT, winnerStoryError } from '@/domain/winnerStories'
 import { commitmentFor, createSeed, randomHex, winningTicketNumber, announcementDate } from '@/domain/draw'
 import { LISTING_ERROR_TEXT, computeListingEconomics, platformFeeBps, validateListingEconomics } from '@/domain/fees'
@@ -78,7 +79,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v23' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v24' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -110,6 +111,8 @@ interface Db {
   addresses: Record<string, SavedAddress[]>
   /** Listing ids in each buyer's cart, oldest first. */
   carts: Record<string, string[]>
+  pushPreferences: Record<string, Partial<PushPreferences>>
+  pushSubscriptions: (PushSubscriptionKeys & { userId: string })[]
   winnerStories: { id: string; userId: string; listingId: string; firstName: string | null; status: 'pending' | 'approved' | 'rejected' | 'withdrawn'; consentVersion: number; consentAt: string; withdrawnAt: string | null }[]
   winnerConsentLog: { userId: string; listingId: string; event: 'given' | 'withdrawn'; consentVersion: number; at: string }[]
   /** Listing ids each buyer has saved, newest first. */
@@ -538,6 +541,8 @@ async function freshDb(): Promise<Db> {
     orders: [],
     carts: {},
     saved: {},
+    pushPreferences: {},
+    pushSubscriptions: [],
     winnerStories: [],
     winnerConsentLog: [],
     addresses: {},
@@ -806,6 +811,7 @@ export interface MockOptions {
   store?: KeyValueStore
   latencyMs?: number
   now?: () => number
+  pushPublicKey?: string | null
 }
 
 export function createMockApi(opts: MockOptions = {}): DrawMartApi {
@@ -1008,6 +1014,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
   return {
     testMode: true,
+    pushPublicKey: opts.pushPublicKey ?? null,
     auth,
 
     getCurrentUser: () => tx((db) => ({ ...me(db) })),
@@ -1140,6 +1147,28 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     removeFromCart: (listingId) =>
       tx((db) => {
         db.carts[buyer()] = (db.carts[buyer()] ?? []).filter((id) => id !== listingId)
+      }),
+
+    getPushPreferences: () => tx((db) => ({ ...DEFAULT_PUSH_PREFERENCES, ...db.pushPreferences[buyer()] })),
+
+    setPushPreference: (category, enabled) =>
+      tx((db) => {
+        if (readSession() && readSession()!.role !== 'buyer') throw new ApiError('forbidden', 'Only buyer accounts have this setting.')
+        if (!Object.keys(DEFAULT_PUSH_PREFERENCES).includes(category)) throw new ApiError('invalid_input', 'That isn’t a kind of notification.')
+        db.pushPreferences[buyer()] = { ...DEFAULT_PUSH_PREFERENCES, ...db.pushPreferences[buyer()], [category]: enabled }
+      }),
+
+    savePushSubscription: (subscription) =>
+      tx((db) => {
+        if (readSession() && readSession()!.role !== 'buyer') throw new ApiError('forbidden', 'Only buyer accounts have this setting.')
+        if (!pushSubscriptionValid(subscription)) throw new ApiError('invalid_input', 'This device’s notification details don’t look right.')
+        db.pushSubscriptions = db.pushSubscriptions.filter((s) => s.endpoint !== subscription.endpoint)
+        db.pushSubscriptions.push({ ...subscription, userId: buyer() })
+      }),
+
+    deletePushSubscription: (endpoint) =>
+      tx((db) => {
+        db.pushSubscriptions = db.pushSubscriptions.filter((s) => !(s.endpoint === endpoint && s.userId === buyer()))
       }),
 
     listWinnersWall: () =>

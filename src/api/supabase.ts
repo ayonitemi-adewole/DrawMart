@@ -13,6 +13,7 @@ import { sortAddresses, type SavedAddress } from '@/domain/addresses'
 import type { PinResult } from '@/domain/delivery'
 import { lineAmountKobo } from '@/domain/cart'
 import { WINNER_CONSENT_VERSION } from '@/domain/winnerStories'
+import { DEFAULT_PUSH_PREFERENCES } from '@/domain/push'
 import { ORDER_ERROR_TEXT } from '@/domain/orders'
 import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication } from '@/domain/sellers'
 import type { Category, Fulfilment, PickupPoint, FeeMode, Handover, LedgerEntry, LedgerKind, ListingKind, ListingStatus, Merchant, OrderStatus, UnsoldPolicy, User } from '@/domain/types'
@@ -362,6 +363,7 @@ function toOrderView(o: OrderRow): OrderView {
 export interface SupabaseApiOptions {
   /** Must match app_settings.test_mode in the database (it decides what's allowed). */
   testMode: boolean
+  pushPublicKey: string | null
   /** Flutterwave public key. Without it, top-ups are instant test money. */
   flutterwavePublicKey?: string
 }
@@ -563,6 +565,7 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
 
   return {
     testMode: opts.testMode,
+    pushPublicKey: opts.pushPublicKey,
     auth,
     payments,
 
@@ -637,6 +640,14 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
 
     addToCart: (listingId) => rpc('add_to_cart', { p_listing_id: listingId }),
     removeFromCart: (listingId) => rpc('remove_from_cart', { p_listing_id: listingId }),
+
+    getPushPreferences: async () => {
+      const row = unwrap(await client.from('push_preferences').select('wins, draw_results, orders, messages').maybeSingle<{ wins: boolean; draw_results: boolean; orders: boolean; messages: boolean }>())
+      return row ? { wins: row.wins, drawResults: row.draw_results, orders: row.orders, messages: row.messages } : DEFAULT_PUSH_PREFERENCES
+    },
+    setPushPreference: (category, enabled) => rpc('set_push_preference', { p_category: category, p_enabled: enabled }),
+    savePushSubscription: ({ endpoint, p256dh, auth }) => rpc('save_push_subscription', { p_endpoint: endpoint, p_p256dh: p256dh, p_auth: auth }),
+    deletePushSubscription: (endpoint) => rpc('delete_push_subscription', { p_endpoint: endpoint }),
 
     listWinnersWall: () => rpc<WinnerWallEntry[]>('winners_wall'),
     listMyWinnerStories: () => rpc<MyWinnerStory[]>('my_winner_stories'),

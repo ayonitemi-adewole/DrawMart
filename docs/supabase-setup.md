@@ -158,6 +158,47 @@ Try it on the Wallet page with one of [Flutterwave's test cards](https://develop
 
 Running the functions locally: copy `supabase/functions/.env.example` to `supabase/functions/.env`, then `npx supabase functions serve`. Flutterwave can't reach your computer, so webhooks only work on the hosted project (or through a tunnel).
 
+## Step 10 (optional): Phone notifications
+
+Without this, the app works as usual and the notification settings stay hidden.
+
+1. Make the keys. Keep the private key secret, and only make them once: new keys sign every device out of notifications.
+
+   ```bash
+   npx web-push generate-vapid-keys
+   ```
+
+2. Pick a long random string as your job secret, then give everything to your Supabase project and deploy the sender:
+
+   ```bash
+   npx supabase secrets set VAPID_PUBLIC_KEY=… VAPID_PRIVATE_KEY=… VAPID_SUBJECT=mailto:you@example.com PUSH_CRON_SECRET=your-random-string
+   npx supabase functions deploy send-push --no-verify-jwt
+   ```
+
+3. In the Supabase dashboard, **SQL Editor**, tell the database how to reach it:
+
+   ```sql
+   select vault.create_secret('https://<project-ref>.supabase.co/functions/v1/send-push', 'drawmart_push_url');
+   select vault.create_secret('your-random-string', 'drawmart_push_secret');
+   ```
+
+4. Check the job exists. If this returns nothing, turn on **pg_net** and **pg_cron** under **Database → Extensions**, then run the `cron.schedule` line:
+
+   ```sql
+   select jobname from cron.job where jobname = 'drawmart-send-push';
+   -- select cron.schedule('drawmart-send-push', '* * * * *', 'select private.send_pending_push()');
+   ```
+
+5. Add the public key to `.env.local` and to the project's environment variables in Vercel, then restart or redeploy:
+
+   ```bash
+   VITE_VAPID_PUBLIC_KEY=…
+   ```
+
+To try it on an Android phone: open the app, go to **Account**, turn notifications on, then close the app and win the 2-ticket test draw from another browser. On an iPhone, add the app to the Home Screen first and turn them on from there.
+
+If nothing arrives: **Edge Functions → send-push → Logs** shows what the sender did, and `select * from private.push_outbox order by created_at desc limit 10` shows the queue.
+
 ## How it's secured
 
 - The app can only **read** tables, and row-level security limits what each person sees: their own tickets, wallet and profile; public listings; and, for stores and admins, their own listings and pickup details.

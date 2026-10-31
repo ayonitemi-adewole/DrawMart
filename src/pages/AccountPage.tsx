@@ -5,6 +5,7 @@ import { useAccess, useAddressActions, useAddresses, useDemoActions, useMe, useS
 import { AddressPicker } from '@/components/AddressPicker'
 import { resetIntro } from '@/components/HowItWorks'
 import { MyWinnerStoriesSection } from '@/components/WinnerStory'
+import { PushSettings } from '@/components/PushSettings'
 import { GaugeIcon, HeartIcon, LogOutIcon, MapPinIcon, PhoneIcon, PlusIcon, SettingsIcon, StoreIcon, UserIcon, WalletIcon, type IconComponent } from '@/components/icons'
 import { Sheet } from '@/components/Sheet'
 import { ThemePicker } from '@/components/ThemeToggle'
@@ -32,6 +33,7 @@ export function AccountPage() {
           <MyWinnerStoriesSection />
         </div>
         <div className="flex min-w-0 flex-col gap-5 lg:sticky lg:top-24">
+          <PushSettings />
           <Settings />
         </div>
       </div>

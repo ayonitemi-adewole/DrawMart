@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router";
 import { useBalanceText } from "@/lib/balanceVisibility";
 import { SaveButton } from "@/components/SaveButton";
 import { ShareButtons } from "@/components/ShareButtons";
+import { PushPrompt } from "@/components/PushSettings";
 import { ProductId } from "@/components/ProductId";
 import {
   useBuyTickets,
@@ -1067,6 +1068,7 @@ function BuyPanel({
               We’ll notify you when the last ticket sells, and again when the
               winner is announced.
             </p>
+            <PushPrompt />
             <div className="flex w-full gap-2">
               <Link
                 to="/tickets"

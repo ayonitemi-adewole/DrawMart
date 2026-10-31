@@ -619,6 +619,40 @@ describe('mock api', () => {
     await expect(api.saveListing(draw.id)).rejects.toMatchObject({ code: 'forbidden' })
   })
 
+  describe('phone notifications', () => {
+    const device = { endpoint: 'https://fcm.googleapis.com/fcm/send/abc', p256dh: 'B'.repeat(87), auth: 'a'.repeat(22) }
+
+    it('has everything on until a buyer turns something off, per buyer', async () => {
+      const api = make()
+      await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+      expect(await api.getPushPreferences()).toEqual({ wins: true, drawResults: true, orders: true, messages: true })
+      await api.setPushPreference('orders', false)
+      expect(await api.getPushPreferences()).toEqual({ wins: true, drawResults: true, orders: false, messages: true })
+      await api.auth.signOut()
+      await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
+      expect((await api.getPushPreferences()).orders).toBe(true)
+    })
+
+    it('only takes real push services, and only from buyers', async () => {
+      const api = make()
+      await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+      await api.savePushSubscription(device)
+      await api.savePushSubscription(device) // twice is fine
+      await api.deletePushSubscription(device.endpoint)
+      await api.deletePushSubscription(device.endpoint)
+      await expect(api.savePushSubscription({ ...device, endpoint: 'https://evil.example/abc' })).rejects.toMatchObject({ code: 'invalid_input' })
+      await expect(api.setPushPreference('nonsense' as 'wins', false)).rejects.toMatchObject({ code: 'invalid_input' })
+      await api.auth.signOut()
+      await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+      await expect(api.savePushSubscription(device)).rejects.toMatchObject({ code: 'forbidden' })
+    })
+
+    it('says whether it’s set up', () => {
+      expect(make().pushPublicKey).toBeNull()
+      expect(createMockApi({ store: memoryStore(), latencyMs: 0, pushPublicKey: 'abc' }).pushPublicKey).toBe('abc')
+    })
+  })
+
   describe('winners wall', () => {
     /** Funke wins the 2-ticket test draw. */
     async function funkeWins() {

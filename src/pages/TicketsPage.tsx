@@ -13,6 +13,7 @@ import {
   TrophyIcon,
 } from "@/components/icons";
 import { OrderCard } from "@/components/OrderCard";
+import { PushPrompt } from "@/components/PushSettings";
 import { TicketStub } from "@/components/TicketStub";
 import {
   Badge,
@@ -87,6 +88,7 @@ export function TicketsPage() {
   const view: View = params.get("view") === "orders" ? "orders" : "draws";
   const orders = useMyOrders();
   const open = orders.data?.filter((o) => o.status !== "delivered").length;
+  const hasTickets = !!useMyListings().data?.length;
 
   return (
     <div className="flex flex-col gap-6">
@@ -100,6 +102,7 @@ export function TicketsPage() {
       >
         {view === "orders" ? "Your orders" : "Your draws"}
       </PageTitle>
+      {hasTickets ? <PushPrompt /> : null}
       <Segmented<View>
         label="Show"
         value={view}

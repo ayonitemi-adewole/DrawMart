@@ -2,9 +2,10 @@
   "name": "DrawMart",
   "short_name": "DrawMart",
   "description": "Win it for the price of a ticket.",
+  "id": "/",
   "start_url": "/",
   "scope": "/",
-  "display": "browser",
+  "display": "standalone",
   "background_color": "#053B25",
   "theme_color": "#053B25",
   "icons": [
