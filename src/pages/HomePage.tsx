@@ -2,7 +2,7 @@ import { useLayoutEffect, useMemo, useRef } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useSearchParam } from "@/lib/useSearchParam";
 import { listingMatchesSearch } from "@/domain/productCode";
-import { useListings } from "@/api/hooks";
+import { useListings, useWinnersWall } from "@/api/hooks";
 import type { ListingView } from "@/api/types";
 import { AllCategoriesIcon, CATEGORY_STYLE } from "@/components/category";
 import { Countdown } from "@/components/Countdown";
@@ -21,6 +21,7 @@ import {
 import { isAlmostGone, valueMultiple } from "@/components/ListingCard";
 import { ListingRow, SeeAllLink } from "@/components/ListingGrid";
 import { SponsoredCarousel } from "@/components/SponsoredCarousel";
+import { WinnerCard } from "@/components/WinnerStory";
 import { browseHref } from "@/pages/BrowsePage";
 import {
   EmptyState,
@@ -343,6 +344,8 @@ export function HomePage() {
         </section>
       ) : null}
 
+      {!category && !query ? <WinnersStrip /> : null}
+
       <section className="flex flex-col gap-4" aria-labelledby="how-heading">
         <div className="flex flex-col gap-1">
           <span className="text-xs font-extrabold tracking-[0.14em] text-brand uppercase">
@@ -366,6 +369,34 @@ export function HomePage() {
         </div>
       </section>
     </div>
+  );
+}
+
+/** A few recent winners who chose to be shown. Nothing at all until there are some. */
+function WinnersStrip() {
+  const q = useWinnersWall();
+  if (!q.data?.length) return null;
+  return (
+    <section className="flex flex-col gap-3" aria-labelledby="winners-heading">
+      <div className="flex items-center justify-between gap-3">
+        <h2
+          id="winners-heading"
+          className="font-display text-2xl font-extrabold tracking-tight"
+        >
+          Recent winners
+        </h2>
+        <SeeAllLink to="/winners" label="See all" />
+      </div>
+      <div className="no-scrollbar -mx-4 flex gap-4 overflow-x-auto px-4 pt-1 pb-3 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0">
+        {q.data.slice(0, 8).map((w) => (
+          <WinnerCard
+            key={w.id}
+            entry={w}
+            className="listing-row-item shrink-0"
+          />
+        ))}
+      </div>
+    </section>
   );
 }
 

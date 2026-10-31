@@ -26,6 +26,9 @@ export const keys = {
   addresses: ['addresses'] as const,
   deliveryJobs: ['delivery-jobs'] as const,
   cart: ['cart'] as const,
+  winnersWall: ['winners-wall'] as const,
+  myWinnerStories: ['my-winner-stories'] as const,
+  pendingWinnerStories: ['pending-winner-stories'] as const,
   saved: ['saved'] as const,
   savedIds: ['saved-ids'] as const,
   pickupPoints: ['pickup-points'] as const,
@@ -131,6 +134,11 @@ export function useAddressActions() {
 
 // Cart and checkout
 export const useCart = () => useQuery({ queryKey: keys.cart, queryFn: () => api.listCart(), enabled: useIs('buyer') })
+
+// Winners wall
+export const useWinnersWall = () => useQuery({ queryKey: keys.winnersWall, queryFn: () => api.listWinnersWall() })
+export const useMyWinnerStories = () => useQuery({ queryKey: keys.myWinnerStories, queryFn: () => api.listMyWinnerStories(), enabled: useIs('buyer') })
+export const usePendingWinnerStories = () => useQuery({ queryKey: keys.pendingWinnerStories, queryFn: () => api.listPendingWinnerStories(), enabled: useIs('admin') })
 
 // Saved items
 export const useSavedListings = () => useQuery({ queryKey: keys.saved, queryFn: () => api.listSavedListings(), enabled: useIs('buyer') })
@@ -240,6 +248,21 @@ export function useAddToCart() {
 export function useRemoveFromCart() {
   const qc = useQueryClient()
   return useMutation({ mutationFn: (listingId: string) => api.removeFromCart(listingId), onSettled: () => qc.invalidateQueries({ queryKey: keys.cart }) })
+}
+
+export function useShareWinnerStory() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: (input: { listingId: string; firstName: string; consent: boolean }) => api.shareWinnerStory(input), onSettled: invalidate })
+}
+
+export function useWithdrawWinnerStory() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: (listingId: string) => api.withdrawWinnerStory(listingId), onSettled: invalidate })
+}
+
+export function useReviewWinnerStory() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: ({ id, approve }: { id: string; approve: boolean }) => api.reviewWinnerStory(id, approve), onSettled: invalidate })
 }
 
 /** The heart fills straight away, and goes back if the save fails. */

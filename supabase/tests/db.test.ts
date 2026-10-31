@@ -7,6 +7,7 @@
  */
 // @ts-expect-error A plain .mjs file: api/ deploys on its own, without TypeScript.
 import { LISTING_COLUMNS } from '../../api/_lib/preview.mjs'
+import { WINNER_CONSENT_VERSION, winnerStoryError } from '../../src/domain/winnerStories'
 import { isProductCode } from '../../src/domain/productCode'
 import { readFileSync, readdirSync } from 'node:fs'
 import { PGlite } from '@electric-sql/pglite'
@@ -1555,6 +1556,135 @@ describe('link previews', () => {
   it('shows nothing for a listing buyers can’t see', async () => {
     const [{ id }] = await admin<{ id: string }>(`select id from public.listings where status = 'pending_review' limit 1`)
     expect(await asUser(null, `select ${LISTING_COLUMNS} from public.listings where id = $1`, [id])).toEqual([])
+  })
+})
+
+describe('winners wall', () => {
+  let winner: string, other: string, store: string, staff: string
+  const CONSENT = WINNER_CONSENT_VERSION
+  const share = (who: string | null, id: string, first = 'Tunde', consent = true) => asUser(who, `select public.share_winner_story($1, $2, $3, $4)`, [id, first, consent, CONSENT])
+  const wall = async (who: string | null = null) => (await asUser<{ w: Record<string, unknown>[] }>(who, `select public.winners_wall() w`))[0].w
+  const mine = async (who: string) => (await asUser<{ w: Record<string, unknown>[] }>(who, `select public.my_winner_stories() w`))[0].w
+  const pending = async () => (await asUser<{ w: { id: string; listingId: string }[] }>(staff, `select public.pending_winner_stories() w`))[0].w
+  const approve = async (listingId: string, yes = true) => {
+    const p = (await pending()).find((s) => s.listingId === listingId)!
+    await asUser(staff, `select public.review_winner_story($1, $2)`, [p.id, yes])
+  }
+  const onWall = async (id: string) => (await wall()).some((w) => w.listingId === id)
+  const win = async (who: string, title: string) => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ title, priceKobo: 100_000, ticketPriceKobo: 100_000 })])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    await asUser(who, `select public.buy_tickets($1, 1)`, [id])
+    await asUser(staff, `select public.demo_run_draw($1)`, [id])
+    return id
+  }
+
+  beforeAll(async () => {
+    winner = await newUser('wallwinner@example.com')
+    other = await newUser('wallother@example.com')
+    store = await newUser('wallstore@example.com', { merchantId: IKEJA })
+    staff = await newUser('wallstaff@example.com', { role: 'admin' })
+    await asUser(staff, `select public.set_boost_settings(1000, false, 12)`)
+  })
+
+  it('shows a story only once the winner has agreed and an admin has approved it', async () => {
+    const id = await win(winner, 'Wall prize one')
+    expect(await onWall(id)).toBe(false)
+    await share(winner, id)
+    expect(await onWall(id)).toBe(false)
+    expect(await mine(winner)).toEqual([expect.objectContaining({ listingId: id, status: 'pending', firstName: 'Tunde' })])
+    await approve(id)
+    expect(await onWall(id)).toBe(true)
+  })
+
+  it('never gives the public a user id or anything personal but the first name', async () => {
+    const id = await win(winner, 'Wall prize two')
+    await share(winner, id)
+    await approve(id)
+    const entry = (await wall(null)).find((w) => w.listingId === id)!
+    expect(Object.keys(entry).sort()).toEqual(['category', 'drawnAt', 'firstName', 'id', 'listingId', 'listingImage', 'listingTitle', 'productCode', 'ticketCount', 'winningNumber'])
+    expect(JSON.stringify(await wall(null))).not.toContain(winner)
+  })
+
+  it('lets no client read the table directly', async () => {
+    for (const who of [null, winner, store, staff]) await expect(asUser(who, `select * from public.winner_stories`)).rejects.toThrow(/permission denied/)
+    await expect(asUser(winner, `select * from private.winner_consent_log`)).rejects.toThrow(/permission denied/)
+    await expect(asUser(winner, `update public.winner_stories set status = 'approved'`)).rejects.toThrow(/permission denied/)
+  })
+
+  it('wipes the name on withdrawal, and keeps only the consent record', async () => {
+    const id = await win(winner, 'Wall prize three')
+    await share(winner, id, 'Uniquename')
+    await approve(id)
+    expect(await onWall(id)).toBe(true)
+
+    await asUser(winner, `select public.withdraw_winner_story($1)`, [id])
+    await asUser(winner, `select public.withdraw_winner_story($1)`, [id]) // twice is fine
+    expect(await onWall(id)).toBe(false)
+    expect((await mine(winner)).some((s) => s.listingId === id)).toBe(false)
+    const [row] = await admin<{ first_name: string | null; status: string; withdrawn_at: string | null }>(`select * from public.winner_stories where listing_id = $1`, [id])
+    expect(row).toMatchObject({ first_name: null, status: 'withdrawn' })
+    expect(row.withdrawn_at).toBeTruthy()
+    const log = await admin<{ event: string; consent_version: number }>(`select event, consent_version from private.winner_consent_log where listing_id = $1 order by id`, [id])
+    expect(log).toEqual([{ event: 'given', consent_version: CONSENT }, { event: 'withdrawn', consent_version: CONSENT }])
+    expect(JSON.stringify(await admin(`select * from private.winner_consent_log`))).not.toContain('Uniquename')
+    // An admin can't approve something the winner has withdrawn.
+    expect((await pending()).some((s) => s.listingId === id)).toBe(false)
+  })
+
+  it('can’t be approved after it’s withdrawn, even from an old screen', async () => {
+    const id = await win(winner, 'Wall prize four')
+    await share(winner, id)
+    const p = (await pending()).find((s) => s.listingId === id)!
+    await asUser(winner, `select public.withdraw_winner_story($1)`, [id])
+    await expectFail(asUser(staff, `select public.review_winner_story($1, true)`, [p.id]), 'invalid_input')
+    expect(await onWall(id)).toBe(false)
+  })
+
+  it('goes back for review if shared again, and can be turned down', async () => {
+    const id = await win(winner, 'Wall prize five')
+    await share(winner, id)
+    await approve(id)
+    await share(winner, id, 'Tunji')
+    expect(await onWall(id)).toBe(false)
+    await approve(id, false)
+    expect(await onWall(id)).toBe(false)
+    expect((await mine(winner)).find((s) => s.listingId === id)).toMatchObject({ status: 'rejected' })
+    await share(winner, id)
+    await approve(id)
+    expect(await onWall(id)).toBe(true)
+  })
+
+  it('is only for the winner', async () => {
+    const id = await win(winner, 'Wall prize six')
+    await expectFail(share(other, id), 'forbidden')
+    await expectFail(share(store, id), 'forbidden')
+    await expect(share(null, id)).rejects.toThrow(/permission denied/)
+    expect(await mine(other)).toEqual([])
+  })
+
+  it('applies the same rules as src/domain', async () => {
+    const id = await win(winner, 'Wall prize seven')
+    for (const [first, consent] of [['Tunde Bakare', true], ['08031234567', true], ['T', true], ['Tunde', false]] as const) {
+      expect(winnerStoryError({ firstName: first, consent })).not.toBeNull()
+      await expectFail(share(winner, id, first, consent), 'invalid_input')
+    }
+    for (const first of ['  Ngozi-Ada ', 'Oluwaṣeun', 'O’Neil']) await share(winner, id, first)
+    const [{ first_name }] = await admin<{ first_name: string }>(`select first_name from public.winner_stories where listing_id = $1`, [id])
+    expect(first_name).toBe('O’Neil')
+  })
+
+  it('keeps no area at all', async () => {
+    expect(await admin(`select 1 from information_schema.columns where table_schema = 'public' and table_name = 'winner_stories' and column_name = 'area'`)).toEqual([])
+  })
+
+  it('leaves admin and buyer functions closed to everyone else', async () => {
+    await expectFail(asUser(winner, `select public.pending_winner_stories()`), 'forbidden')
+    const id = await win(winner, 'Wall prize eight')
+    await share(winner, id)
+    const p = (await pending()).find((s) => s.listingId === id)!
+    await expectFail(asUser(winner, `select public.review_winner_story($1, true)`, [p.id]), 'forbidden')
+    await expect(asUser(null, `select public.my_winner_stories()`)).rejects.toThrow(/permission denied/)
   })
 })
 

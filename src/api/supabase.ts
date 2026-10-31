@@ -12,6 +12,7 @@ import { fillDays, lagosDay, type DayMetrics } from '@/domain/metrics'
 import { sortAddresses, type SavedAddress } from '@/domain/addresses'
 import type { PinResult } from '@/domain/delivery'
 import { lineAmountKobo } from '@/domain/cart'
+import { WINNER_CONSENT_VERSION } from '@/domain/winnerStories'
 import { ORDER_ERROR_TEXT } from '@/domain/orders'
 import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication } from '@/domain/sellers'
 import type { Category, Fulfilment, PickupPoint, FeeMode, Handover, LedgerEntry, LedgerKind, ListingKind, ListingStatus, Merchant, OrderStatus, UnsoldPolicy, User } from '@/domain/types'
@@ -46,6 +47,9 @@ import {
   type MerchantMetricsView,
   type PurchaseReceipt,
   type WalletView,
+  type MyWinnerStory,
+  type PendingWinnerStory,
+  type WinnerWallEntry,
 } from './types'
 
 // ------------------------------------------------------------------ rows
@@ -633,6 +637,14 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
 
     addToCart: (listingId) => rpc('add_to_cart', { p_listing_id: listingId }),
     removeFromCart: (listingId) => rpc('remove_from_cart', { p_listing_id: listingId }),
+
+    listWinnersWall: () => rpc<WinnerWallEntry[]>('winners_wall'),
+    listMyWinnerStories: () => rpc<MyWinnerStory[]>('my_winner_stories'),
+    shareWinnerStory: ({ listingId, firstName, consent }) =>
+      rpc('share_winner_story', { p_listing_id: listingId, p_first_name: firstName, p_consent: consent, p_consent_version: WINNER_CONSENT_VERSION }),
+    withdrawWinnerStory: (listingId) => rpc('withdraw_winner_story', { p_listing_id: listingId }),
+    listPendingWinnerStories: () => rpc<PendingWinnerStory[]>('pending_winner_stories'),
+    reviewWinnerStory: (id, approve) => rpc('review_winner_story', { p_id: id, p_approve: approve }),
 
     listSavedIds: async () => {
       const me = await requireId()

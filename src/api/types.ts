@@ -289,6 +289,37 @@ export interface NotificationView {
   celebrated: boolean
 }
 
+/** Never carries a user id: it's public, and wins aren't otherwise tied to accounts. */
+export interface WinnerWallEntry {
+  id: string
+  firstName: string
+  listingId: string
+  productCode: string
+  listingTitle: string
+  listingImage: string | null
+  category: Category
+  winningNumber: number
+  ticketCount: number
+  drawnAt: string
+}
+
+export interface MyWinnerStory {
+  listingId: string
+  listingTitle: string
+  firstName: string
+  status: 'pending' | 'approved' | 'rejected'
+  consentAt: string
+}
+
+export interface PendingWinnerStory {
+  id: string
+  firstName: string
+  listingId: string
+  productCode: string
+  listingTitle: string
+  consentAt: string
+}
+
 /** One item in a buyer's cart. */
 export interface CartLine {
   listing: ListingView
@@ -396,6 +427,16 @@ export interface DrawMartApi {
   /** Regular products and draws the buyer has won. Never cars. */
   addToCart(listingId: string): Promise<void>
   removeFromCart(listingId: string): Promise<void>
+  /** Public: winners who chose to be shown and were approved. First name only. */
+  listWinnersWall(): Promise<WinnerWallEntry[]>
+  /** This buyer's own stories, not counting any withdrawn. */
+  listMyWinnerStories(): Promise<MyWinnerStory[]>
+  /** The winner of the draw only. Goes back for review every time. */
+  shareWinnerStory(input: { listingId: string; firstName: string; consent: boolean }): Promise<void>
+  /** Takes it off the wall and removes the name. Fine if there's nothing to withdraw. */
+  withdrawWinnerStory(listingId: string): Promise<void>
+  listPendingWinnerStories(): Promise<PendingWinnerStory[]>
+  reviewWinnerStory(id: string, approve: boolean): Promise<void>
   /** This buyer's saved items, newest first. Only they can read them. */
   listSavedListings(): Promise<ListingView[]>
   listSavedIds(): Promise<string[]>

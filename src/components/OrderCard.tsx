@@ -100,6 +100,11 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
         </Button>
       ) : null}
       {o.status === 'delivered' && o.deliveredAt ? <span className="text-xs text-subtle">{pickup ? 'Collected' : 'Delivered'} {dateTime(o.deliveredAt)}</span> : null}
+      {audience === 'buyer' && o.isPrize && o.status === 'delivered' ? (
+        <Link to={`/draws/${o.listingId}`} className="flex min-h-11 w-fit items-center text-sm">
+          Choose whether to show this on the Winners page
+        </Link>
+      ) : null}
     </Card>
   )
 }

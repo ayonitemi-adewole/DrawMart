@@ -8,6 +8,7 @@
  */
 import { catalogDraws, catalogProducts } from './seedCatalog'
 import { canSaveListing } from '@/domain/saved'
+import { WINNER_CONSENT_VERSION, WINNER_STORY_ERROR_TEXT, winnerStoryError } from '@/domain/winnerStories'
 import { commitmentFor, createSeed, randomHex, winningTicketNumber, announcementDate } from '@/domain/draw'
 import { LISTING_ERROR_TEXT, computeListingEconomics, platformFeeBps, validateListingEconomics } from '@/domain/fees'
 import {
@@ -77,7 +78,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v21' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v23' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -109,6 +110,8 @@ interface Db {
   addresses: Record<string, SavedAddress[]>
   /** Listing ids in each buyer's cart, oldest first. */
   carts: Record<string, string[]>
+  winnerStories: { id: string; userId: string; listingId: string; firstName: string | null; status: 'pending' | 'approved' | 'rejected' | 'withdrawn'; consentVersion: number; consentAt: string; withdrawnAt: string | null }[]
+  winnerConsentLog: { userId: string; listingId: string; event: 'given' | 'withdrawn'; consentVersion: number; at: string }[]
   /** Listing ids each buyer has saved, newest first. */
   saved: Record<string, string[]>
   /** Buyers' applications to sell, by user id. */
@@ -535,6 +538,8 @@ async function freshDb(): Promise<Db> {
     orders: [],
     carts: {},
     saved: {},
+    winnerStories: [],
+    winnerConsentLog: [],
     addresses: {},
     sellerApplications: {},
     sellerShops: {},
@@ -1135,6 +1140,69 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     removeFromCart: (listingId) =>
       tx((db) => {
         db.carts[buyer()] = (db.carts[buyer()] ?? []).filter((id) => id !== listingId)
+      }),
+
+    listWinnersWall: () =>
+      tx((db) =>
+        db.winnerStories
+          .filter((s) => s.status === 'approved')
+          .flatMap((s) => {
+            const r = db.results.find((x) => x.listingId === s.listingId)
+            const l = db.listings.find((x) => x.id === s.listingId)
+            return r && l ? [{ id: s.id, firstName: s.firstName!, listingId: l.id, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, winningNumber: r.winningNumber, ticketCount: l.ticketCount, drawnAt: r.drawnAt }] : []
+          })
+          .sort((a, b) => b.drawnAt.localeCompare(a.drawnAt))
+          .slice(0, 60),
+      ),
+
+    listMyWinnerStories: () =>
+      tx((db) =>
+        db.winnerStories.flatMap((s) =>
+          s.userId === buyer() && s.status !== 'withdrawn'
+            ? [{ listingId: s.listingId, listingTitle: getListingOr404(db, s.listingId).title, firstName: s.firstName!, status: s.status, consentAt: s.consentAt }]
+            : [],
+        ),
+      ),
+
+    shareWinnerStory: ({ listingId, firstName, consent }) =>
+      tx((db) => {
+        if (readSession() && readSession()!.role !== 'buyer') throw new ApiError('forbidden', 'Only buyer accounts have wins to share.')
+        const problem = winnerStoryError({ firstName, consent })
+        if (problem) throw new ApiError('invalid_input', WINNER_STORY_ERROR_TEXT[problem])
+        if (!db.results.some((r) => r.listingId === listingId && r.winnerUserId === buyer())) throw new ApiError('forbidden', 'Only the winner of a draw can share it.')
+        const at = iso(now())
+        const existing = db.winnerStories.find((s) => s.userId === buyer() && s.listingId === listingId)
+        const fields = { firstName: firstName.trim(), status: 'pending' as const, consentVersion: WINNER_CONSENT_VERSION, consentAt: at, withdrawnAt: null }
+        if (existing) Object.assign(existing, fields)
+        else db.winnerStories.push({ id: uid('W'), userId: buyer(), listingId, ...fields })
+        db.winnerConsentLog.push({ userId: buyer(), listingId, event: 'given', consentVersion: WINNER_CONSENT_VERSION, at })
+      }),
+
+    withdrawWinnerStory: (listingId) =>
+      tx((db) => {
+        const s = db.winnerStories.find((x) => x.userId === buyer() && x.listingId === listingId && x.status !== 'withdrawn')
+        if (!s) return
+        const at = iso(now())
+        Object.assign(s, { status: 'withdrawn', firstName: null, withdrawnAt: at })
+        db.winnerConsentLog.push({ userId: buyer(), listingId, event: 'withdrawn', consentVersion: s.consentVersion, at })
+      }),
+
+    listPendingWinnerStories: () =>
+      tx((db) => {
+        if (readSession() && readSession()!.role !== 'admin') throw new ApiError('forbidden', 'Admins only.')
+        return db.winnerStories.flatMap((s) => {
+          if (s.status !== 'pending') return []
+          const l = getListingOr404(db, s.listingId)
+          return [{ id: s.id, firstName: s.firstName!, listingId: l.id, productCode: l.productCode, listingTitle: l.title, consentAt: s.consentAt }]
+        })
+      }),
+
+    reviewWinnerStory: (id, approve) =>
+      tx((db) => {
+        if (readSession() && readSession()!.role !== 'admin') throw new ApiError('forbidden', 'Admins only.')
+        const s = db.winnerStories.find((x) => x.id === id && x.status === 'pending')
+        if (!s) throw new ApiError('invalid_input', 'That story is no longer waiting for review. The winner may have withdrawn it.')
+        s.status = approve ? 'approved' : 'rejected'
       }),
 
     listSavedIds: () => tx((db) => db.saved[buyer()] ?? []),

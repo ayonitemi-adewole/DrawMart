@@ -1,4 +1,5 @@
 import { PrizeActions } from "@/components/PrizeActions";
+import { WinnerStoryCard } from "@/components/WinnerStory";
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "react-router";
 import { api } from "@/api";
@@ -325,6 +326,8 @@ function Result({
           </Card>
         )}
       </div>
+
+      {r.iWon && !rolling ? <WinnerStoryCard listingId={listingId} /> : null}
 
       <Verify r={r} />
 

@@ -4,6 +4,7 @@ import { api } from '@/api'
 import { useAccess, useAddressActions, useAddresses, useDemoActions, useMe, useSignOut, useUpdateProfile } from '@/api/hooks'
 import { AddressPicker } from '@/components/AddressPicker'
 import { resetIntro } from '@/components/HowItWorks'
+import { MyWinnerStoriesSection } from '@/components/WinnerStory'
 import { GaugeIcon, HeartIcon, LogOutIcon, MapPinIcon, PhoneIcon, PlusIcon, SettingsIcon, StoreIcon, UserIcon, WalletIcon, type IconComponent } from '@/components/icons'
 import { Sheet } from '@/components/Sheet'
 import { ThemePicker } from '@/components/ThemeToggle'
@@ -28,6 +29,7 @@ export function AccountPage() {
         <div className="flex min-w-0 flex-col gap-5">
           {me.isPending ? <Skeleton className="h-72" /> : me.isError ? <ErrorState error={me.error} onRetry={() => me.refetch()} /> : <Profile key={me.data.id} user={me.data} />}
           <Addresses />
+          <MyWinnerStoriesSection />
         </div>
         <div className="flex min-w-0 flex-col gap-5 lg:sticky lg:top-24">
           <Settings />

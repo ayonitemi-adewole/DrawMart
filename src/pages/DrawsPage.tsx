@@ -32,6 +32,9 @@ export function DrawsPage() {
       <PageTitle eyebrow="Results" sub="Every finished draw, with everything you need to check it yourself.">
         Draw results
       </PageTitle>
+      <Link to="/winners" className="-mt-3 flex min-h-11 w-fit items-center text-sm">
+        See winners who chose to be shown →
+      </Link>
 
       <section className="relative isolate overflow-hidden rounded-4xl bg-linear-to-br from-hero to-hero-2 p-6 text-on-hero shadow-lift sm:p-8">
         <div className="texture-dots absolute inset-0 -z-10" />

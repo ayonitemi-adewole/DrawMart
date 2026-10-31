@@ -619,6 +619,105 @@ describe('mock api', () => {
     await expect(api.saveListing(draw.id)).rejects.toMatchObject({ code: 'forbidden' })
   })
 
+  describe('winners wall', () => {
+    /** Funke wins the 2-ticket test draw. */
+    async function funkeWins() {
+      const store = memoryStore()
+      const api = createMockApi({ store, latencyMs: 0 })
+      await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+      const draw = (await api.listListings()).find((l) => l.title.startsWith('JBL Go'))!
+      await api.buyTickets(draw.id, 2)
+      await api.demoRunDraw(draw.id)
+      return { api, id: draw.id }
+    }
+    const asAdmin = async (api: Awaited<ReturnType<typeof funkeWins>>['api']) => {
+      await api.auth.signOut()
+      await api.auth.signInWithPassword('admin@drawmart.test', 'drawmart-demo')
+    }
+    const asFunke = async (api: Awaited<ReturnType<typeof funkeWins>>['api']) => {
+      await api.auth.signOut()
+      await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    }
+    const story = (listingId: string, patch = {}) => ({ listingId, firstName: 'Funke', consent: true, ...patch })
+
+    it('shows nothing until the winner agrees and an admin approves, then first name only', async () => {
+      const { api, id } = await funkeWins()
+      expect(await api.listWinnersWall()).toEqual([])
+      await api.shareWinnerStory(story(id))
+      expect(await api.listWinnersWall()).toEqual([])
+      expect((await api.listMyWinnerStories())[0]).toMatchObject({ listingId: id, status: 'pending' })
+
+      await asAdmin(api)
+      const [pending] = await api.listPendingWinnerStories()
+      expect(JSON.stringify(pending)).not.toMatch(/userId|u-/)
+      await api.reviewWinnerStory(pending.id, true)
+      expect(await api.listPendingWinnerStories()).toEqual([])
+
+      await api.auth.signOut()
+      const [entry] = await api.listWinnersWall()
+      expect(entry).toMatchObject({ firstName: 'Funke', listingId: id })
+      expect(Object.keys(entry).sort()).toEqual(['category', 'drawnAt', 'firstName', 'id', 'listingId', 'listingImage', 'listingTitle', 'productCode', 'ticketCount', 'winningNumber'])
+    })
+
+    it('removes the story and its details when withdrawn, and keeps a record of the consent', async () => {
+      // Sees what's written to storage, to check the name really goes.
+      const base = memoryStore()
+      let written = ''
+      const api = createMockApi({ store: { ...base, setItem: (k, v) => ((written = v), base.setItem(k, v)) }, latencyMs: 0 })
+      await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+      const draw = (await api.listListings()).find((l) => l.title.startsWith('JBL Go'))!
+      await api.buyTickets(draw.id, 2)
+      await api.demoRunDraw(draw.id)
+      await api.shareWinnerStory(story(draw.id, { firstName: 'Funkeunique' }))
+      expect(written).toContain('Funkeunique')
+      await asAdmin(api)
+      await api.reviewWinnerStory((await api.listPendingWinnerStories())[0].id, true)
+      await asFunke(api)
+      expect(await api.listWinnersWall()).toHaveLength(1)
+
+      await api.withdrawWinnerStory(draw.id)
+      await api.withdrawWinnerStory(draw.id) // twice is fine
+      expect(await api.listWinnersWall()).toEqual([])
+      expect(await api.listMyWinnerStories()).toEqual([])
+      expect(written).not.toContain('Funkeunique')
+      expect(written).toContain('"event":"withdrawn"')
+    })
+
+    it('goes back for review, and off the wall, if shared again', async () => {
+      const { api, id } = await funkeWins()
+      await api.shareWinnerStory(story(id))
+      await asAdmin(api)
+      await api.reviewWinnerStory((await api.listPendingWinnerStories())[0].id, true)
+      await asFunke(api)
+      await api.shareWinnerStory(story(id, { firstName: 'Funmi' }))
+      expect(await api.listWinnersWall()).toEqual([])
+      expect((await api.listMyWinnerStories())[0]).toMatchObject({ status: 'pending', firstName: 'Funmi' })
+    })
+
+    it('can be turned down, and sent again', async () => {
+      const { api, id } = await funkeWins()
+      await api.shareWinnerStory(story(id))
+      await asAdmin(api)
+      const [p] = await api.listPendingWinnerStories()
+      await api.reviewWinnerStory(p.id, false)
+      await expect(api.reviewWinnerStory(p.id, true)).rejects.toMatchObject({ code: 'invalid_input' })
+      expect(await api.listWinnersWall()).toEqual([])
+      await asFunke(api)
+      expect((await api.listMyWinnerStories())[0].status).toBe('rejected')
+    })
+
+    it('is only for the winner, with valid details and consent', async () => {
+      const { api, id } = await funkeWins()
+      for (const bad of [{ firstName: 'Funke Adeyemi' }, { firstName: '08031234567' }, { consent: false }]) {
+        await expect(api.shareWinnerStory(story(id, bad))).rejects.toMatchObject({ code: 'invalid_input' })
+      }
+      await api.auth.signOut()
+      await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
+      await expect(api.shareWinnerStory(story(id))).rejects.toMatchObject({ code: 'forbidden' })
+      await expect(api.listPendingWinnerStories()).rejects.toMatchObject({ code: 'forbidden' })
+    })
+  })
+
   it('won’t save a listing buyers can’t see', async () => {
     const api = make()
     const [pending] = await api.listPendingListings()

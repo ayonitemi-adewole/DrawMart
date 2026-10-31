@@ -14,6 +14,7 @@ import { BackOfficeLayout } from '@/layouts/BackOfficeLayout'
 import { BuyerLayout } from '@/layouts/BuyerLayout'
 import { AccountPage } from '@/pages/AccountPage'
 import { PracticePage } from '@/pages/PracticePage'
+import { WinnersPage } from '@/pages/WinnersPage'
 import { SavedPage } from '@/pages/SavedPage'
 import { DeliveryJobPage, DeliveryPage } from '@/pages/delivery/DeliveryPage'
 import { AdminProductsPage } from '@/pages/admin/AdminProductsPage'
@@ -21,6 +22,7 @@ import { AdminBoostsPage } from '@/pages/admin/AdminBoostsPage'
 import { AdminDrawsPage } from '@/pages/admin/AdminDrawsPage'
 import { AdminPage } from '@/pages/admin/AdminPage'
 import { AdminPrizesPage } from '@/pages/admin/AdminPrizesPage'
+import { AdminStoriesPage } from '@/pages/admin/AdminStoriesPage'
 import { AdminSellersPage } from '@/pages/admin/AdminSellersPage'
 import { BrowsePage } from '@/pages/BrowsePage'
 import { CartPage } from '@/pages/CartPage'
@@ -137,6 +139,7 @@ const router = createBrowserRouter([
       { path: 'browse', element: <BrowsePage /> },
       { path: 'credits', element: <CreditsPage /> },
       { path: 'practice', element: <PracticePage /> },
+      { path: 'winners', element: <WinnersPage /> },
       { path: 'draws', element: <DrawsPage /> },
       { path: 'draws/:id', element: <ResultPage /> },
       { path: 'account', element: <RequireSignIn role="buyer"><AccountPage /></RequireSignIn> },
@@ -174,6 +177,7 @@ const router = createBrowserRouter([
       { path: 'draws', element: <AdminDrawsPage /> },
       { path: 'boosts', element: <AdminBoostsPage /> },
       { path: 'prizes', element: <AdminPrizesPage /> },
+      { path: 'stories', element: <AdminStoriesPage /> },
       { path: 'sellers', element: <AdminSellersPage /> },
       { path: '*', element: <NotFound /> },
     ],
