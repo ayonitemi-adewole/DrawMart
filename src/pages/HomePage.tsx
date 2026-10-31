@@ -29,10 +29,12 @@ import {
   ProgressBar,
   Skeleton,
   buttonClass,
+  chipClass,
   cx,
   inputCls,
 } from "@/components/ui";
-import { formatNaira } from "@/domain/money";
+import type { BrowseOptions } from "@/domain/browse";
+import { formatNaira, nairaToKobo } from "@/domain/money";
 import { RULES } from "@/domain/rules";
 import { withSponsoredFirst } from "@/domain/boosts";
 import { CATEGORIES, type Category } from "@/domain/types";
@@ -43,6 +45,13 @@ const SORTS: { value: Sort; label: string }[] = [
   { value: "ending", label: "Ending soon" },
   { value: "cheapest", label: "Cheapest ticket" },
   { value: "value", label: "Biggest prize" },
+];
+
+const BROWSE_SHORTCUTS: { label: string; options: Partial<BrowseOptions> }[] = [
+  { label: `Up to ${formatNaira(nairaToKobo(1000))}`, options: { maxTicket: 1000 } },
+  { label: "Closing today", options: { closingToday: true } },
+  { label: "Almost sold out", options: { almostSoldOut: true } },
+  { label: "New this week", options: { newThisWeek: true } },
 ];
 
 function sortListings(list: ListingView[], sort: Sort) {
@@ -149,12 +158,7 @@ export function HomePage() {
               key={c ?? "all"}
               onClick={() => update({ category: c })}
               aria-pressed={active}
-              className={cx(
-                "flex min-h-11 shrink-0 items-center gap-2 rounded-2xl border px-4 text-sm font-bold transition active:scale-95",
-                active
-                  ? "border-ink bg-ink text-ground shadow-card"
-                  : "border-line bg-surface text-ink hover:border-line-strong",
-              )}
+              className={chipClass(active)}
             >
               <Icon size={17} />
               {c ?? "All draws"}
@@ -209,6 +213,27 @@ export function HomePage() {
               ))}
             </select>
           </label>
+        </div>
+
+        <div
+          className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 py-1 sm:-mx-6 sm:px-6"
+          role="group"
+          aria-label="Shortcuts to filtered draws"
+        >
+          {BROWSE_SHORTCUTS.map((s) => (
+            <Link
+              key={s.label}
+              to={browseHref({
+                category,
+                q: query || undefined,
+                type: "draws",
+                options: s.options,
+              })}
+              className={chipClass(false)}
+            >
+              {s.label}
+            </Link>
+          ))}
         </div>
 
         {query ? (

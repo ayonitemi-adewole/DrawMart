@@ -396,6 +396,15 @@ export function ProductImage({
 }
 
 /** Accessible segmented control (a row of toggle buttons). */
+/** A filter chip: a pressed-looking pill when active. */
+export const chipClass = (active: boolean) =>
+  cx(
+    "flex min-h-11 shrink-0 cursor-pointer items-center gap-2 rounded-2xl border px-4 text-sm font-bold whitespace-nowrap no-underline transition active:scale-95",
+    active
+      ? "border-ink bg-ink text-ground shadow-card"
+      : "border-line bg-surface text-ink hover:border-line-strong",
+  );
+
 export function Segmented<T extends string>({
   options,
   value,
@@ -426,7 +435,7 @@ export function Segmented<T extends string>({
             aria-pressed={active}
             onClick={() => onChange(o.value)}
             className={cx(
-              "flex flex-1 items-center justify-center gap-1.5 rounded-xl px-3 font-bold whitespace-nowrap transition",
+              "flex flex-1 items-center justify-center gap-1 rounded-xl px-2.5 font-bold whitespace-nowrap transition sm:gap-1.5 sm:px-3",
               size === "sm" ? "min-h-9 text-xs" : "min-h-11 text-sm",
               active
                 ? "bg-surface text-ink shadow-card"

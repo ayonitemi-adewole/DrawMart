@@ -58,7 +58,16 @@ const BOTTOM_NAV = [
   { to: "/messages", label: "Messages", icon: ChatIcon },
 ];
 
-export function Logo({ suffix, to = "/" }: { suffix?: string; to?: string }) {
+export function Logo({
+  suffix,
+  to = "/",
+  tight,
+}: {
+  suffix?: string;
+  to?: string;
+  /** On the smallest phones, just the mark, when the bar is short of room. */
+  tight?: boolean;
+}) {
   return (
     <Link
       to={to}
@@ -68,7 +77,12 @@ export function Logo({ suffix, to = "/" }: { suffix?: string; to?: string }) {
       <span className="flex size-9 -rotate-6 items-center justify-center rounded-xl bg-linear-to-br from-brand to-hero text-ticket shadow-glow transition group-hover:rotate-0">
         <LogoMark size={20} strokeWidth={2.4} />
       </span>
-      <span className="font-display text-[21px] font-extrabold tracking-tight">
+      <span
+        className={cx(
+          "font-display text-[21px] font-extrabold tracking-tight",
+          tight && "max-[359px]:hidden",
+        )}
+      >
         Draw<span className="text-brand">Mart</span>
         {suffix ? (
           <span className="ml-1 text-sm font-semibold text-subtle">
@@ -180,7 +194,7 @@ export function BuyerLayout() {
       {/* A fixed height, because the explore page's category bar sticks just under it (top-16). */}
       <header className="sticky top-0 z-30 h-16 border-b border-line/70 bg-ground/80 backdrop-blur-xl">
         <div className="mx-auto flex h-full max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
-          <Logo />
+          <Logo tight={access.ready && !access.signedIn} />
           <nav
             className="hidden items-center gap-1 rounded-2xl bg-sunken/70 p-1 lg:flex"
             aria-label="Main"
@@ -271,7 +285,7 @@ export function BuyerLayout() {
                 to={`/login?next=${encodeURIComponent(pathname + search)}`}
                 className={buttonClass("primary")}
               >
-                <span className="text-on-brand">Sign in</span>
+                <span className="whitespace-nowrap text-on-brand">Sign in</span>
               </Link>
             ) : (
               <WalletChip cash={cash} credit={credit} className="hidden min-h-11 sm:flex" />
