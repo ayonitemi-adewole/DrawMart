@@ -138,9 +138,50 @@ describe('schema and seed', () => {
     const [{ n }] = await admin<{ n: number }>(`select count(*)::int n from public.merchants`)
     expect(n).toBe(6) // five stores and one individual seller
     const [{ products }] = await admin<{ products: number }>(`select count(*)::int products from public.listings where kind = 'product'`)
-    expect(products).toBe(24)
+    expect(products).toBe(74)
     const [{ results }] = await admin<{ results: number }>(`select count(*)::int results from public.draw_results`)
     expect(results).toBe(3)
+  })
+
+  describe('the longer sample catalogue', () => {
+    const products = async (d: PGlite) => (await d.query<{ n: number }>(`select count(*)::int n from public.listings where kind = 'product'`)).rows[0].n
+
+    /** A database as it was before the catalogue's migration, seeded with the older samples. */
+    async function beforeCatalogue() {
+      const d = new PGlite({ extensions: { pgcrypto } })
+      await d.exec(SUPABASE_STUBS)
+      const files = readdirSync(new URL('../migrations', import.meta.url)).sort()
+      const last = files.indexOf('20261101230000_more_sample_listings.sql')
+      for (const f of files.slice(0, last)) await d.exec(sql(`migrations/${f}`))
+      await d.exec(sql('seed.sql'))
+      expect(await products(d)).toBe(24)
+      return d
+    }
+    const catalogueMigration = sql('migrations/20261101230000_more_sample_listings.sql')
+
+    it('reaches a test database that already has the samples', async () => {
+      const d = await beforeCatalogue()
+      await d.exec(catalogueMigration)
+      expect(await products(d)).toBe(74)
+      await d.close()
+    }, 60_000)
+
+    it('never reaches a database outside test mode', async () => {
+      const d = await beforeCatalogue()
+      await d.exec(`update public.app_settings set test_mode = false where id`)
+      await d.exec(catalogueMigration)
+      expect(await products(d)).toBe(24)
+      await d.close()
+    }, 60_000)
+
+    it('is left out when listings already exist', async () => {
+      const d = await beforeCatalogue()
+      await d.exec(`update public.app_settings set test_mode = false where id`)
+      await d.exec(catalogueMigration)
+      await d.exec(`select private.seed_demo_data()`)
+      expect(await products(d)).toBe(24)
+      await d.close()
+    }, 60_000)
   })
 
   it('hides draw seeds from API users', async () => {

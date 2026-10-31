@@ -176,7 +176,7 @@ export function BuyerLayout() {
       <TestModeBanner />
       {/* A fixed height, because the explore page's category bar sticks just under it (top-16). */}
       <header className="sticky top-0 z-30 h-16 border-b border-line/70 bg-ground/80 backdrop-blur-xl">
-        <div className="mx-auto flex h-full max-w-6xl items-center justify-between gap-3 px-4 sm:px-6">
+        <div className="mx-auto flex h-full max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
           <Logo />
           <nav
             className="hidden items-center gap-1 rounded-2xl bg-sunken/70 p-1 lg:flex"
@@ -311,14 +311,14 @@ export function BuyerLayout() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 pt-5 pb-32 sm:px-6 lg:pb-16">
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 pt-5 pb-32 sm:px-6 lg:pb-16">
         <div key={pathname} className="animate-fade-in">
           <Outlet />
         </div>
       </main>
 
       <footer className="hidden border-t border-line bg-surface/50 lg:block">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 py-6 text-xs text-subtle">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-6 text-xs text-subtle">
           <div className="flex items-center gap-2">
             <ShieldIcon size={16} className="text-brand" />
             <span>

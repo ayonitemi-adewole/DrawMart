@@ -23,7 +23,7 @@ describe('mock api', () => {
   it('seeds live listings without leaking draw seeds', async () => {
     const api = make()
     const listings = await api.listListings()
-    expect(listings.length).toBe(25)
+    expect(listings.length).toBe(100)
     for (const l of listings) {
       expect(l.status).toBe('live')
       expect(l.commitment).toMatch(/^[0-9a-f]{64}$/)

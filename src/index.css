@@ -210,11 +210,11 @@ dialog::backdrop {
 }
 
 /*
- * A card in a scrolling ListingRow. At most 4 cards show at once on large
- * screens: 3 whole ones and three-quarters of the next, so the cut-off card
- * shows the row scrolls. Tablets: 2 + ¾. Phones: 1 + ¾.
+ * A card in a scrolling ListingRow: some whole cards and three-quarters of the
+ * next, so the cut-off card shows the row scrolls. Phones 1 + ¾, up to 4 + ¾ on
+ * large screens.
  * Width = (row − one 1rem gap per whole card) ÷ (whole cards + 0.75).
- * Breakpoints match Tailwind's sm (40rem) and lg (64rem).
+ * Breakpoints match Tailwind's sm (40rem), md (48rem) and lg (64rem).
  */
 .listing-row-item {
   width: calc((100% - 1rem) / 1.75); /* 1 + ¾ */
@@ -224,9 +224,14 @@ dialog::backdrop {
     width: calc((100% - 2rem) / 2.75); /* 2 + ¾ */
   }
 }
-@media (width >= 64rem) {
+@media (width >= 48rem) {
   .listing-row-item {
     width: calc((100% - 3rem) / 3.75); /* 3 + ¾ */
+  }
+}
+@media (width >= 64rem) {
+  .listing-row-item {
+    width: calc((100% - 4rem) / 4.75); /* 4 + ¾ */
   }
 }
 

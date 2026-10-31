@@ -6,6 +6,7 @@
  * keeps draw seeds out of every response until a draw has run, so the UI is
  * built against realistic behaviour.
  */
+import { catalogDraws, catalogProducts } from './seedCatalog'
 import { commitmentFor, createSeed, randomHex, winningTicketNumber, announcementDate } from '@/domain/draw'
 import { LISTING_ERROR_TEXT, computeListingEconomics, platformFeeBps, validateListingEconomics } from '@/domain/fees'
 import {
@@ -75,7 +76,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v19' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v20' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -543,10 +544,10 @@ async function freshDb(): Promise<Db> {
     boostSettings: { minActiveBuyers: BOOST_DEFAULTS.minActiveBuyers, forcedOn: true, maxActive: BOOST_DEFAULTS.maxActiveBoosts },
   }
   seedSellerShop(db, now)
-  for (const p of SEED_PRODUCTS) {
+  for (const p of [...SEED_PRODUCTS, ...catalogProducts(MY_MERCHANT)]) {
     db.listings.push({ ...productListing({ ...p, priceKobo: nairaToKobo(p.price) }, now - DAY), status: p.status })
   }
-  for (const s of SEED_LISTINGS) {
+  for (const s of [...SEED_LISTINGS, ...catalogDraws(MY_MERCHANT)]) {
     const l = await makeListing(s, now, db.seeds)
     // Spread seeded sales over the last fortnight so seller insights have a shape.
     if (s.sold) for (let day = 13, left = s.sold; left > 0; day = Math.max(0, day - 1)) {
@@ -590,9 +591,11 @@ function seedBoosts(db: Db, now: number) {
 
 /** A month of made-up visits to every listing, so each seller's insights have something in them. */
 function seedViews(db: Db, now: number) {
+  // Fewer on the long catalogue: every visit is a row, and all this has to fit in localStorage.
+  const catalog = new Set([...catalogDraws(MY_MERCHANT), ...catalogProducts(MY_MERCHANT)].map((l) => l.title))
   for (const l of db.listings) {
     if (!['live', 'for_sale', 'drawn'].includes(l.status)) continue
-    const popularity = 2 + Math.random() * 10
+    const popularity = catalog.has(l.title) ? 1 : 2 + Math.random() * 10
     for (let d = 29; d >= 0; d--) {
       const day = lagosDay(now - d * DAY)
       const n = Math.round(popularity * (0.5 + Math.random()) * (d < 10 ? 1.4 : 1))

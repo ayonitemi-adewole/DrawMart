@@ -13,8 +13,8 @@ import { CATEGORIES, type Category } from '@/domain/types'
 import { paginate } from '@/lib/paginate'
 import { useSearchParam } from '@/lib/useSearchParam'
 
-/** Five rows of three: the explore page's per-category cap, one page at a time. */
-export const BROWSE_PAGE_SIZE = 15
+/** Fills whole rows at both four and five cards across. */
+export const BROWSE_PAGE_SIZE = 20
 
 type Kind = 'all' | 'draws' | 'buy'
 const KINDS: Kind[] = ['all', 'draws', 'buy']

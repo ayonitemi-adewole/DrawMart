@@ -62,7 +62,7 @@ export function ListingCard({
           category={l.category}
           src={l.images[0]}
           alt={l.title}
-          className={compact ? "h-36 sm:h-44 lg:h-48" : "h-52"}
+          className={compact ? "h-36 sm:h-40" : "h-44"}
           imgClassName="transition-transform duration-500 ease-out group-hover:scale-105"
         />
         {l.images.length > 1 ? (
@@ -122,7 +122,7 @@ export function ListingCard({
       <div
         className={cx(
           "flex flex-1 flex-col gap-3",
-          compact ? "p-3 sm:p-4" : "p-4",
+          "p-3",
         )}
       >
         <div className="flex flex-col gap-1">
@@ -130,19 +130,19 @@ export function ListingCard({
             className={cx(
               "leading-tight font-extrabold",
               compact
-                ? "line-clamp-2 text-[15px] sm:text-[17px]"
-                : "text-[17px]",
+                ? "line-clamp-2 text-[15px]"
+                : "text-[15px]",
             )}
           >
             {l.title}
           </span>
           <span className="flex items-center gap-1 truncate text-xs text-subtle">
             {l.merchant.verified ? (
-              <CheckIcon size={13} className="text-brand" />
+              <CheckIcon size={13} className="shrink-0 text-brand" />
             ) : null}
             {l.merchant.name}
             <span aria-hidden="true">·</span>
-            <MapPinIcon size={12} /> {l.merchant.area}
+            <MapPinIcon size={12} className="shrink-0" /> {l.merchant.area}
           </span>
         </div>
 
