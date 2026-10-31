@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { api } from '@/api'
 import { useDisablePush, useEnablePush, usePushDeviceState, usePushPreferences, useSetPushPreference } from '@/api/hooks'
 import { PUSH_CATEGORIES } from '@/domain/push'
@@ -61,6 +62,61 @@ const STATE_TEXT = {
   unsupported: 'This browser can’t show notifications when the app is closed.',
   needs_home_screen: 'On iPhone, add DrawMart to your Home Screen first: tap Share, then Add to Home Screen. Open it from there and turn notifications on here.',
   blocked: 'Notifications are blocked for DrawMart. You can allow them in your phone’s settings.',
+}
+
+/** On the notifications page: one switch for this device. Which kinds to get stays in Account. */
+export function PushToggle() {
+  const state = usePushDeviceState()
+  const disable = useDisablePush()
+  const toast = useToast()
+  const { turnOn, pending } = useTurnOn()
+  // Hidden from real buyers if the keys are missing, but testers need to know why there's no switch.
+  if (!api.pushPublicKey && !api.testMode) return null
+
+  const on = state.data === 'on'
+  const canSwitch = !!api.pushPublicKey && (on || state.data === 'off')
+  const sub = !api.pushPublicKey
+    ? 'Not set up yet: this needs the push keys from the setup guide.'
+    : state.data === 'unsupported' || state.data === 'needs_home_screen' || state.data === 'blocked'
+      ? STATE_TEXT[state.data]
+      : on
+        ? null
+        : 'Get told on this phone, even with the app closed.'
+
+  return (
+    <Card className="flex items-center gap-3 p-4">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-sunken text-muted">
+        <BellIcon size={18} />
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col text-sm">
+        <span id="push-toggle-label" className="font-bold">
+          Phone notifications
+        </span>
+        {on ? (
+          <span className="text-xs text-subtle">
+            On for this phone. <Link to="/account">Choose what you get</Link>
+          </span>
+        ) : (
+          <span className="text-xs text-subtle">{sub}</span>
+        )}
+      </div>
+      {canSwitch ? (
+        <button
+          type="button"
+          role="switch"
+          aria-checked={on}
+          aria-labelledby="push-toggle-label"
+          disabled={pending || disable.isPending}
+          onClick={() => (on ? disable.mutate(undefined, { onError: (e) => toast(errorMessage(e), 'error') }) : turnOn())}
+          className="flex size-11 w-14 shrink-0 cursor-pointer items-center justify-center disabled:opacity-60"
+        >
+          <span className={cx('flex h-7 w-12 items-center rounded-full p-0.5 transition', on ? 'justify-end bg-brand' : 'justify-start bg-line-strong')}>
+            <span className="size-6 rounded-full bg-surface shadow-card" />
+          </span>
+        </button>
+      ) : null}
+    </Card>
+  )
 }
 
 /** In Account: this device on or off, and which kinds to get on every device. */
