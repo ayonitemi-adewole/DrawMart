@@ -634,6 +634,23 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     addToCart: (listingId) => rpc('add_to_cart', { p_listing_id: listingId }),
     removeFromCart: (listingId) => rpc('remove_from_cart', { p_listing_id: listingId }),
 
+    listSavedIds: async () => {
+      const me = await requireId()
+      return unwrap(await client.from('saved_listings').select('listing_id').eq('user_id', me).order('saved_at', { ascending: false }).returns<{ listing_id: string }[]>()).map((r) => r.listing_id)
+    },
+
+    listSavedListings: async () => {
+      const me = await requireId()
+      const ids = unwrap(await client.from('saved_listings').select('listing_id').eq('user_id', me).order('saved_at', { ascending: false }).returns<{ listing_id: string }[]>()).map((r) => r.listing_id)
+      if (!ids.length) return []
+      // A saved item that's since been taken down isn't readable, so it drops out here.
+      const listings = await views(unwrap(await client.from('listings').select(LISTING_SELECT).in('id', ids).returns<ListingRow[]>()))
+      return ids.flatMap((id) => listings.find((l) => l.id === id) ?? [])
+    },
+
+    saveListing: (listingId) => rpc('save_listing', { p_listing_id: listingId }),
+    unsaveListing: (listingId) => rpc('unsave_listing', { p_listing_id: listingId }),
+
     listPickupPoints: async () => unwrap(await client.from('pickup_points').select('*').order('name').returns<PickupPointRow[]>()).map(toPickupPoint),
 
     checkout: async (input) => {

@@ -26,6 +26,8 @@ export const keys = {
   addresses: ['addresses'] as const,
   deliveryJobs: ['delivery-jobs'] as const,
   cart: ['cart'] as const,
+  saved: ['saved'] as const,
+  savedIds: ['saved-ids'] as const,
   pickupPoints: ['pickup-points'] as const,
   prizeOrders: ['prize-orders'] as const,
   sellerApplication: ['seller-application'] as const,
@@ -129,6 +131,10 @@ export function useAddressActions() {
 
 // Cart and checkout
 export const useCart = () => useQuery({ queryKey: keys.cart, queryFn: () => api.listCart(), enabled: useIs('buyer') })
+
+// Saved items
+export const useSavedListings = () => useQuery({ queryKey: keys.saved, queryFn: () => api.listSavedListings(), enabled: useIs('buyer') })
+export const useSavedIds = () => useQuery({ queryKey: keys.savedIds, queryFn: () => api.listSavedIds(), enabled: useIs('buyer') })
 export const usePickupPoints = () => useQuery({ queryKey: keys.pickupPoints, queryFn: () => api.listPickupPoints(), staleTime: 5 * 60_000 })
 export const usePrizeOrders = () => useQuery({ queryKey: keys.prizeOrders, queryFn: () => api.listPrizeOrders(), enabled: useIs('admin') })
 
@@ -234,6 +240,25 @@ export function useAddToCart() {
 export function useRemoveFromCart() {
   const qc = useQueryClient()
   return useMutation({ mutationFn: (listingId: string) => api.removeFromCart(listingId), onSettled: () => qc.invalidateQueries({ queryKey: keys.cart }) })
+}
+
+/** The heart fills straight away, and goes back if the save fails. */
+export function useSetSaved() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ listingId, saved }: { listingId: string; saved: boolean }) => (saved ? api.saveListing(listingId) : api.unsaveListing(listingId)),
+    onMutate: async ({ listingId, saved }) => {
+      await qc.cancelQueries({ queryKey: keys.savedIds })
+      const before = qc.getQueryData<string[]>(keys.savedIds)
+      qc.setQueryData<string[]>(keys.savedIds, (ids = []) => (saved ? [listingId, ...ids.filter((id) => id !== listingId)] : ids.filter((id) => id !== listingId)))
+      return { before }
+    },
+    onError: (_e, _vars, context) => qc.setQueryData(keys.savedIds, context?.before),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: keys.savedIds })
+      qc.invalidateQueries({ queryKey: keys.saved })
+    },
+  })
 }
 
 // Delivery accounts. No push channel yet, so the pool polls.

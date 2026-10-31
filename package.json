@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "oxlint",
+    "lint": "oxlint --react-plugin -D react/rules-of-hooks -A react/purity -A react/immutability -A react/refs -A react/set-state-in-effect",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",

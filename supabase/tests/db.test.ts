@@ -1541,6 +1541,61 @@ describe('saved addresses and account phone', () => {
   })
 })
 
+describe('saved items', () => {
+  const save = (who: string | null, id: string) => asUser(who, `select public.save_listing($1)`, [id])
+  const mine = async (who: string) => (await asUser<{ listing_id: string }>(who, `select listing_id from public.saved_listings order by saved_at desc`)).map((r) => r.listing_id)
+  let buyer: string, other: string, store: string, staff: string, live: string, product: string
+
+  beforeAll(async () => {
+    buyer = await newUser('saver@example.com')
+    other = await newUser('saver2@example.com')
+    store = await newUser('savestore@example.com', { merchantId: IKEJA })
+    staff = await newUser('savestaff@example.com', { role: 'admin' })
+    ;[{ id: live }] = await admin<{ id: string }>(`select id from public.listings where status = 'live' and kind = 'raffle' limit 1`)
+    ;[{ id: product }] = await admin<{ id: string }>(`select id from public.listings where status = 'for_sale' and kind = 'product' limit 1`)
+  })
+
+  it('saves and unsaves, and saving twice is still once', async () => {
+    await save(buyer, live)
+    await save(buyer, live)
+    await save(buyer, product)
+    expect((await mine(buyer)).sort()).toEqual([live, product].sort())
+    await asUser(buyer, `select public.unsave_listing($1)`, [live])
+    await asUser(buyer, `select public.unsave_listing($1)`, [live])
+    expect(await mine(buyer)).toEqual([product])
+  })
+
+  it('shows a buyer’s list to nobody else, not even admins', async () => {
+    expect(await mine(other)).toEqual([])
+    expect(await mine(store)).toEqual([])
+    expect(await mine(staff)).toEqual([])
+    await expect(asUser(null, `select * from public.saved_listings`)).rejects.toThrow(/permission denied/)
+    // Someone else's unsave can't touch it, and nobody writes to the table directly.
+    await asUser(other, `select public.unsave_listing($1)`, [product])
+    expect(await mine(buyer)).toEqual([product])
+    await expect(asUser(other, `insert into public.saved_listings (user_id, listing_id) values ($1, $2)`, [buyer, live])).rejects.toThrow(/permission denied/)
+    await expect(asUser(buyer, `delete from public.saved_listings where listing_id = $1`, [product])).rejects.toThrow(/permission denied/)
+  })
+
+  it('is for signed-in buyers only', async () => {
+    await expect(save(null, live)).rejects.toThrow(/permission denied/)
+    await expectFail(save(store, live), 'forbidden')
+    await expectFail(save(staff, live), 'forbidden')
+  })
+
+  it('refuses listings buyers can’t see, and hides one that’s taken down later', async () => {
+    const [pending] = await admin<{ id: string }>(`select id from public.listings where status = 'pending_review' limit 1`)
+    await expectFail(save(buyer, pending.id), 'not_found')
+    await expectFail(save(buyer, '00000000-0000-4000-8000-000000000000'), 'not_found')
+
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ title: 'Saved then taken down' })])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    await save(buyer, id)
+    await admin(`update public.listings set status = 'rejected' where id = $1`, [id])
+    expect(await asUser(buyer, `select id from public.listings where id = $1`, [id])).toEqual([])
+  })
+})
+
 describe('reset_test_data', () => {
   it('puts the sample data back and every buyer back to the starting balance, for admins in test mode only', async () => {
     const staff = await newUser('resetter@example.com', { role: 'admin' })

@@ -38,6 +38,7 @@ Working name: DrawMart (placeholder)
 - **Responsible gaming:** 18+ KYC, max 20 tickets per person per draw, user-set weekly spending limit (lowering instant, raising waits 24h).
 - **No real money** until the licence is granted; run in test mode. Test mode has shared-password test accounts (6 buyers, one an ID-verified seller, and 5 stores) and an admin "Reset test data" button; delete the test accounts before launch.
 - **Tech:** React + TypeScript + Tailwind v4 (Vite), React Router, TanStack Query. UI talks only to a `DrawMartApi` interface. **Backend: Supabase** (Postgres + Auth + Storage), with all writes as database functions; the in-browser mock stays for demos.
+- **Saved items:** A heart on every listing card and listing page saves a draw or product to the buyer's Saved list, under Account. Anything buyers can see can be saved, including finished draws; an item that's later taken down drops off the list. The list is private to that buyer: stores and admins can't read it, and sellers aren't told. Saving sends nothing and creates no reminders. A signed-out tap goes to sign-in, then saves. No sharing or public wishlists. Alerts about saved items come later (backlog item 8) and will follow the backlog's limits.
 
 ## Open
 - Caution fee amounts. Placeholders in `src/domain/listing.ts`: ₦2,500 phones/fashion, ₦7,500 electronics, ₦10,000 home, ₦25,000 cars.

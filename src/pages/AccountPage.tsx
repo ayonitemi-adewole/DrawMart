@@ -4,7 +4,7 @@ import { api } from '@/api'
 import { useAccess, useAddressActions, useAddresses, useDemoActions, useMe, useSignOut, useUpdateProfile } from '@/api/hooks'
 import { AddressPicker } from '@/components/AddressPicker'
 import { resetIntro } from '@/components/HowItWorks'
-import { GaugeIcon, LogOutIcon, MapPinIcon, PhoneIcon, PlusIcon, SettingsIcon, StoreIcon, UserIcon, WalletIcon, type IconComponent } from '@/components/icons'
+import { GaugeIcon, HeartIcon, LogOutIcon, MapPinIcon, PhoneIcon, PlusIcon, SettingsIcon, StoreIcon, UserIcon, WalletIcon, type IconComponent } from '@/components/icons'
 import { Sheet } from '@/components/Sheet'
 import { ThemePicker } from '@/components/ThemeToggle'
 import { useToast } from '@/components/toast'
@@ -262,6 +262,7 @@ function AddressForm({ address, isFirst, onClose }: { address: SavedAddress | nu
 }
 
 const LINKS: { to: string; icon: IconComponent; label: string; sub: string }[] = [
+  { to: '/saved', icon: HeartIcon, label: 'Saved items', sub: 'Draws and products you’ve kept' },
   { to: '/wallet', icon: WalletIcon, label: 'Wallet', sub: 'Balance, top-ups and activity' },
   { to: '/wallet', icon: GaugeIcon, label: 'Weekly spending limit', sub: 'Set in your wallet' },
   { to: '/sell', icon: StoreIcon, label: 'Sell on DrawMart', sub: 'Your shop, or apply to sell' },

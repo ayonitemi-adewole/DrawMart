@@ -590,6 +590,42 @@ describe('mock api', () => {
     expect(await toCelebrate()).toEqual([])
   })
 
+  it('keeps each buyer’s saved items through signing out, and from everyone else', async () => {
+    const store = memoryStore()
+    const api = createMockApi({ store, latencyMs: 0 })
+    await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    const [draw, other] = await api.listListings()
+    const [product] = await api.listListings({ status: ['for_sale'] })
+    await api.saveListing(draw.id)
+    await api.saveListing(product.id)
+    await api.saveListing(product.id) // twice is still once
+    expect(await api.listSavedIds()).toEqual([product.id, draw.id])
+    expect((await api.listSavedListings()).map((l) => l.id)).toEqual([product.id, draw.id])
+
+    await api.auth.signOut()
+    await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
+    expect(await api.listSavedIds()).toEqual([])
+    await api.saveListing(other.id)
+    await api.auth.signOut()
+
+    await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    expect(await api.listSavedIds()).toEqual([product.id, draw.id])
+    await api.unsaveListing(draw.id)
+    await api.unsaveListing(draw.id) // already gone is fine
+    expect(await api.listSavedIds()).toEqual([product.id])
+    await api.auth.signOut()
+
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    await expect(api.saveListing(draw.id)).rejects.toMatchObject({ code: 'forbidden' })
+  })
+
+  it('won’t save a listing buyers can’t see', async () => {
+    const api = make()
+    const [pending] = await api.listPendingListings()
+    await expect(api.saveListing(pending.id)).rejects.toMatchObject({ code: 'not_found' })
+    expect(await api.listSavedIds()).toEqual([])
+  })
+
   it('keeps a cart of items on sale and won draws, and checks them out together', async () => {
     const api = make()
     await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')

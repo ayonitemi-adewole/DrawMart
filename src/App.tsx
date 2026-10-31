@@ -13,6 +13,7 @@ import { AuthLayout } from '@/layouts/AuthLayout'
 import { BackOfficeLayout } from '@/layouts/BackOfficeLayout'
 import { BuyerLayout } from '@/layouts/BuyerLayout'
 import { AccountPage } from '@/pages/AccountPage'
+import { SavedPage } from '@/pages/SavedPage'
 import { DeliveryJobPage, DeliveryPage } from '@/pages/delivery/DeliveryPage'
 import { AdminProductsPage } from '@/pages/admin/AdminProductsPage'
 import { AdminBoostsPage } from '@/pages/admin/AdminBoostsPage'
@@ -137,6 +138,7 @@ const router = createBrowserRouter([
       { path: 'draws', element: <DrawsPage /> },
       { path: 'draws/:id', element: <ResultPage /> },
       { path: 'account', element: <RequireSignIn role="buyer"><AccountPage /></RequireSignIn> },
+      { path: 'saved', element: <RequireSignIn role="buyer"><SavedPage /></RequireSignIn> },
       { path: 'wallet', element: <RequireSignIn role="buyer"><WalletPage /></RequireSignIn> },
       { path: 'sell', element: <RequireSignIn role="buyer"><SellPage /></RequireSignIn> },
       { path: 'cart', element: <RequireSignIn role="buyer"><CartPage /></RequireSignIn> },

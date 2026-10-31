@@ -4,6 +4,7 @@ import { formatNaira } from "@/domain/money";
 import { salePriceKobo } from "@/domain/orders";
 import { isBoosted } from "@/domain/boosts";
 import { Countdown } from "./Countdown";
+import { SaveButton } from "./SaveButton";
 import {
   CheckIcon,
   FlameIcon,
@@ -49,158 +50,171 @@ export function ListingCard({
   const forSale = l.kind === "product" || price !== null;
 
   return (
-    <Link
-      to={`/listings/${l.id}`}
+    <div
       style={style}
       className={cx(
-        "group flex animate-fade-up flex-col overflow-hidden rounded-3xl border border-line bg-surface text-ink no-underline shadow-card transition duration-200 hover:-translate-y-1 hover:border-line-strong hover:shadow-lift",
+        "group relative flex animate-fade-up flex-col overflow-hidden rounded-3xl border border-line bg-surface shadow-card transition duration-200 hover:-translate-y-1 hover:border-line-strong hover:shadow-lift",
         className,
       )}
     >
-      <div className="relative p-2 pb-0">
-        <ProductImage
-          category={l.category}
-          src={l.images[0]}
-          alt={l.title}
-          className={compact ? "h-36 sm:h-40" : "h-44"}
-          imgClassName="transition-transform duration-500 ease-out group-hover:scale-105"
-        />
-        {l.images.length > 1 ? (
-          <span
-            className="absolute bottom-2 left-4 flex gap-1"
-            aria-hidden="true"
-          >
-            {l.images.map((src, i) => (
-              <span
-                key={src}
-                className={cx(
-                  "h-1.5 rounded-full",
-                  i === 0 ? "w-4 bg-ink/70" : "w-1.5 bg-ink/25",
-                )}
-              />
-            ))}
-          </span>
-        ) : null}
-        <div className="absolute inset-x-4 top-4 flex flex-wrap items-start justify-between gap-1.5">
-          <span className="flex flex-wrap gap-1.5">
-            {/* <Badge tone="neutral" className="bg-surface/85 backdrop-blur">
-              {l.category}
-            </Badge> */}
-            {isBoosted(l, Date.now()) ? (
-              <Badge tone="ticket" className="shadow-card">
-                <HandshakeIcon size={12} /> Sponsored
-              </Badge>
-            ) : null}
-          </span>
-          <div className="flex flex-wrap justify-end gap-1.5">
-            {hot ? (
-              <Badge tone="hot" className="shadow-card">
-                <FlameIcon size={12} /> ALMOST GONE
-              </Badge>
-            ) : null}
-            {mine > 0 && l.status === "live" ? (
-              <Badge tone="ticket" className="shadow-card">
-                <TicketIcon size={12} /> {mine} YOURS
-              </Badge>
-            ) : null}
-            {l.status === "drawn" ? <Badge tone="neutral">DRAWN</Badge> : null}
-            {l.status === "sold_out" ? <Badge tone="ticket">SOLD OUT</Badge> : null}
-            {l.status === "sold" ? (
-              <Badge tone="hot">SOLD</Badge>
-            ) : forSale ? (
-              <Badge tone="sky">BUY NOW</Badge>
-            ) : null}
-          </div>
-        </div>
-        {forSale ? null : (
-          <span className="absolute right-4 bottom-2 rounded-full bg-ink px-2.5 py-1 text-[11px] font-extrabold text-ground shadow-card">
-            {valueMultiple(l)}× cheaper
-          </span>
-        )}
-      </div>
-
-      <div
-        className={cx(
-          "flex flex-1 flex-col gap-3",
-          "p-3",
-        )}
+      <Link
+        to={`/listings/${l.id}`}
+        className="flex flex-1 flex-col text-ink no-underline"
       >
-        <div className="flex flex-col gap-1">
-          <span
-            className={cx(
-              "leading-tight font-extrabold",
-              compact
-                ? "line-clamp-2 text-[15px]"
-                : "text-[15px]",
-            )}
-          >
-            {l.title}
-          </span>
-          <span className="flex items-center gap-1 truncate text-xs text-subtle">
-            {l.merchant.verified ? (
-              <CheckIcon size={13} className="shrink-0 text-brand" />
-            ) : null}
-            {l.merchant.name}
-            <span aria-hidden="true">·</span>
-            <MapPinIcon size={12} className="shrink-0" /> {l.merchant.area}
-          </span>
+        <div className="relative p-2 pb-0">
+          <ProductImage
+            category={l.category}
+            src={l.images[0]}
+            alt={l.title}
+            className={compact ? "h-36 sm:h-40" : "h-44"}
+            imgClassName="transition-transform duration-500 ease-out group-hover:scale-105"
+          />
+          {l.images.length > 1 ? (
+            <span
+              className="absolute bottom-2 left-4 flex gap-1"
+              aria-hidden="true"
+            >
+              {l.images.map((src, i) => (
+                <span
+                  key={src}
+                  className={cx(
+                    "h-1.5 rounded-full",
+                    i === 0 ? "w-4 bg-ink/70" : "w-1.5 bg-ink/25",
+                  )}
+                />
+              ))}
+            </span>
+          ) : null}
+          {/* Leaves the corner clear for the heart. */}
+          <div className="absolute top-4 right-11 left-2.5 flex flex-wrap items-start justify-between gap-1.5 sm:left-4">
+            <span className="flex flex-wrap gap-1.5">
+              {/* <Badge tone="neutral" className="bg-surface/85 backdrop-blur">
+                {l.category}
+              </Badge> */}
+              {isBoosted(l, Date.now()) ? (
+                <Badge tone="ticket" className="shadow-card">
+                  <HandshakeIcon size={12} /> Sponsored
+                </Badge>
+              ) : null}
+            </span>
+            <div className="flex flex-wrap justify-start gap-1.5 sm:justify-end">
+              {hot ? (
+                <Badge tone="hot" className="whitespace-nowrap shadow-card">
+                  <FlameIcon size={12} className="max-[360px]:hidden" /> ALMOST
+                  GONE
+                </Badge>
+              ) : null}
+              {mine > 0 && l.status === "live" ? (
+                <Badge tone="ticket" className="shadow-card">
+                  <TicketIcon size={12} /> {mine} YOURS
+                </Badge>
+              ) : null}
+              {l.status === "drawn" ? <Badge tone="neutral">DRAWN</Badge> : null}
+              {l.status === "sold_out" ? <Badge tone="ticket">SOLD OUT</Badge> : null}
+              {l.status === "sold" ? (
+                <Badge tone="hot">SOLD</Badge>
+              ) : forSale ? (
+                <Badge tone="sky">BUY NOW</Badge>
+              ) : null}
+            </div>
+          </div>
+          {forSale ? null : (
+            <span className="absolute right-4 bottom-2 rounded-full bg-ink px-2.5 py-1 text-[11px] font-extrabold text-ground shadow-card">
+              {valueMultiple(l)}× cheaper
+            </span>
+          )}
         </div>
 
-        {!forSale && (
-          <div className="flex flex-col gap-1.5">
-            <div className="flex justify-between text-xs font-semibold">
-              <span className={hot ? "text-hot-ink" : "text-muted"}>
-                {pct}% sold
-              </span>
-              <span className="text-subtle">
-                {l.status === "live"
-                  ? `${left.toLocaleString("en-NG")} left`
-                  : l.status === "sold_out"
-                    ? "Winner coming soon"
-                    : "Draw complete"}
-              </span>
-            </div>
-            <ProgressBar
-              value={l.ticketsSold}
-              max={l.ticketCount}
-              hot={hot}
-              label={`${l.ticketsSold} of ${l.ticketCount} tickets sold`}
-            />
+        <div
+          className={cx(
+            "flex flex-1 flex-col gap-3",
+            "p-3",
+          )}
+        >
+          <div className="flex flex-col gap-1">
+            <span
+              className={cx(
+                "leading-tight font-extrabold",
+                compact
+                  ? "line-clamp-2 text-[15px]"
+                  : "text-[15px]",
+              )}
+            >
+              {l.title}
+            </span>
+            <span className="flex items-center gap-1 truncate text-xs text-subtle">
+              {l.merchant.verified ? (
+                <CheckIcon size={13} className="shrink-0 text-brand" />
+              ) : null}
+              {l.merchant.name}
+              <span aria-hidden="true">·</span>
+              <MapPinIcon size={12} className="shrink-0" /> {l.merchant.area}
+            </span>
           </div>
-        )}
 
-        <div className="mt-auto flex flex-wrap items-end justify-between gap-2 border-t border-dashed border-line pt-3">
-          {forSale ? (
-            <div className="flex flex-col">
-              <span className="text-[11px] text-subtle">
-                {l.status === "sold" ? "Sold for" : "Buy now"}
-              </span>
-              <span className="text-lg leading-tight font-extrabold">
-                {formatNaira(price ?? l.fallbackPriceKobo ?? l.priceKobo)}
-              </span>
-            </div>
-          ) : (
-            <div className="flex flex-col">
-              <span className="text-[11px] text-subtle line-through decoration-subtle/50">
-                Worth {formatNaira(l.priceKobo)}
-              </span>
-              <span className="text-lg leading-tight font-extrabold">
-                {formatNaira(l.buyerTicketPriceKobo)}
-                <span className="text-xs font-semibold text-subtle">
-                  {" "}
-                  / ticket
+          {!forSale && (
+            <div className="flex flex-col gap-1.5">
+              <div className="flex justify-between text-xs font-semibold">
+                <span className={hot ? "text-hot-ink" : "text-muted"}>
+                  {pct}% sold
                 </span>
-              </span>
+                <span className="text-subtle">
+                  {l.status === "live"
+                    ? `${left.toLocaleString("en-NG")} left`
+                    : l.status === "sold_out"
+                      ? "Winner coming soon"
+                      : "Draw complete"}
+                </span>
+              </div>
+              <ProgressBar
+                value={l.ticketsSold}
+                max={l.ticketCount}
+                hot={hot}
+                label={`${l.ticketsSold} of ${l.ticketCount} tickets sold`}
+              />
             </div>
           )}
-          {l.status === "live" || (l.status === "sold_out" && l.drawAt) ? (
-            <Countdown
-              closesAt={l.status === "live" ? l.closesAt : l.drawAt!}
-              className="rounded-full bg-sunken px-2.5 py-1 text-xs font-bold"
-            />
-          ) : null}
+
+          <div className="mt-auto flex flex-wrap items-end justify-between gap-2 border-t border-dashed border-line pt-3">
+            {forSale ? (
+              <div className="flex flex-col">
+                <span className="text-[11px] text-subtle">
+                  {l.status === "sold" ? "Sold for" : "Buy now"}
+                </span>
+                <span className="text-lg leading-tight font-extrabold">
+                  {formatNaira(price ?? l.fallbackPriceKobo ?? l.priceKobo)}
+                </span>
+              </div>
+            ) : (
+              <div className="flex flex-col">
+                <span className="text-[11px] text-subtle line-through decoration-subtle/50">
+                  Worth {formatNaira(l.priceKobo)}
+                </span>
+                <span className="text-lg leading-tight font-extrabold">
+                  {formatNaira(l.buyerTicketPriceKobo)}
+                  <span className="text-xs font-semibold text-subtle">
+                    {" "}
+                    / ticket
+                  </span>
+                </span>
+              </div>
+            )}
+            {l.status === "live" || (l.status === "sold_out" && l.drawAt) ? (
+              <Countdown
+                closesAt={l.status === "live" ? l.closesAt : l.drawAt!}
+                className="rounded-full bg-sunken px-2.5 py-1 text-xs font-bold"
+              />
+            ) : null}
+          </div>
         </div>
-      </div>
-    </Link>
+      </Link>
+      {/* Beside the link, not in it: a button inside a link isn't valid and would open the listing. */}
+      <SaveButton
+        listingId={l.id}
+        title={l.title}
+        onImage
+        className="absolute top-1 right-1"
+      />
+    </div>
   );
 }

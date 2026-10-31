@@ -396,6 +396,11 @@ export interface DrawMartApi {
   /** Regular products and draws the buyer has won. Never cars. */
   addToCart(listingId: string): Promise<void>
   removeFromCart(listingId: string): Promise<void>
+  /** This buyer's saved items, newest first. Only they can read them. */
+  listSavedListings(): Promise<ListingView[]>
+  listSavedIds(): Promise<string[]>
+  saveListing(listingId: string): Promise<void>
+  unsaveListing(listingId: string): Promise<void>
   listPickupPoints(): Promise<PickupPoint[]>
   /**
    * Orders items on sale and won items together, paid from the wallet (store

@@ -80,6 +80,11 @@ export const CheckCircleIcon = (p: IconProps) => (
     <path d="M8 12l3 3 5-6" />
   </Icon>
 );
+export const HeartIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M12 20.5s-8-4.9-8-11A4.6 4.6 0 0 1 12 6.6a4.6 4.6 0 0 1 8 2.9c0 6.1-8 11-8 11Z" />
+  </Icon>
+);
 export const XIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M6 6l12 12M18 6L6 18" />

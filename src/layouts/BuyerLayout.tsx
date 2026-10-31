@@ -20,11 +20,13 @@ import { api } from "@/api";
 import { HeaderSearch } from "@/components/HeaderSearch";
 import { IntroSheet } from "@/components/HowItWorks";
 import { NavMenu, type MenuLink } from "@/components/NavMenu";
+import { SaveAfterSignIn } from "@/components/SaveButton";
 import {
   BellIcon,
   CartIcon,
   ChatIcon,
   ChevronRightIcon,
+  HeartIcon,
   HomeIcon,
   LogoMark,
   ShieldIcon,
@@ -162,6 +164,7 @@ export function BuyerLayout() {
   const menuLinks: MenuLink[] = access.signedIn
     ? [
         { to: "/account", label: "Account", icon: UserIcon },
+        { to: "/saved", label: "Saved items", icon: HeartIcon },
         { to: "/notifications", label: "Notifications", icon: BellIcon, count: unreadNotifications },
         { to: "/sell", label: "Sell", icon: StoreIcon },
       ]
@@ -370,6 +373,7 @@ export function BuyerLayout() {
       </nav>
       <IntroSheet />
       <WinCelebration />
+      <SaveAfterSignIn />
       <ScrollRestoration />
     </div>
   );

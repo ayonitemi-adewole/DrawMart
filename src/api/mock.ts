@@ -7,6 +7,7 @@
  * built against realistic behaviour.
  */
 import { catalogDraws, catalogProducts } from './seedCatalog'
+import { canSaveListing } from '@/domain/saved'
 import { commitmentFor, createSeed, randomHex, winningTicketNumber, announcementDate } from '@/domain/draw'
 import { LISTING_ERROR_TEXT, computeListingEconomics, platformFeeBps, validateListingEconomics } from '@/domain/fees'
 import {
@@ -76,7 +77,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v20' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v21' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -108,6 +109,8 @@ interface Db {
   addresses: Record<string, SavedAddress[]>
   /** Listing ids in each buyer's cart, oldest first. */
   carts: Record<string, string[]>
+  /** Listing ids each buyer has saved, newest first. */
+  saved: Record<string, string[]>
   /** Buyers' applications to sell, by user id. */
   sellerApplications: Record<string, SellerApplicationView>
   /** Individual sellers' own shops: user id → merchant id. */
@@ -531,6 +534,7 @@ async function freshDb(): Promise<Db> {
     pendingLimits: {},
     orders: [],
     carts: {},
+    saved: {},
     addresses: {},
     sellerApplications: {},
     sellerShops: {},
@@ -1131,6 +1135,30 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     removeFromCart: (listingId) =>
       tx((db) => {
         db.carts[buyer()] = (db.carts[buyer()] ?? []).filter((id) => id !== listingId)
+      }),
+
+    listSavedIds: () => tx((db) => db.saved[buyer()] ?? []),
+
+    listSavedListings: () =>
+      tx((db) =>
+        (db.saved[buyer()] ?? []).flatMap((id) => {
+          const l = db.listings.find((x) => x.id === id)
+          return l && canSaveListing(l.status) ? [listingView(db, l)] : []
+        }),
+      ),
+
+    saveListing: (listingId) =>
+      tx((db) => {
+        const l = getListingOr404(db, listingId)
+        if (readSession() && readSession()!.role !== 'buyer') throw new ApiError('forbidden', 'Only buyer accounts can save items.')
+        if (!canSaveListing(l.status)) throw new ApiError('not_found', 'That item doesn’t exist.')
+        const saved = (db.saved[buyer()] ??= [])
+        if (!saved.includes(l.id)) saved.unshift(l.id)
+      }),
+
+    unsaveListing: (listingId) =>
+      tx((db) => {
+        db.saved[buyer()] = (db.saved[buyer()] ?? []).filter((id) => id !== listingId)
       }),
 
     listPickupPoints: () => tx(() => PICKUP_POINTS),

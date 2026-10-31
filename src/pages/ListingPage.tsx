@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useBalanceText } from "@/lib/balanceVisibility";
+import { SaveButton } from "@/components/SaveButton";
 import { ProductId } from "@/components/ProductId";
 import {
   useBuyTickets,
@@ -96,12 +97,15 @@ function ProductDetail({ listing: l }: { listing: ListingView }) {
   const navigate = useNavigate();
   return (
     <div className="flex flex-col gap-5">
-      <button
-        onClick={() => navigate(-1)}
-        className="-ml-2 flex min-h-11 w-fit items-center gap-1 rounded-xl px-2 text-sm font-bold text-muted hover:bg-sunken hover:text-ink"
-      >
-        <BackIcon size={18} /> Back
-      </button>
+      <div className="flex items-center justify-between">
+        <button
+          onClick={() => navigate(-1)}
+          className="-ml-2 flex min-h-11 w-fit items-center gap-1 rounded-xl px-2 text-sm font-bold text-muted hover:bg-sunken hover:text-ink"
+        >
+          <BackIcon size={18} /> Back
+        </button>
+        <SaveButton listingId={l.id} title={l.title} />
+      </div>
       <div className="grid gap-6 md:grid-cols-[1fr_380px] md:items-start">
         <div className="flex min-w-0 flex-col gap-5">
           <div className="relative animate-fade-up">
@@ -215,9 +219,12 @@ function ListingDetail({ listing: l }: { listing: ListingView }) {
         >
           <BackIcon size={18} /> Back
         </button>
-        <IconButton aria-label="Share this draw" onClick={share}>
-          <ShareIcon />
-        </IconButton>
+        <div className="flex items-center gap-1">
+          <SaveButton listingId={l.id} title={l.title} />
+          <IconButton aria-label="Share this draw" onClick={share}>
+            <ShareIcon />
+          </IconButton>
+        </div>
       </div>
 
       <div className="grid gap-6 md:grid-cols-[1fr_380px] md:items-start">
@@ -663,6 +670,7 @@ function BuyPanel({
   const q = Math.max(1, Math.min(qty, Math.max(1, max)));
   const [confirming, setConfirming] = useState(false);
   const [receipt, setReceipt] = useState<PurchaseReceipt | null>(null);
+  const balanceText = useBalanceText();
 
   if (l.status === "drawn" && l.result) {
     const r = l.result;
@@ -743,8 +751,7 @@ function BuyPanel({
 
   const cost = q * l.buyerTicketPriceKobo;
   const balance = wallet.data?.balance;
-  const balanceText = useBalanceText();
-  const pay = balance ? splitPayment(cost, balance) : null;
+  const pay =balance ? splitPayment(cost, balance) : null;
   const blocker: PurchaseError | null =
     me.data && wallet.data
       ? checkPurchase({
