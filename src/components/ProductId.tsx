@@ -15,14 +15,14 @@ export function ProductId({ code, copy, className }: { code: string; copy?: bool
 }
 
 /** The search box above a list of products. */
-export function ProductSearch({ value, onChange, id = 'product-search', placeholder = 'Search by name or product ID', className }: { value: string; onChange: (value: string) => void; id?: string; placeholder?: string; className?: string }) {
+export function ProductSearch({ value, onChange, id = 'product-search', placeholder = 'Search by name or product ID', autoFocus, className }: { value: string; onChange: (value: string) => void; id?: string; placeholder?: string; autoFocus?: boolean; className?: string }) {
   return (
     <div role="search" className={cx('relative w-full sm:max-w-sm', className)}>
       <label htmlFor={id} className="sr-only">
         {placeholder}
       </label>
       <SearchIcon size={18} className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-subtle" />
-      <input id={id} type="search" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} autoComplete="off" className={cx(inputCls, 'min-h-11 pl-10')} />
+      <input id={id} type="search" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} autoComplete="off" autoFocus={autoFocus} className={cx(inputCls, 'min-h-11 pl-10')} />
     </div>
   )
 }

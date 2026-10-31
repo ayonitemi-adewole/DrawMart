@@ -17,6 +17,7 @@ import {
   useWallet,
 } from "@/api/hooks";
 import { api } from "@/api";
+import { HeaderSearch } from "@/components/HeaderSearch";
 import { IntroSheet } from "@/components/HowItWorks";
 import { NavMenu, type MenuLink } from "@/components/NavMenu";
 import {
@@ -173,8 +174,9 @@ export function BuyerLayout() {
   return (
     <div className="flex min-h-dvh flex-col">
       <TestModeBanner />
-      <header className="sticky top-0 z-30 border-b border-line/70 bg-ground/80 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-2.5 sm:px-6">
+      {/* A fixed height, because the explore page's category bar sticks just under it (top-16). */}
+      <header className="sticky top-0 z-30 h-16 border-b border-line/70 bg-ground/80 backdrop-blur-xl">
+        <div className="mx-auto flex h-full max-w-6xl items-center justify-between gap-3 px-4 sm:px-6">
           <Logo />
           <nav
             className="hidden items-center gap-1 rounded-2xl bg-sunken/70 p-1 lg:flex"
@@ -205,6 +207,7 @@ export function BuyerLayout() {
             ))}
           </nav>
           <div className="flex items-center gap-1">
+            {pathname === "/" ? <HeaderSearch /> : null}
             {access.signedIn ? (
               <Link
                 to="/cart"

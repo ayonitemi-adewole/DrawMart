@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useSearchParam } from "@/lib/useSearchParam";
 import { listingMatchesSearch } from "@/domain/productCode";
@@ -103,6 +103,22 @@ export function HomePage() {
     return [...sponsored, ...rest];
   }, [forSale.data, query]);
 
+  // A new filter or search changes the page's length, so from further down it
+  // would land somewhere random. Start at the results, and also go to them when
+  // searching from the top bar, which can be well above them.
+  const resultsTop = useRef<HTMLDivElement>(null);
+  const shownFilter = useRef(`${category}|${query}`);
+  useLayoutEffect(() => {
+    const filter = `${category}|${query}`;
+    if (filter === shownFilter.current) return;
+    shownFilter.current = filter;
+    const el = resultsTop.current;
+    if (!el) return;
+    const past = el.getBoundingClientRect().top < parseFloat(getComputedStyle(el).scrollMarginTop);
+    const fromTopBar = Boolean(document.activeElement?.closest("header"));
+    if (past || fromTopBar) el.scrollIntoView();
+  }, [category, query]);
+
   return (
     <div className="flex flex-col gap-8">
       <Hero
@@ -115,47 +131,49 @@ export function HomePage() {
 
       {!category && !query ? <BigPrizes listings={all.data} /> : null}
 
-      <section className="flex flex-col gap-4" aria-labelledby="live-heading">
-        <div
-          className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 py-1 sm:-mx-6 sm:px-6"
-          role="group"
-          aria-label="Filter by category"
-        >
-          {[undefined, ...CATEGORIES].map((c) => {
-            const active = c === category;
-            const Icon = c ? CATEGORY_STYLE[c].icon : AllCategoriesIcon;
-            const count = c
-              ? all.data?.filter((l) => l.category === c).length
-              : all.data?.length;
-            return (
-              <button
-                key={c ?? "all"}
-                onClick={() => update({ category: c })}
-                aria-pressed={active}
-                className={cx(
-                  "flex min-h-11 shrink-0 items-center gap-2 rounded-2xl border px-4 text-sm font-bold transition active:scale-95",
-                  active
-                    ? "border-ink bg-ink text-ground shadow-card"
-                    : "border-line bg-surface text-ink hover:border-line-strong",
-                )}
-              >
-                <Icon size={17} />
-                {c ?? "All draws"}
-                {count ? (
-                  <span
-                    className={cx(
-                      "text-xs",
-                      active ? "text-ground/70" : "text-subtle",
-                    )}
-                  >
-                    {count}
-                  </span>
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
+      <div ref={resultsTop} aria-hidden className="-mb-8 scroll-mt-16" />
+      {/* Outside the sections, so it stays stuck all the way down the page. */}
+      <div
+        className="no-scrollbar sticky top-16 z-20 -mx-4 -mb-6 flex gap-2 overflow-x-auto bg-ground px-4 py-2 sm:-mx-6 sm:px-6"
+        role="group"
+        aria-label="Filter by category"
+      >
+        {[undefined, ...CATEGORIES].map((c) => {
+          const active = c === category;
+          const Icon = c ? CATEGORY_STYLE[c].icon : AllCategoriesIcon;
+          const count = c
+            ? all.data?.filter((l) => l.category === c).length
+            : all.data?.length;
+          return (
+            <button
+              key={c ?? "all"}
+              onClick={() => update({ category: c })}
+              aria-pressed={active}
+              className={cx(
+                "flex min-h-11 shrink-0 items-center gap-2 rounded-2xl border px-4 text-sm font-bold transition active:scale-95",
+                active
+                  ? "border-ink bg-ink text-ground shadow-card"
+                  : "border-line bg-surface text-ink hover:border-line-strong",
+              )}
+            >
+              <Icon size={17} />
+              {c ?? "All draws"}
+              {count ? (
+                <span
+                  className={cx(
+                    "text-xs",
+                    active ? "text-ground/70" : "text-subtle",
+                  )}
+                >
+                  {count}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
 
+      <section className="flex flex-col gap-4" aria-labelledby="live-heading">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2
             id="live-heading"
