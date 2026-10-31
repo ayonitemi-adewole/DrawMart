@@ -13,6 +13,7 @@ import { AuthLayout } from '@/layouts/AuthLayout'
 import { BackOfficeLayout } from '@/layouts/BackOfficeLayout'
 import { BuyerLayout } from '@/layouts/BuyerLayout'
 import { AccountPage } from '@/pages/AccountPage'
+import { PracticePage } from '@/pages/PracticePage'
 import { SavedPage } from '@/pages/SavedPage'
 import { DeliveryJobPage, DeliveryPage } from '@/pages/delivery/DeliveryPage'
 import { AdminProductsPage } from '@/pages/admin/AdminProductsPage'
@@ -135,6 +136,7 @@ const router = createBrowserRouter([
       { path: 'tickets', element: <RequireSignIn role="buyer"><TicketsPage /></RequireSignIn> },
       { path: 'browse', element: <BrowsePage /> },
       { path: 'credits', element: <CreditsPage /> },
+      { path: 'practice', element: <PracticePage /> },
       { path: 'draws', element: <DrawsPage /> },
       { path: 'draws/:id', element: <ResultPage /> },
       { path: 'account', element: <RequireSignIn role="buyer"><AccountPage /></RequireSignIn> },

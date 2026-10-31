@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { RULES } from '@/domain/rules'
 import { NairaIcon, DiceIcon, LockIcon, TicketIcon, type IconComponent } from './icons'
 import { Sheet } from './Sheet'
@@ -81,6 +82,11 @@ export function IntroSheet() {
           <span key={i} className={cx('h-1.5 rounded-full transition-all', i === step ? 'w-6 bg-brand' : 'w-1.5 bg-line-strong')} />
         ))}
       </div>
+      {last ? (
+        <Link to="/practice" onClick={close} className="flex min-h-11 items-center justify-center text-sm font-bold">
+          Try a practice draw, with no money
+        </Link>
+      ) : null}
       <div className="flex gap-2">
         <Button variant="ghost" className="flex-1" onClick={close}>
           Skip

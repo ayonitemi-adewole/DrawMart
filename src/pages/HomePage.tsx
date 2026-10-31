@@ -7,6 +7,7 @@ import type { ListingView } from "@/api/types";
 import { AllCategoriesIcon, CATEGORY_STYLE } from "@/components/category";
 import { Countdown } from "@/components/Countdown";
 import { HowItWorksGrid } from "@/components/HowItWorks";
+import { PracticePrompt } from "@/components/PracticePrompt";
 import {
   ArrowRightIcon,
   NairaIcon,
@@ -135,6 +136,8 @@ export function HomePage() {
         query={search.text}
         onQuery={search.change}
       />
+
+      {!category && !query ? <PracticePrompt /> : null}
 
       {!category && !query ? <SponsoredCarousel /> : null}
 
@@ -353,9 +356,14 @@ export function HomePage() {
           </h2>
         </div>
         <HowItWorksGrid />
-        <Link to="/draws" className="self-start text-sm">
-          See past results and check the maths yourself →
-        </Link>
+        <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+          <Link to="/practice" className="flex min-h-11 items-center">
+            Try a practice draw, with no money →
+          </Link>
+          <Link to="/draws" className="flex min-h-11 items-center">
+            See past results and check the maths yourself →
+          </Link>
+        </div>
       </section>
     </div>
   );
