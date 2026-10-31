@@ -158,7 +158,7 @@ Try it on the Wallet page with one of [Flutterwave's test cards](https://develop
 
 Running the functions locally: copy `supabase/functions/.env.example` to `supabase/functions/.env`, then `npx supabase functions serve`. Flutterwave can't reach your computer, so webhooks only work on the hosted project (or through a tunnel).
 
-## Step 10 (optional): Phone notifications
+## Step 10 (optional): Push notifications
 
 Without this, the app works as usual and the notification settings stay hidden.
 

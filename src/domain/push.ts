@@ -1,4 +1,4 @@
-/** Phone notifications. Mirrored in public.save_push_subscription and public.set_push_preference. */
+/** Push notifications. Mirrored in public.save_push_subscription and public.set_push_preference. */
 
 export type PushCategory = 'wins' | 'drawResults' | 'orders' | 'messages'
 export type PushPreferences = Record<PushCategory, boolean>

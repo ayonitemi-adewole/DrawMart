@@ -1,4 +1,4 @@
-// Only shows phone notifications: it doesn't cache anything or touch page loads.
+// Only shows push notifications: it doesn't cache anything or touch page loads.
 self.addEventListener('push', (event) => {
   let message = {}
   try {

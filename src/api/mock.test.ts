@@ -619,7 +619,7 @@ describe('mock api', () => {
     await expect(api.saveListing(draw.id)).rejects.toMatchObject({ code: 'forbidden' })
   })
 
-  describe('phone notifications', () => {
+  describe('push notifications', () => {
     const device = { endpoint: 'https://fcm.googleapis.com/fcm/send/abc', p256dh: 'B'.repeat(87), auth: 'a'.repeat(22) }
 
     it('has everything on until a buyer turns something off, per buyer', async () => {

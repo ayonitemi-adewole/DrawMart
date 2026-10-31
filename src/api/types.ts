@@ -402,7 +402,7 @@ export interface DrawMartApi {
   readonly auth: AuthAdapter
   /** Present when top-ups go through a payment provider. */
   readonly payments?: PaymentsAdapter
-  /** What this device signs up for phone notifications with. Null when they aren't set up. */
+  /** What this device signs up for push notifications with. Null when they aren't set up. */
   readonly pushPublicKey: string | null
 
   // Session
@@ -430,7 +430,7 @@ export interface DrawMartApi {
   /** Regular products and draws the buyer has won. Never cars. */
   addToCart(listingId: string): Promise<void>
   removeFromCart(listingId: string): Promise<void>
-  /** Which kinds of phone notification this buyer wants. Everything's on until they say otherwise. */
+  /** Which kinds of push notification this buyer wants. Everything's on until they say otherwise. */
   getPushPreferences(): Promise<PushPreferences>
   setPushPreference(category: PushCategory, enabled: boolean): Promise<void>
   /** Only the browsers' own push services. Sending is Supabase only: the mock just keeps the record. */

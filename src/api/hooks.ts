@@ -139,7 +139,7 @@ export function useAddressActions() {
 // Cart and checkout
 export const useCart = () => useQuery({ queryKey: keys.cart, queryFn: () => api.listCart(), enabled: useIs('buyer') })
 
-// Phone notifications
+// Push notifications
 export const usePushPreferences = () => useQuery({ queryKey: keys.pushPreferences, queryFn: () => api.getPushPreferences(), enabled: useIs('buyer') })
 /** This device's own state, so it's only ever asked of the browser, not the server. */
 export const usePushDeviceState = () => useQuery({ queryKey: keys.pushDevice, queryFn: () => pushDeviceState(), enabled: useIs('buyer') })
@@ -221,7 +221,7 @@ export function useSignOut() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async () => {
-      // So the next person to use this phone doesn't get this account's wins and messages.
+      // So the next person to use this device doesn't get this account's wins and messages.
       await unsubscribeThisDevice()
         .then((endpoint) => (endpoint ? api.deletePushSubscription(endpoint) : undefined))
         .catch(() => {})

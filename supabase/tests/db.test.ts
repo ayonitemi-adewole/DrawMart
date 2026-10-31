@@ -1560,7 +1560,7 @@ describe('link previews', () => {
   })
 })
 
-describe('phone notifications', () => {
+describe('push notifications', () => {
   let buyer: string, other: string, store: string, staff: string
   const device = (name: string) => ({ endpoint: `https://fcm.googleapis.com/fcm/send/${name}`, p256dh: 'B'.repeat(87), auth: 'a'.repeat(22) })
   const subscribe = (who: string, d: ReturnType<typeof device>) => asUser(who, `select public.save_push_subscription($1, $2, $3)`, [d.endpoint, d.p256dh, d.auth])

@@ -1,13 +1,13 @@
 import type { PushSubscriptionKeys } from '@/domain/push'
 
-/** The browser's side of phone notifications: permission, the service worker and this device's subscription. */
+/** The browser's side of push notifications: permission, the service worker and this device's subscription. */
 
 export type PushDeviceState =
   /** This browser can't do it. */
   | 'unsupported'
   /** An iPhone or iPad, which only allows it once the app is on the home screen. */
   | 'needs_home_screen'
-  /** The buyer said no; only the phone's settings can change that now. */
+  /** The buyer said no; only the browser or device settings can change that now. */
   | 'blocked'
   | 'off'
   | 'on'

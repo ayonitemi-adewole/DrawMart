@@ -16,7 +16,7 @@ function useTurnOn() {
     turnOn: (onDone?: () => void) =>
       enable.mutate(undefined, {
         onSuccess: (on) => {
-          toast(on ? 'Notifications are on for this phone.' : 'Notifications stay off. You can change this in your phone’s settings.', on ? 'success' : 'info')
+          toast(on ? 'Notifications are on for this device.' : 'Notifications stay off. You can change this in your browser or device settings.', on ? 'success' : 'info')
           onDone?.()
         },
         onError: (e) => toast(errorMessage(e), 'error'),
@@ -43,7 +43,7 @@ export function PushPrompt({ className }: { className?: string }) {
       <div className="flex items-start gap-2">
         <BellIcon size={18} className="mt-0.5 shrink-0 text-brand" />
         <span className="min-w-0">
-          <strong>Get results on your phone?</strong> We’ll tell you when a draw you’re in has a result and when your order moves, even with the app closed. Choose what you get in Account.
+          <strong>Get results on this device?</strong> We’ll tell you when a draw you’re in has a result and when your order moves, even with the app closed. Choose what you get in Account.
         </span>
       </div>
       <div className="flex gap-2">
@@ -61,7 +61,7 @@ export function PushPrompt({ className }: { className?: string }) {
 const STATE_TEXT = {
   unsupported: 'This browser can’t show notifications when the app is closed.',
   needs_home_screen: 'On iPhone, add DrawMart to your Home Screen first: tap Share, then Add to Home Screen. Open it from there and turn notifications on here.',
-  blocked: 'Notifications are blocked for DrawMart. You can allow them in your phone’s settings.',
+  blocked: 'Notifications are blocked for DrawMart. You can allow them in your browser or device settings.',
 }
 
 /** On the notifications page: one switch for this device. Which kinds to get stays in Account. */
@@ -81,7 +81,7 @@ export function PushToggle() {
       ? STATE_TEXT[state.data]
       : on
         ? null
-        : 'Get told on this phone, even with the app closed.'
+        : 'Get told on this device, even with the app closed.'
 
   return (
     <Card className="flex items-center gap-3 p-4">
@@ -90,11 +90,11 @@ export function PushToggle() {
       </span>
       <div className="flex min-w-0 flex-1 flex-col text-sm">
         <span id="push-toggle-label" className="font-bold">
-          Phone notifications
+          Push notifications
         </span>
         {on ? (
           <span className="text-xs text-subtle">
-            On for this phone. <Link to="/account">Choose what you get</Link>
+            On for this device. <Link to="/account">Choose what you get</Link>
           </span>
         ) : (
           <span className="text-xs text-subtle">{sub}</span>
@@ -134,7 +134,7 @@ export function PushSettings() {
     <Card className="flex flex-col gap-3 p-5">
       <div className="flex items-center gap-2">
         <BellIcon size={18} className="shrink-0 text-muted" />
-        <strong className="min-w-0 flex-1">Phone notifications</strong>
+        <strong className="min-w-0 flex-1">Push notifications</strong>
         {state.data === 'on' ? (
           <Button variant="ghost" size="sm" loading={disable.isPending} onClick={() => disable.mutate(undefined, { onError })}>
             Turn off
