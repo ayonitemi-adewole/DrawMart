@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router'
 import { useCancelOrder, useDispatchOrder, useSellerConfirmOrder } from '@/api/hooks'
 import { needsConfirming } from '@/domain/orderConfirm'
-import { photoToDataUrl } from '@/lib/image'
+import { isPhoneOrTablet, thisDevice } from '@/lib/device'
 import type { OrderView } from '@/api/types'
 import { APOLOGY_CREDIT_KOBO, COLLECTION_PROBLEM_TEXT } from '@/domain/deliveryChecks'
 import { directionsUrl } from '@/domain/location'
@@ -12,7 +12,8 @@ import { formatNaira } from '@/domain/money'
 import { dateTime } from '@/lib/time'
 import { ProductId } from './ProductId'
 import { DeliveryPin } from './DeliveryPin'
-import { CameraIcon, ClockIcon, MapPinIcon, PhoneIcon, StoreIcon, TruckIcon, XIcon } from './icons'
+import { CameraCapture } from './CameraCapture'
+import { CameraIcon, ClockIcon, CopyIcon, MapPinIcon, PhoneIcon, StoreIcon, TruckIcon, XIcon } from './icons'
 import { Sheet } from './Sheet'
 import { useToast } from './toast'
 import { Badge, Button, Card, Field, Notice, ProductImage, buttonClass, cx, errorMessage, inputCls, type Tone } from './ui'
@@ -150,7 +151,7 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
 
       {waiting && o.confirmBy ? (
         <Notice tone="ticket" icon={ClockIcon} title={audience === 'buyer' ? `The seller has until ${dateTime(o.confirmBy)} to confirm` : `Confirm by ${dateTime(o.confirmBy)}`}>
-          {audience === 'buyer' ? 'They’ll send a photo of your item. If they don’t, you’re refunded automatically.' : 'Take a fresh photo of the item. If you don’t, the order cancels, the buyer is refunded and the product is paused. Your time doesn’t run from 10pm to 9am.'}
+          {audience === 'buyer' ? 'They’ll send a photo of your item. If they don’t, you’re refunded automatically.' : 'Take a fresh photo of the item on your phone. If you don’t, the order cancels, the buyer is refunded and the product is paused. Your time doesn’t run from 10pm to 9am.'}
         </Notice>
       ) : null}
       {audience === 'store' && o.status === 'paid' && o.readyBy && !waiting ? (
@@ -192,28 +193,18 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
   )
 }
 
+/** The photo is proof the seller has the item now, so it's taken live on a phone: nothing can be uploaded. */
 function ConfirmSheet({ order: o, onClose }: { order: OrderView; onClose: () => void }) {
   const confirm = useSellerConfirmOrder()
   const toast = useToast()
   const [photo, setPhoto] = useState<string | null>(null)
-  const [reading, setReading] = useState(false)
-
-  async function onPick(file: File | undefined) {
-    if (!file) return
-    setReading(true)
-    try {
-      setPhoto(await photoToDataUrl(file))
-    } catch (e) {
-      toast(errorMessage(e), 'error')
-    } finally {
-      setReading(false)
-    }
-  }
+  const [onPhone] = useState(() => isPhoneOrTablet(thisDevice()))
+  const link = `${window.location.origin}${window.location.pathname}?tab=orders`
 
   function onSubmit(e: FormEvent) {
     e.preventDefault()
     if (!photo) {
-      toast('Add a photo of the item.', 'error')
+      toast('Take the photo first.', 'error')
       return
     }
     confirm
@@ -225,19 +216,47 @@ function ConfirmSheet({ order: o, onClose }: { order: OrderView; onClose: () => 
       .catch((err) => toast(errorMessage(err), 'error'))
   }
 
+  function copyLink() {
+    navigator.clipboard
+      .writeText(link)
+      .then(() => toast('Link copied.'))
+      .catch(() => toast('Couldn’t copy it. Type the address into your phone instead.', 'error'))
+  }
+
+  if (!onPhone)
+    return (
+      <Sheet open onClose={onClose} title="Confirm order">
+        <h2 className="pr-10 font-display text-2xl font-extrabold">Switch to your phone</h2>
+        <p className="text-sm text-muted">
+          You confirm {o.listingTitle}{o.quantity > 1 ? ` × ${o.quantity}` : ''} with a photo taken right now on your phone or tablet, so the buyer knows you have it. Photos can’t be uploaded from a computer.
+        </p>
+        <ol className="flex list-decimal flex-col gap-1 pl-5 text-sm">
+          <li>Open this address on your phone and sign in with the same account:</li>
+        </ol>
+        <p className="rounded-xl bg-sunken p-3 text-sm font-bold break-all">{link}</p>
+        <ol start={2} className="flex list-decimal flex-col gap-1 pl-5 text-sm">
+          <li>Tap “Confirm with a photo” on this order.</li>
+        </ol>
+        {o.confirmBy ? <p className="text-xs text-subtle">You have until {dateTime(o.confirmBy)}.</p> : null}
+        <div className="flex gap-2">
+          <Button type="button" variant="outline" className="flex-1" onClick={onClose}>
+            Close
+          </Button>
+          <Button type="button" className="flex-1" onClick={copyLink}>
+            <CopyIcon size={16} /> Copy the link
+          </Button>
+        </div>
+      </Sheet>
+    )
+
   return (
     <Sheet open onClose={() => !confirm.isPending && onClose()} title="Confirm order">
       <h2 className="pr-10 font-display text-2xl font-extrabold">Confirm you have it</h2>
       <p className="text-sm text-muted">
-        Take a fresh photo of {o.listingTitle}{o.quantity > 1 ? ` × ${o.quantity}` : ''}. The buyer will see it, so make sure it’s the actual item.
+        Take a photo of {o.listingTitle}{o.quantity > 1 ? ` × ${o.quantity}` : ''} now. The buyer will see it, so make sure it’s the actual item.
       </p>
       <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
-        {photo ? <img src={photo} alt="Your photo of the item" className="max-h-64 w-full rounded-2xl border border-line bg-photo object-contain" /> : null}
-        <label className="flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-xl border border-line-strong px-4 text-sm font-bold">
-          <CameraIcon size={16} /> {reading ? 'Reading…' : photo ? 'Take another' : 'Take a photo'}
-          {/* On phones this opens the camera. */}
-          <input type="file" accept="image/*" capture="environment" className="sr-only" onChange={(e) => void onPick(e.target.files?.[0])} />
-        </label>
+        <CameraCapture photo={photo} onChange={setPhoto} />
         <div className="flex gap-2">
           <Button type="button" variant="outline" className="flex-1" onClick={onClose} disabled={confirm.isPending}>
             Not yet
