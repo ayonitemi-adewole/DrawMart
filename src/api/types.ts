@@ -521,6 +521,10 @@ export interface DrawMartApi {
   /** Replaces the saved items; an empty list removes them. Edits don't extend the deadline. */
   savePickupItems(items: PickupItemInput[]): Promise<SavedPickupView | null>
   /** Queues a regular product for admin review. */
+  /** Changes a listing that's still in review, up to its pickup or inspection day. */
+  updateListing(id: string, input: NewListingInput | NewProductInput): Promise<ListingView>
+  /** Takes back a listing that's still in review, up to its pickup or inspection day. */
+  withdrawListing(id: string): Promise<void>
   /** Takes one of this store's rejected listings back to review with its fixed details. */
   resubmitListing(id: string, input: NewListingInput | NewProductInput): Promise<ListingView>
   createProduct(input: NewProductInput): Promise<ListingView>
@@ -531,7 +535,8 @@ export interface DrawMartApi {
 
   // Admin
   listPendingListings(): Promise<ListingView[]>
-  approveListing(id: string): Promise<void>
+  /** `revision` is the version the admin was looking at; it fails if the store has changed it since. */
+  approveListing(id: string, revision?: number): Promise<void>
   /** Rejected listings go back to the store with this reason, to fix and send again. */
   rejectListing(id: string, reason: RejectionReason, note: string): Promise<void>
   /** Won items DrawMart sends from escrow, newest first. */

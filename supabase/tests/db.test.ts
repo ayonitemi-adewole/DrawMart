@@ -773,6 +773,60 @@ describe('regular products and orders', () => {
     await asUser(staff, `select public.reject_listing($1, 'price_wrong')`, [id])
   })
 
+  it('lets a store edit in review, and refuses an approval of the version before', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
+    const stranger = await newUser('editing-stranger@example.com')
+    await expectFail(asUser(stranger, `select public.update_listing($1, $2)`, [id, listingInput()]), 'forbidden')
+    await expectFail(asUser(store, `select public.update_listing($1, $2)`, [id, listingInput({ title: ' ' })]), 'invalid_input')
+
+    await asUser(store, `select public.update_listing($1, $2)`, [id, listingInput({ title: 'Better title' })])
+    const [row] = await admin<{ title: string; status: string; revision: number; caution_fee_status: string }>(
+      `select title, status, revision, caution_fee_status from public.listings where id = $1`, [id])
+    expect(row).toEqual({ title: 'Better title', status: 'pending_review', revision: 1, caution_fee_status: 'held' })
+
+    const stale = await expectFail(asUser(staff, `select public.approve_listing($1, 0)`, [id]), 'invalid_input')
+    expect(stale.detail).toContain('just changed')
+    await asUser(staff, `select public.approve_listing($1, 1)`, [id])
+    await expectFail(asUser(store, `select public.update_listing($1, $2)`, [id, listingInput()]), 'invalid_input')
+    await expectFail(asUser(store, `select public.withdraw_listing($1)`, [id]), 'invalid_input')
+  })
+
+  it('locks a draw on its pickup day', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
+    await admin(`update public.listing_handovers set date = (now() at time zone 'Africa/Lagos')::date where listing_id = $1`, [id])
+    await expectFail(asUser(store, `select public.update_listing($1, $2)`, [id, listingInput()]), 'invalid_input')
+    await expectFail(asUser(store, `select public.withdraw_listing($1)`, [id]), 'invalid_input')
+    await asUser(staff, `select public.reject_listing($1, 'photos_unclear')`, [id])
+  })
+
+  it('refunds the fee on a withdrawal, unless it was rejected first, and hides the listing', async () => {
+    const fee = `select status, caution_fee_status, was_rejected from public.listings where id = $1`
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
+    await asUser(store, `select public.withdraw_listing($1)`, [id])
+    expect(await admin(fee, [id])).toEqual([{ status: 'withdrawn', caution_fee_status: 'refunded', was_rejected: false }])
+    const stranger = await newUser('withdrawn-stranger@example.com')
+    expect(await asUser(stranger, `select 1 from public.listings where id = $1`, [id])).toEqual([])
+    await expectFail(asUser(store, `select public.withdraw_listing($1)`, [id]), 'invalid_input')
+
+    const [{ id: again }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
+    await asUser(staff, `select public.reject_listing($1, 'failed_escrow_check')`, [again])
+    await asUser(store, `select public.resubmit_listing($1, $2)`, [again, listingInput()])
+    await asUser(store, `select public.withdraw_listing($1)`, [again])
+    expect(await admin(fee, [again])).toEqual([{ status: 'withdrawn', caution_fee_status: 'kept', was_rejected: true }])
+
+    const [{ id: pid }] = await asUser<{ id: string }>(store, `select public.create_product($1) id`, [product])
+    await asUser(store, `select public.withdraw_listing($1)`, [pid])
+    expect(await admin(fee, [pid])).toEqual([{ status: 'withdrawn', caution_fee_status: 'none', was_rejected: false }])
+  })
+
+  it('forgets a rejection once the listing is approved, so buyers can’t see it', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
+    await asUser(staff, `select public.reject_listing($1, 'price_wrong')`, [id])
+    await asUser(store, `select public.resubmit_listing($1, $2)`, [id, listingInput()])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    expect(await admin(`select status, was_rejected, rejection_reason from public.listings where id = $1`, [id])).toEqual([{ status: 'live', was_rejected: false, rejection_reason: null }])
+  })
+
   it('keeps the caution fee rules for raffles when rejecting', async () => {
     const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
     await asUser(staff, `select public.reject_listing($1, 'photos_unclear')`, [id])
@@ -1183,6 +1237,19 @@ describe('shared pickups', () => {
     const rejected = await batch([item('Fine'), item('Rejected', 'Home')])
     await asUser(staff, `select public.reject_listing($1, 'photos_unclear')`, [rejected[1]])
     expect(await fees(rejected)).toEqual(['kept', 'kept'])
+
+    // A withdrawn item leaves the pickup: it gets the difference, the rest show the lower fee.
+    const left = await batch([item('Stays'), item('Goes', 'Home')])
+    await asUser(store, `select public.withdraw_listing($1)`, [left[1]])
+    const rows = await admin<{ id: string; pickup_batch_id: string | null; caution_fee_kobo: string; caution_fee_status: string }>(
+      `select id, pickup_batch_id, caution_fee_kobo, caution_fee_status from public.listings where id = any($1)`, [left])
+    const stays = rows.find((r) => r.id === left[0])!
+    const goes = rows.find((r) => r.id === left[1])!
+    expect(stays.caution_fee_status).toBe('held')
+    expect(Number(stays.caution_fee_kobo)).toBe(cautionFeeFor('Phones'))
+    expect(goes.pickup_batch_id).toBeNull()
+    expect(goes.caution_fee_status).toBe('refunded')
+    expect(Number(goes.caution_fee_kobo)).toBe(cautionFeeFor('Home') - cautionFeeFor('Phones'))
 
     // Fixed and resent, the shared fee goes back on hold. A car still can't join.
     await expectFail(asUser(store, `select public.resubmit_listing($1, $2)`, [rejected[1], listingInput({ category: 'Cars' })]), 'invalid_input')

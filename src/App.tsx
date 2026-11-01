@@ -161,6 +161,7 @@ const router = createBrowserRouter([
     errorElement: <RouteError />,
     children: [
       { index: true, element: <MerchantPage /> },
+      { path: 'listings/:id', element: <ListingPage /> },
       { path: 'insights', element: <InsightsPage /> },
       { path: 'messages', element: <MessagesPage basePath="/store/messages" /> },
       { path: 'messages/:id', element: <ConversationPage basePath="/store/messages" /> },

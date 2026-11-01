@@ -70,7 +70,7 @@ export function AdminPage() {
           {/* Hidden, not removed: a half-finished checklist shouldn't reset because of a search. */}
           {q.data.map((l) => (
             <div key={l.id} hidden={!found.includes(l)}>
-              <ReviewCard listing={l} />
+              <ReviewCard key={l.revision ?? 0} listing={l} />
             </div>
           ))}
         </div>
@@ -95,14 +95,13 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
   const econ = computeListingEconomics(l)
   const busy = review.isPending
 
+  // This card goes away (or starts over, if the store changed the listing) as soon as the
+  // queue refreshes, which is before mutate's own callbacks would run. So wait on the promise.
   function approve() {
-    review.mutate(
-      { id: l.id, approve: true },
-      {
-        onSuccess: () => toast(`${l.title} is live.`),
-        onError: (e) => toast(errorMessage(e), 'error'),
-      },
-    )
+    review
+      .mutateAsync({ id: l.id, approve: true, revision: l.revision ?? 0 })
+      .then(() => toast(`${l.title} is live.`))
+      .catch((e) => toast(errorMessage(e), 'error'))
   }
 
   function reject(e: FormEvent) {
@@ -111,14 +110,11 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
       setShowRejectError(true)
       return
     }
-    review.mutate(
-      { id: l.id, approve: false, reason, note },
-      {
-        onSuccess: () => toast(`${l.title} was rejected. The store can see why.`, 'info'),
-        onError: (err) => toast(errorMessage(err), 'error'),
-        onSettled: () => setConfirmReject(false),
-      },
-    )
+    review
+      .mutateAsync({ id: l.id, approve: false, reason, note })
+      .then(() => toast(`${l.title} was rejected. The store can see why.`, 'info'))
+      .catch((err) => toast(errorMessage(err), 'error'))
+      .finally(() => setConfirmReject(false))
   }
 
   return (

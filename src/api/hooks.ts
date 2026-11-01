@@ -365,6 +365,16 @@ export function useSavePickupItems() {
   })
 }
 
+export function useUpdateListing() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: ({ id, input }: { id: string; input: NewListingInput | NewProductInput }) => api.updateListing(id, input), onSettled: invalidate })
+}
+
+export function useWithdrawListing() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: (id: string) => api.withdrawListing(id), onSettled: invalidate })
+}
+
 export function useResubmitListing() {
   const invalidate = useInvalidateAll()
   return useMutation({ mutationFn: ({ id, input }: { id: string; input: NewListingInput | NewProductInput }) => api.resubmitListing(id, input), onSettled: invalidate })
@@ -422,8 +432,8 @@ export function useCreateListing() {
 export function useReviewListing() {
   const invalidate = useInvalidateAll()
   return useMutation({
-    mutationFn: (d: { id: string; approve: true } | { id: string; approve: false; reason: RejectionReason; note: string }) =>
-      d.approve ? api.approveListing(d.id) : api.rejectListing(d.id, d.reason, d.note),
+    mutationFn: (d: { id: string; approve: true; revision?: number } | { id: string; approve: false; reason: RejectionReason; note: string }) =>
+      d.approve ? api.approveListing(d.id, d.revision) : api.rejectListing(d.id, d.reason, d.note),
     onSettled: invalidate,
   })
 }

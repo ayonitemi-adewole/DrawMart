@@ -22,6 +22,7 @@ import { Countdown } from "@/components/Countdown";
 import {
   AlertIcon,
   BackIcon,
+  EyeIcon,
   CheckIcon,
   ChevronRightIcon,
   NairaIcon,
@@ -93,9 +94,19 @@ export function ListingPage() {
   );
 }
 
+/** A store opens this page from its own app, to see what buyers see. Stores can't buy. */
+function StoreViewNotice() {
+  return (
+    <Notice icon={EyeIcon} title="This is what buyers see">
+      Buying and saving are switched off because you’re signed in as a store.
+    </Notice>
+  );
+}
+
 /** A regular product: no tickets or draw, just the item and a fixed-price checkout. */
 function ProductDetail({ listing: l }: { listing: ListingView }) {
   const navigate = useNavigate();
+  const storeView = useAccess().role === "store";
   return (
     <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between">
@@ -106,7 +117,7 @@ function ProductDetail({ listing: l }: { listing: ListingView }) {
           <BackIcon size={18} /> Back
         </button>
         <div className="flex items-center gap-1">
-          <SaveButton listingId={l.id} title={l.title} />
+          {storeView ? null : <SaveButton listingId={l.id} title={l.title} />}
           <ShareButtons listing={l} />
         </div>
       </div>
@@ -179,15 +190,16 @@ function ProductDetail({ listing: l }: { listing: ListingView }) {
           </Card>
         </div>
         <div className="md:sticky md:top-24">
-          <BuyNowPanel listing={l} />
+          {storeView ? <StoreViewNotice /> : <BuyNowPanel listing={l} />}
         </div>
       </div>
-      <RelatedListings listing={l} />
+      {storeView ? null : <RelatedListings listing={l} />}
     </div>
   );
 }
 
 function ListingDetail({ listing: l }: { listing: ListingView }) {
+  const storeView = useAccess().role === "store";
   const navigate = useNavigate();
   const buyRef = useRef<HTMLDivElement>(null);
   const panelVisible = useInView(buyRef);
@@ -205,7 +217,7 @@ function ListingDetail({ listing: l }: { listing: ListingView }) {
           <BackIcon size={18} /> Back
         </button>
         <div className="flex items-center gap-1">
-          <SaveButton listingId={l.id} title={l.title} />
+          {storeView ? null : <SaveButton listingId={l.id} title={l.title} />}
           <ShareButtons listing={l} />
         </div>
       </div>
@@ -366,11 +378,11 @@ function ListingDetail({ listing: l }: { listing: ListingView }) {
         </div>
 
         <div ref={buyRef} id="buy" className="scroll-mt-24 md:sticky md:top-24">
-          <BuyPanel listing={l} left={left} />
+          {storeView ? <StoreViewNotice /> : <BuyPanel listing={l} left={left} />}
         </div>
       </div>
 
-      <RelatedListings listing={l} />
+      {storeView ? null : <RelatedListings listing={l} />}
 
       {l.status === "live" && !panelVisible ? (
         <div className="fixed inset-x-3 bottom-[calc(max(env(safe-area-inset-bottom),12px)+80px)] z-20 animate-sheet-up md:hidden">
@@ -519,6 +531,7 @@ const STATUS_TEXT: Record<ListingView["status"], string> = {
   for_sale: "Buy now",
   sold: "Sold",
   rejected: "Not on sale",
+  withdrawn: "Not on sale",
 };
 
 function useInView(ref: React.RefObject<HTMLElement | null>) {

@@ -31,6 +31,7 @@ import {
   validateListingTerms,
 } from '@/domain/listing'
 import { nairaToKobo } from '@/domain/money'
+import { canChangeInReview, withdrawalFees } from '@/domain/listingActions'
 import { newRejection, REJECTION_ERROR_TEXT, rejectionError, resentCautionFee } from '@/domain/rejection'
 import { DEMO_ACCOUNTS } from './demoAccounts'
 import {
@@ -81,7 +82,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v29' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v30' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -1045,6 +1046,40 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     return listing
   }
 
+  const ownListing = (db: Db, id: string) => {
+    const l = getListingOr404(db, id)
+    if (l.merchantId !== shopId(db)) throw new ApiError('not_found', 'That listing doesn’t exist.')
+    return l
+  }
+
+  /** Checks new details like a new listing, then saves them. The caller sets the status. */
+  function setListingDetails(db: Db, l: Listing, input: NewListingInput | NewProductInput) {
+    const details = { title: input.title.trim(), description: input.description.trim(), category: input.category, images: input.images ?? [], priceKobo: input.priceKobo }
+    if (l.kind === 'product') {
+      const problems = validateProduct(input).map((e) => PRODUCT_ERROR_TEXT[e])
+      if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+      Object.assign(l, details, { feeBps: platformFeeBps(input.priceKobo), closesAt: iso(now()) })
+      return
+    }
+    const raffle = input as NewListingInput
+    const problems = raffleProblems(raffle)
+    if (l.pickupBatchId && handoverMethodFor(input.category) === 'inspection') problems.push(PICKUP_ERROR_TEXT.cars_not_allowed)
+    if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+    const feeBps = platformFeeBps(input.priceKobo)
+    const econ = computeListingEconomics({ ...raffle, feeBps })
+    const amountKobo = resentCautionFee(l.cautionFee.amountKobo, input.category)
+    Object.assign(l, details, {
+      ticketPriceKobo: raffle.ticketPriceKobo, buyerTicketPriceKobo: econ.buyerTicketKobo, ticketCount: econ.ticketCount,
+      feeMode: raffle.feeMode, feeBps, unsoldPolicy: raffle.unsoldPolicy,
+      fallbackPriceKobo: raffle.unsoldPolicy === 'convert_to_sale' ? raffle.fallbackPriceKobo! : null,
+      durationDays: raffle.durationDays, closesAt: iso(now() + raffle.durationDays * DAY),
+      handover: { ...raffle.handover, address: raffle.handover.address.trim(), method: handoverMethodFor(input.category) },
+      cautionFee: { ...l.cautionFee, amountKobo },
+    })
+    // Every item in a shared pickup shows the same fee.
+    for (const m of db.listings) if (l.pickupBatchId && m.pickupBatchId === l.pickupBatchId) m.cautionFee = { ...m.cautionFee, amountKobo }
+  }
+
   const getListingOr404 = (db: Db, id: string) => {
     const l = db.listings.find((x) => x.id === id)
     if (!l) throw new ApiError('not_found', 'That listing doesn’t exist.')
@@ -1515,37 +1550,36 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         return saved
       }),
 
+    updateListing: (id, input) =>
+      tx((db) => {
+        const l = ownListing(db, id)
+        if (l.status !== 'pending_review') throw new ApiError('invalid_input', 'Only listings in review can be edited.')
+        if (!canChangeInReview(l, lagosDay(now()))) throw new ApiError('invalid_input', 'Your pickup or inspection day has arrived, so this can’t be changed now.')
+        setListingDetails(db, l, input)
+        l.revision = (l.revision ?? 0) + 1
+        return listingView(db, l, 'full')
+      }),
+
+    withdrawListing: (id) =>
+      tx((db) => {
+        const l = ownListing(db, id)
+        if (l.status !== 'pending_review') throw new ApiError('invalid_input', 'Only listings in review can be withdrawn.')
+        if (!canChangeInReview(l, lagosDay(now()))) throw new ApiError('invalid_input', 'Your pickup or inspection day has arrived, so this can’t be withdrawn now.')
+        const others = l.pickupBatchId ? db.listings.filter((m) => m.pickupBatchId === l.pickupBatchId && m.id !== l.id) : null
+        const { withdrawn, remainingKobo } = withdrawalFees(l.cautionFee, !!l.wasRejected, others?.map((m) => m.category) ?? null)
+        if (remainingKobo !== null) for (const m of others ?? []) m.cautionFee = { ...m.cautionFee, amountKobo: remainingKobo }
+        Object.assign(l, { status: 'withdrawn', cautionFee: withdrawn, pickupBatchId: null })
+      }),
+
     resubmitListing: (id, input) =>
       tx((db) => {
-        const l = getListingOr404(db, id)
-        if (l.merchantId !== shopId(db)) throw new ApiError('not_found', 'That listing doesn’t exist.')
+        const l = ownListing(db, id)
         if (l.status !== 'rejected') throw new ApiError('invalid_input', 'Only rejected listings can be sent again.')
-        const details = { title: input.title.trim(), description: input.description.trim(), category: input.category, images: input.images ?? [], priceKobo: input.priceKobo }
-        if (l.kind === 'product') {
-          const problems = validateProduct(input).map((e) => PRODUCT_ERROR_TEXT[e])
-          if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
-          Object.assign(l, details, { feeBps: platformFeeBps(input.priceKobo), closesAt: iso(now()) })
-        } else {
-          const raffle = input as NewListingInput
-          const problems = raffleProblems(raffle)
-          if (l.pickupBatchId && handoverMethodFor(input.category) === 'inspection') problems.push(PICKUP_ERROR_TEXT.cars_not_allowed)
-          if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
-          const feeBps = platformFeeBps(input.priceKobo)
-          const econ = computeListingEconomics({ ...raffle, feeBps })
-          const amountKobo = resentCautionFee(l.cautionFee.amountKobo, input.category)
-          Object.assign(l, details, {
-            ticketPriceKobo: raffle.ticketPriceKobo, buyerTicketPriceKobo: econ.buyerTicketKobo, ticketCount: econ.ticketCount,
-            feeMode: raffle.feeMode, feeBps, unsoldPolicy: raffle.unsoldPolicy,
-            fallbackPriceKobo: raffle.unsoldPolicy === 'convert_to_sale' ? raffle.fallbackPriceKobo! : null,
-            durationDays: raffle.durationDays, closesAt: iso(now() + raffle.durationDays * DAY),
-            handover: { ...raffle.handover, address: raffle.handover.address.trim(), method: handoverMethodFor(input.category) },
-            cautionFee: { amountKobo, status: 'held' },
-          })
-          // Every item in a shared pickup shows the same fee; settlePickups settles its status.
-          for (const m of db.listings) if (l.pickupBatchId && m.pickupBatchId === l.pickupBatchId) m.cautionFee = { ...m.cautionFee, amountKobo }
-        }
+        setListingDetails(db, l, input)
+        if (l.kind === 'raffle') l.cautionFee = { ...l.cautionFee, status: 'held' } // settlePickups has the last word on a shared pickup
         l.status = 'pending_review'
         l.rejection = null
+        l.revision = (l.revision ?? 0) + 1
         return listingView(db, l, 'full')
       }),
 
@@ -1640,7 +1674,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const daily = new Map(range.map((d) => [d.date, { ...d }]))
         const today = range[range.length - 1].date
         const listings = db.listings
-          .filter((l) => l.merchantId === shop && l.status !== 'rejected')
+          .filter((l) => l.merchantId === shop && l.status !== 'rejected' && l.status !== 'withdrawn')
           .map((l): ListingMetrics => {
             for (const d of range) {
               const day = statsBetween(db, l, d.date, d.date)
@@ -1786,10 +1820,12 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     listPendingListings: () =>
       tx((db) => db.listings.filter((l) => l.status === 'pending_review').map((l) => listingView(db, l, 'full'))),
 
-    approveListing: (id) =>
+    approveListing: (id, revision) =>
       tx((db) => {
         const l = getListingOr404(db, id)
         if (l.status !== 'pending_review') throw new ApiError('invalid_input', 'Only listings in review can be approved.')
+        if (revision !== undefined && revision !== (l.revision ?? 0)) throw new ApiError('invalid_input', 'The store just changed this listing. Check it again.')
+        l.wasRejected = false
         if (l.kind === 'product') {
           l.status = 'for_sale' // products skip the draw
           alertRelists(db, l, now())
@@ -1808,6 +1844,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (problem) throw new ApiError('invalid_input', REJECTION_ERROR_TEXT[problem])
         l.status = 'rejected'
         l.rejection = newRejection(reason, note)
+        l.wasRejected = true
         l.cautionFee = settleCautionFee(l.cautionFee, 'rejected')
       }),
 

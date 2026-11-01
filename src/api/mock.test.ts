@@ -201,6 +201,48 @@ describe('mock api', () => {
     await expect(api.resubmitListing(created.id, newListing())).rejects.toMatchObject({ code: 'invalid_input' })
   })
 
+  it('lets a store edit a listing in review, and refuses an approval of the old version', async () => {
+    const api = make()
+    const created = await api.createListing(newListing())
+    const edited = await api.updateListing(created.id, { ...newListing(), title: 'Better title' })
+    expect(edited).toMatchObject({ id: created.id, productCode: created.productCode, title: 'Better title', status: 'pending_review', revision: 1 })
+    expect(edited.cautionFee.status).toBe('held')
+    await expect(api.updateListing(created.id, { ...newListing(), title: ' ' })).rejects.toMatchObject({ code: 'invalid_input' })
+
+    await expect(api.approveListing(created.id, 0)).rejects.toThrow('just changed')
+    await api.approveListing(created.id, 1)
+    await expect(api.updateListing(created.id, newListing())).rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(api.withdrawListing(created.id)).rejects.toMatchObject({ code: 'invalid_input' })
+  })
+
+  it('refunds the caution fee on a withdrawal', async () => {
+    const api = make()
+    const created = await api.createListing(newListing())
+    await api.withdrawListing(created.id)
+    const mine = (await api.listMerchantListings()).find((l) => l.id === created.id)!
+    expect(mine.status).toBe('withdrawn')
+    expect(mine.cautionFee).toEqual({ amountKobo: created.cautionFee.amountKobo, status: 'refunded' })
+    await expect(api.withdrawListing(created.id)).rejects.toMatchObject({ code: 'invalid_input' })
+  })
+
+  it('keeps the fee when a rejected listing is resent and then withdrawn', async () => {
+    const api = make()
+    const created = await api.createListing(newListing())
+    await api.rejectListing(created.id, 'failed_escrow_check', '')
+    await api.resubmitListing(created.id, newListing())
+    await api.withdrawListing(created.id)
+    expect((await api.listMerchantListings()).find((l) => l.id === created.id)?.cautionFee.status).toBe('kept')
+  })
+
+  it('locks a draw on its pickup day', async () => {
+    let t = Date.now()
+    const api = make(() => t)
+    const created = await api.createListing(newListing())
+    t += 15 * 86_400_000
+    await expect(api.withdrawListing(created.id)).rejects.toThrow('pickup or inspection day')
+    await expect(api.updateListing(created.id, newListing())).rejects.toThrow('pickup or inspection day')
+  })
+
   it('checks a resent listing like a new one', async () => {
     const api = make()
     const created = await api.createListing(newListing())
@@ -512,6 +554,14 @@ describe('mock api', () => {
     const [c, d] = await api.createListingBatch({ items: pair, handover })
     await api.rejectListing(d.id, 'photos_unclear', '')
     expect((await api.getListing(c.id)).cautionFee.status).toBe('kept')
+
+    // A withdrawn item leaves the pickup, and the items left show the fee without it.
+    const [e, f] = await api.createListingBatch({ items: pair, handover })
+    await api.withdrawListing(f.id)
+    expect((await api.getListing(e.id)).cautionFee).toEqual({ amountKobo: cautionFeeFor('Phones'), status: 'held' })
+    expect((await api.listMerchantListings()).find((l) => l.id === f.id)).toMatchObject({
+      status: 'withdrawn', pickupBatchId: null, cautionFee: { amountKobo: cautionFeeFor('Home') - cautionFeeFor('Phones'), status: 'refunded' },
+    })
 
     // Fixed and resent: the shared fee goes back on hold, and a car still can't join.
     await expect(api.resubmitListing(d.id, { ...pair[1], category: 'Cars', handover })).rejects.toMatchObject({ code: 'invalid_input' })

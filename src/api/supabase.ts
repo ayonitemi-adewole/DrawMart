@@ -112,6 +112,8 @@ interface ListingRow {
   pickup_batch_id: string | null
   rejection_reason: RejectionReason | null
   rejection_note: string | null
+  revision: number
+  was_rejected: boolean
   boosted_until: string | null
   sold_out_at: string | null
   draw_at: string | null
@@ -315,6 +317,8 @@ function toListingView(l: ListingRow, me: string | null, mine: Mine): ListingVie
     soldOutAt: l.sold_out_at,
     drawAt: l.draw_at,
     pickupBatchId: l.pickup_batch_id,
+    revision: l.revision,
+    wasRejected: l.was_rejected,
     rejection: l.rejection_reason ? { reason: l.rejection_reason, note: l.rejection_note } : null,
     handover: l.handover
       ? { method: l.handover.method, address: l.handover.address, location: toPoint(l.handover.lat, l.handover.lng), contactPhone: l.handover.contact_phone, date: l.handover.date, slot: l.handover.slot }
@@ -908,6 +912,15 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       return readSavedPickup()
     },
 
+    updateListing: async (id, input) => {
+      const merchantId = await myMerchantId()
+      const images = await uploadPhotos(merchantId, input.images ?? [])
+      await rpc('update_listing', { p_listing_id: id, p: { ...input, images } })
+      return getListing(id)
+    },
+
+    withdrawListing: (id) => rpc('withdraw_listing', { p_listing_id: id }),
+
     resubmitListing: async (id, input) => {
       const merchantId = await myMerchantId()
       const images = await uploadPhotos(merchantId, input.images ?? [])
@@ -936,7 +949,7 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       return views(rows)
     },
 
-    approveListing: (id) => rpc('approve_listing', { p_listing_id: id }),
+    approveListing: (id, revision) => rpc('approve_listing', { p_listing_id: id, p_revision: revision ?? null }),
 
     listPrizeOrders: async () =>
       unwrap(await client.from('orders').select(ORDER_SELECT).eq('handled_by', 'drawmart').order('created_at', { ascending: false }).returns<OrderRow[]>()).map(toOrderView),

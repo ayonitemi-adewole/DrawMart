@@ -35,6 +35,7 @@ export type ListingStatus =
   | 'for_sale' // on sale at a fixed price: an approved product, or a raffle that ended unsold
   | 'sold' // a fixed-price item was bought
   | 'rejected'
+  | 'withdrawn' // the store took it back while it was in review
 
 /** How the item reaches DrawMart for checking: big items are inspected where they are. */
 export type HandoverMethod = 'pickup' | 'inspection'
@@ -114,6 +115,10 @@ export interface Listing {
   status: ListingStatus
   /** Only while rejected, and only seen by its store and admins. Null on rows rejected before reasons existed. */
   rejection?: ListingRejection | null
+  /** Counts changes while in review, so an admin only approves the version they saw. */
+  revision?: number
+  /** Rejected since it was last approved: withdrawing then doesn't get the caution fee back. */
+  wasRejected?: boolean
   /** Raffles only: products stay with the store until they're sold. */
   handover: Handover | null
   cautionFee: CautionFee

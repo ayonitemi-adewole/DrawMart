@@ -9,6 +9,8 @@ import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication, type SellerAp
 import { SellerInsights } from '@/components/SellerInsights'
 import { photoToDataUrl } from '@/lib/image'
 import { MerchantListings } from './merchant/MerchantPage'
+import { listingFormFrom } from './merchant/parts'
+import { localDate } from '@/domain/listing'
 import { MerchantOrders, NewProduct } from './merchant/NewProduct'
 
 /**
@@ -285,8 +287,8 @@ function SellerDashboard() {
   const [params, setParams] = useSearchParams()
   const tab: SellTab = SELL_TABS.find((t) => t === params.get('tab')) ?? 'items'
   const setTab = (t: SellTab) => setParams(t === 'items' ? {} : { tab: t }, { replace: true })
-  const fixId = params.get('fix')
-  const fixing = fixId ? listings.data?.find((l) => l.id === fixId && l.status === 'rejected') : undefined
+  const [today] = useState(() => localDate(new Date()))
+  const form = listingFormFrom(params, listings.data ?? [], today)
 
   return (
     <div className="flex flex-col gap-6">
@@ -320,9 +322,9 @@ function SellerDashboard() {
           { value: 'new', label: <><PlusIcon size={16} /> New item</> },
         ]}
       />
-      <div key={fixing?.id ?? tab} className="animate-fade-in">
-        {fixing ? (
-          <NewProduct fixing={fixing} onBack={() => setTab('items')} onDone={() => setTab('items')} />
+      <div key={form ? `${form.mode}-${form.listing.id}` : tab} className="animate-fade-in">
+        {form ? (
+          <NewProduct form={form} onBack={() => setTab('items')} onDone={() => setTab('items')} />
         ) : tab === 'orders' ? (
           <MerchantOrders />
         ) : tab === 'insights' ? (
@@ -332,8 +334,8 @@ function SellerDashboard() {
         ) : (
           <MerchantListings
             onNew={() => setTab('new')}
-            onFix={(l) => {
-              setParams({ fix: l.id }, { replace: true })
+            onOpen={(mode, l) => {
+              setParams({ [mode]: l.id }, { replace: true })
               window.scrollTo({ top: 0 })
             }}
             emptyBody="List your first item. We check it, then it goes on sale at your price."

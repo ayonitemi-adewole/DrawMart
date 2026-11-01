@@ -1,14 +1,111 @@
 import { useRef, useState, type ReactNode } from 'react'
+import { Link } from 'react-router'
+import { useAccess, useWithdrawListing } from '@/api/hooks'
+import { Sheet } from '@/components/Sheet'
+import { canChangeInReview, hasLivePage } from '@/domain/listingActions'
+import { localDate } from '@/domain/listing'
+import { formatNaira } from '@/domain/money'
 import { CATEGORY_STYLE } from '@/components/category'
-import { ClipboardIcon, PlusIcon, XIcon } from '@/components/icons'
+import { ClipboardIcon, CopyIcon, EyeIcon, PlusIcon, XIcon } from '@/components/icons'
 import { useToast } from '@/components/toast'
-import { Button, Card, Notice, cx, errorMessage } from '@/components/ui'
+import { Button, Card, Notice, buttonClass, cx, errorMessage } from '@/components/ui'
 import type { ListingView } from '@/api/types'
 import { rejectionReasonText } from '@/domain/rejection'
 import { CATEGORIES, type Category } from '@/domain/types'
 import { photoToDataUrl } from '@/lib/image'
 
 /** Form pieces shared by the raffle and regular-product listing forms. */
+
+/** What the listing form was opened to do with an existing listing. */
+export type ListingFormMode = 'fix' | 'edit' | 'copy'
+export type ListingForm = { mode: ListingFormMode; listing: ListingView }
+
+/** Reads ?fix=, ?edit= or ?copy=. Once a listing can't be fixed or edited any more, the form closes itself. */
+export function listingFormFrom(params: URLSearchParams, listings: readonly ListingView[], today: string): ListingForm | null {
+  for (const mode of ['fix', 'edit', 'copy'] as const) {
+    const listing = listings.find((l) => l.id === params.get(mode))
+    if (!listing) continue
+    if (mode === 'fix' && listing.status !== 'rejected') continue
+    if (mode === 'edit' && !canChangeInReview(listing, today)) continue
+    return { mode, listing }
+  }
+  return null
+}
+
+/** View, edit, withdraw and copy, for whichever of them this listing allows right now. */
+export function ListingActions({ listing: l, onOpen }: { listing: ListingView; onOpen: (mode: ListingFormMode, l: ListingView) => void }) {
+  const role = useAccess().role
+  const withdraw = useWithdrawListing()
+  const toast = useToast()
+  const [confirming, setConfirming] = useState(false)
+  const changeable = canChangeInReview(l, localDate(new Date()))
+
+  function onWithdraw() {
+    // Under the "In review" filter this card goes as soon as the list refreshes, so wait on the promise.
+    withdraw
+      .mutateAsync(l.id)
+      .then(() => toast(`${l.title} was withdrawn.`, 'info'))
+      .catch((e) => toast(errorMessage(e), 'error'))
+      .finally(() => setConfirming(false))
+  }
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-dashed border-line pt-3">
+      {l.status === 'pending_review' && !changeable ? <p className="text-xs text-subtle">Your {l.handover?.method ?? 'pickup'} day has arrived, so this can’t be edited or withdrawn now.</p> : null}
+      <div className="flex flex-wrap gap-1">
+        {hasLivePage(l.status) ? (
+          <Link to={`${role === 'store' ? '/store' : ''}/listings/${l.id}`} className={buttonClass('ghost')}>
+            <EyeIcon size={16} /> View live page
+          </Link>
+        ) : null}
+        {changeable ? (
+          <Button variant="ghost" onClick={() => onOpen('edit', l)}>
+            <ClipboardIcon size={16} /> Edit
+          </Button>
+        ) : null}
+        <Button variant="ghost" onClick={() => onOpen('copy', l)}>
+          <CopyIcon size={16} /> Copy
+        </Button>
+        {changeable ? (
+          <Button variant="ghost" onClick={() => setConfirming(true)}>
+            <XIcon size={16} /> Withdraw
+          </Button>
+        ) : null}
+      </div>
+      <Sheet open={confirming} onClose={() => !withdraw.isPending && setConfirming(false)} title="Withdraw listing">
+        <h2 className="pr-10 font-display text-2xl font-extrabold">Withdraw “{l.title}”?</h2>
+        <p className="text-sm text-muted">
+          It leaves the review queue and won’t go on sale.{' '}
+          {l.kind === 'product'
+            ? null
+            : l.pickupBatchId
+              ? 'This item shares a pickup, so the fee is worked out again from the items left, and you get back any difference.'
+              : l.wasRejected
+                ? `This listing was rejected before, so its ${formatNaira(l.cautionFee.amountKobo)} caution fee is kept.`
+                : `Your ${formatNaira(l.cautionFee.amountKobo)} caution fee is refunded${l.handover?.method === 'inspection' ? ' and the inspection cancelled.' : ' and the pickup cancelled.'}`}
+        </p>
+        <div className="flex gap-2">
+          <Button variant="outline" className="flex-1" onClick={() => setConfirming(false)} disabled={withdraw.isPending}>
+            Keep it
+          </Button>
+          <Button variant="danger" className="flex-1" loading={withdraw.isPending} onClick={onWithdraw}>
+            Withdraw
+          </Button>
+        </div>
+      </Sheet>
+    </div>
+  )
+}
+
+/** Says what the form is doing, above a form that starts from an existing listing. */
+export function FormStartNotice({ form }: { form: ListingForm }) {
+  if (form.mode === 'fix') return <RejectionNotice listing={form.listing} />
+  return (
+    <Notice icon={form.mode === 'copy' ? CopyIcon : ClipboardIcon} title={form.mode === 'copy' ? `Copied from ${form.listing.title}` : 'Editing while it’s in review'}>
+      {form.mode === 'copy' ? 'This makes a new listing with its own product ID. Nothing is sent until you finish.' : 'The reviewer sees your changes straight away.'}
+    </Notice>
+  )
+}
 
 /** Why an admin turned this listing down, in their words. Rows from before reasons existed have none. */
 export function RejectionNotice({ listing: l, onFix }: { listing: ListingView; onFix?: () => void }) {

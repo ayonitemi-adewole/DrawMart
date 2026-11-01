@@ -23,6 +23,7 @@ const STATUS: Record<ListingStatus, { label: string; tone: Tone }> = {
   for_sale: { label: 'On sale', tone: 'brand' },
   sold: { label: 'Sold', tone: 'sky' },
   rejected: { label: 'Rejected', tone: 'hot' },
+  withdrawn: { label: 'Withdrawn', tone: 'neutral' },
 }
 const ALL_STATUSES = Object.keys(STATUS) as ListingStatus[]
 
