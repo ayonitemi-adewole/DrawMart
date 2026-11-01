@@ -60,6 +60,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
           { to: '/admin/stories', label: 'Winner stories', icon: HeartIcon, count: stories.data?.length ?? 0 },
           { to: '/admin/payouts', label: 'Payouts', icon: NairaIcon, count: duePayouts.data?.length ?? 0 },
           { to: '/admin/cancellations', label: 'Cancellations', icon: XIcon, count: cancelRates.data?.filter((r) => cancelRateFlagged(r.orders, r.cancelled)).length ?? 0 },
+          { to: '/admin/delivery', label: 'Delivery prices', icon: TruckIcon },
           { to: '/admin/boosts', label: 'Boosts', icon: TrendingUpIcon },
           { to: '/admin/draws', label: api.testMode ? 'Live draws & demo' : 'Live draws', icon: DiceIcon },
         ]

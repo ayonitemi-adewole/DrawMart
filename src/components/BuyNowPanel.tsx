@@ -57,7 +57,7 @@ export function BuyNowPanel({ listing: l }: { listing: ListingView }) {
         {lowStock ? <Badge tone="hot" className="w-fit">{lowStock}</Badge> : null}
         <span className="text-sm text-muted">
           {product
-            ? `Sold by ${l.merchant.name} at a fixed price. Pay from your wallet; the store delivers anywhere in Lagos.`
+            ? `Sold by ${l.merchant.name} at a fixed price. Pay from your wallet. DrawMart’s riders deliver anywhere in Lagos, and you’ll see the delivery fee at checkout.`
             : `The draw didn’t sell out, so everyone was refunded. ${l.merchant.name} is selling it at a fixed price instead.`}
         </span>
       </div>

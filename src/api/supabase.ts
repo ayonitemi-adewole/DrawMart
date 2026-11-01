@@ -18,7 +18,8 @@ import { WINNER_CONSENT_VERSION } from '@/domain/winnerStories'
 import { DEFAULT_PUSH_PREFERENCES } from '@/domain/push'
 import { ORDER_ERROR_TEXT, clampQuantity } from '@/domain/orders'
 import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication } from '@/domain/sellers'
-import type { CancelReason, Category, Fulfilment, PickupPoint, FeeMode, Handover, LedgerEntry, LedgerKind, ListingKind, ListingStatus, Merchant, OrderStatus, RejectionReason, UnsoldPolicy, User } from '@/domain/types'
+import type { DeliveryArea } from '@/domain/deliveryFees'
+import type { CancelReason, Category, Kobo, PackageSize, Fulfilment, PickupPoint, FeeMode, Handover, LedgerEntry, LedgerKind, ListingKind, ListingStatus, Merchant, OrderStatus, RejectionReason, UnsoldPolicy, User } from '@/domain/types'
 import { DEMO_ACCOUNTS } from './demoAccounts'
 import {
   type AccountRole,
@@ -64,6 +65,7 @@ interface MerchantRow {
   area: string
   cac_number: string
   verified: boolean
+  delivery_area: string | null
 }
 
 interface HandoverRow {
@@ -113,6 +115,7 @@ interface ListingRow {
   closes_at: string
   pickup_batch_id: string | null
   stock: number
+  package_size: PackageSize | null
   reviewed_price_kobo: number | null
   rejection_reason: RejectionReason | null
   rejection_note: string | null
@@ -200,6 +203,7 @@ interface OrderRow {
   merchant_id: string
   price_kobo: number
   quantity: number
+  delivery_fee_kobo: number
   cancelled_at: string | null
   cancel_reason: CancelReason | null
   cancel_note: string | null
@@ -270,7 +274,7 @@ const num = (v: number | string | null | undefined) => Number(v ?? 0)
 const toPoint = (lat: number | null, lng: number | null) => (lat === null || lng === null ? null : { lat, lng })
 
 function toMerchant(m: MerchantRow): Merchant {
-  return { id: m.id, kind: m.kind, name: m.name, area: m.area, cacNumber: m.cac_number, verified: m.verified }
+  return { id: m.id, kind: m.kind, name: m.name, area: m.area, deliveryArea: m.delivery_area, cacNumber: m.cac_number, verified: m.verified }
 }
 
 function toUser(p: ProfileRow): User {
@@ -338,6 +342,7 @@ function toListingView(l: ListingRow, me: string | null, mine: Mine): ListingVie
     ticketCount: l.ticket_count,
     ticketsSold: l.tickets_sold,
     stock: l.stock,
+    packageSize: l.package_size,
     reviewedPriceKobo: l.reviewed_price_kobo === null ? null : num(l.reviewed_price_kobo),
     feeMode: l.fee_mode,
     feeBps: l.fee_bps,
@@ -384,6 +389,7 @@ function toOrderView(o: OrderRow): OrderView {
     priceKobo: num(o.price_kobo),
     feeKobo: num(o.fee_kobo),
     quantity: o.quantity,
+    deliveryFeeKobo: num(o.delivery_fee_kobo),
     cancelledAt: o.cancelled_at,
     cancelReason: o.cancel_reason,
     cancelNote: o.cancel_note,
@@ -1051,6 +1057,19 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       return unwrap(await client.from('orders').select(ORDER_SELECT).eq('merchant_id', id).order('created_at', { ascending: false }).returns<OrderRow[]>()).map(toOrderView)
     },
 
+    getDeliveryPricing: async () => {
+      const [areas, prices, extras] = await Promise.all([
+        client.from('delivery_areas').select('id, name, lat, lng').order('sort').returns<DeliveryArea[]>(),
+        client.from('delivery_prices').select('area_a, area_b, price_kobo').returns<{ area_a: string; area_b: string; price_kobo: number }[]>(),
+        client.from('delivery_size_extras').select('size, extra_kobo').returns<{ size: PackageSize; extra_kobo: number }[]>(),
+      ])
+      const sizeExtras: Record<PackageSize, Kobo> = { small: 0, medium: 0, large: 0 }
+      for (const e of unwrap(extras)) sizeExtras[e.size] = num(e.extra_kobo)
+      return { areas: unwrap(areas), prices: unwrap(prices).map((p) => ({ areaA: p.area_a, areaB: p.area_b, priceKobo: num(p.price_kobo) })), sizeExtras }
+    },
+    setDeliveryPrice: (areaA, areaB, priceKobo) => rpc('set_delivery_price', { p_area_a: areaA, p_area_b: areaB, p_price_kobo: priceKobo }),
+    setDeliverySizeExtra: (size, extraKobo) => rpc('set_delivery_size_extra', { p_size: size, p_extra_kobo: extraKobo }),
+    setShopDeliveryArea: (area) => rpc('set_shop_delivery_area', { p_area: area }),
     cancelOrder: (orderId, reason, note) => rpc('cancel_order', { p_order_id: orderId, p_reason: reason, p_note: note }),
     listCancelRates: () => rpc<CancelRateView[]>('merchant_cancel_rates'),
     dispatchOrder: (orderId) => rpc('dispatch_order', { p_order_id: orderId }),

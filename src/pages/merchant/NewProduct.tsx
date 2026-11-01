@@ -11,8 +11,9 @@ import { Badge, Button, Card, EmptyState, ErrorState, Field, Notice, ProductImag
 import { platformFeeBps } from '@/domain/fees'
 import { formatNaira, parseNairaInput } from '@/domain/money'
 import { PRODUCT_ERROR_TEXT, saleEconomics, validateProduct, type ProductError } from '@/domain/orders'
-import type { Category, ListingKind, OrderStatus } from '@/domain/types'
-import { CategoryPicker, FormStartNotice, PhotoPicker, Section, type ListingForm } from './parts'
+import type { Category, ListingKind, OrderStatus, PackageSize } from '@/domain/types'
+import { PACKAGE_SIZES, PACKAGE_SIZE_TEXT, defaultSizeFor } from '@/domain/deliveryFees'
+import { CategoryPicker, FormStartNotice, PhotoPicker, Section, ShopAreaPicker, type ListingForm } from './parts'
 
 const KINDS: { kind: ListingKind; icon: IconComponent; title: string; body: string; points: string[] }[] = [
   {
@@ -86,6 +87,8 @@ export function NewProduct({ onBack, onDone, form }: { onBack: () => void; onDon
   const [photos, setPhotos] = useState<string[]>(source?.images ?? [])
   const [price, setPrice] = useState(source ? String(source.priceKobo / 100) : '')
   const [stock, setStock] = useState(String(source && source.stock > 0 ? source.stock : 1))
+  const [chosenSize, setChosenSize] = useState<PackageSize | null>(source?.packageSize ?? null)
+  const size = chosenSize ?? defaultSizeFor(category)
   const [showErrors, setShowErrors] = useState(false)
   const [created, setCreated] = useState<ListingView | null>(null)
 
@@ -105,7 +108,7 @@ export function NewProduct({ onBack, onDone, form }: { onBack: () => void; onDon
       toast('A few details need fixing first.', 'error')
       return
     }
-    const details = { title, description, category, images: photos, priceKobo: input.priceKobo, stock: input.stock }
+    const details = { title, description, category, images: photos, priceKobo: input.priceKobo, stock: input.stock, packageSize: size }
     if (changing) {
       // The listing leaves the rejected list as soon as this lands, so don't rely on this form still being there.
       ;(form?.mode === 'edit' ? update : resubmit)
@@ -149,12 +152,24 @@ export function NewProduct({ onBack, onDone, form }: { onBack: () => void; onDon
         </Section>
 
         <Section n={2} title="Price and stock" sub="Buyers pay exactly this. DrawMart’s fee, set from the price, comes out of your payout.">
-          <Field label="Price (₦)" htmlFor="p-price" error={fieldError('price')} hint="Delivery in Lagos is included in this price.">
+          <Field label="Price (₦)" htmlFor="p-price" error={fieldError('price')} hint="Buyers pay for delivery separately at checkout, so don’t include it here.">
             <input id="p-price" inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value)} className={inputCls} placeholder="250,000" />
           </Field>
           <Field label="How many do you have?" htmlFor="p-stock" error={fieldError('stock')} hint="Each order takes one. It shows as sold out when they’re gone.">
             <input id="p-stock" inputMode="numeric" value={stock} onChange={(e) => setStock(e.target.value)} className={inputCls} />
           </Field>
+          <fieldset className="flex flex-col gap-2">
+            <legend className="mb-1.5 text-sm font-bold">Package size</legend>
+            <Segmented<PackageSize>
+              label="Package size"
+              value={size}
+              onChange={setChosenSize}
+              className="w-full"
+              options={PACKAGE_SIZES.map((s) => ({ value: s, label: PACKAGE_SIZE_TEXT[s].label }))}
+            />
+            <p className="text-xs text-subtle">{PACKAGE_SIZE_TEXT[size].sub} Bigger packages cost buyers more to deliver.</p>
+          </fieldset>
+          <ShopAreaPicker />
         </Section>
 
         <Notice icon={ShieldIcon} title="No escrow, no caution fee">

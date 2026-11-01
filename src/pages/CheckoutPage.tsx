@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { DeliveryPin } from '@/components/DeliveryPin'
-import { useAddressActions, useAddresses, useCart, useCheckout, useListing, useMe, usePickupPoints, useWallet } from '@/api/hooks'
+import { useDeliveryPricing, useAddressActions, useAddresses, useCart, useCheckout, useListing, useMe, usePickupPoints, useWallet } from '@/api/hooks'
 import type { ListingView, OrderView } from '@/api/types'
 import { AddressPicker } from '@/components/AddressPicker'
 import { CheckCircleIcon, MapPinIcon, PhoneIcon, ShieldIcon, StoreIcon, TruckIcon } from '@/components/icons'
@@ -9,6 +9,7 @@ import { useToast } from '@/components/toast'
 import { Button, Card, EmptyState, ErrorState, Field, Notice, PageTitle, ProductImage, Segmented, Skeleton, buttonClass, cx, errorMessage, inputCls } from '@/components/ui'
 import { MAX_ADDRESS_LABEL, MAX_SAVED_ADDRESSES, SAVED_ADDRESS_ERROR_TEXT, preferredAddress, suggestedPhone, type SavedAddress } from '@/domain/addresses'
 import { clampQuantity } from '@/domain/orders'
+import { checkoutDeliveryFees } from '@/domain/deliveryFees'
 import { CHECKOUT_ERROR_TEXT, checkoutTotalKobo, isCar, isWonPrize, lineAmountKobo, validateCheckout } from '@/domain/cart'
 import { directionsUrl } from '@/domain/location'
 import { formatNaira } from '@/domain/money'
@@ -54,6 +55,7 @@ function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: L
   const wallet = useWallet()
   const points = usePickupPoints()
   const checkout = useCheckout()
+  const pricing = useDeliveryPricing()
   const toast = useToast()
   const { save: saveAddress } = useAddressActions()
   const phone = suggestedPhone(accountPhone, addresses)
@@ -97,7 +99,12 @@ function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: L
 
   const available = items.every((l) => lineAmountKobo(l) !== null)
   const quantityOf = (l: ListingView) => quantities[l.id] ?? 1
-  const total = checkoutTotalKobo(items, quantityOf)
+  const pointForFee = points.data?.find((p) => p.id === pickupPointId)
+  const destination = fulfilment === 'pickup' ? pointForFee?.location : delivery.location
+  const fees = pricing.data && destination ? checkoutDeliveryFees(items, destination, pricing.data) : []
+  const feeTotal = fees.reduce((n, f) => n + f.feeKobo, 0)
+  const feesKnown = !!pricing.data && !!destination
+  const total = checkoutTotalKobo(items, quantityOf) + feeTotal
   const itemCount = items.reduce((n, l) => n + quantityOf(l), 0)
   const balance = wallet.data?.balance
   const pay = balance ? splitPayment(total, balance) : null
@@ -116,7 +123,7 @@ function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: L
       setStep('where')
       return
     }
-    if (short || !available) return
+    if (short || !available || !feesKnown) return
     checkout.mutate(
       { listingIds: items.map((l) => l.id), quantities, expectedTotalKobo: total, ...details },
       {
@@ -276,7 +283,7 @@ function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: L
                 </Notice>
               ) : null}
 
-              <Button type="submit" size="lg" loading={checkout.isPending} disabled={!balance || short || !available}>
+              <Button type="submit" size="lg" loading={checkout.isPending} disabled={!balance || short || !available || !feesKnown}>
                 {total > 0 ? `Pay ${formatNaira(total)}` : 'Confirm'}
               </Button>
               <p className="flex items-start gap-2 text-xs text-subtle">
@@ -302,10 +309,22 @@ function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: L
               ))}
             </ul>
             <dl className="flex flex-col gap-1.5 border-t border-line pt-3 text-sm">
-              <div className="flex justify-between">
-                <dt className="text-muted">{fulfilment === 'delivery' ? 'Delivery in Lagos' : 'Collection'}</dt>
-                <dd className="font-bold">{fulfilment === 'delivery' ? 'Included' : 'Free'}</dd>
-              </div>
+              {feesKnown ? (
+                fees.map((f) => (
+                  <div key={f.merchantId} className="flex justify-between gap-3">
+                    <dt className="min-w-0 text-muted">
+                      {fulfilment === 'delivery' ? 'Delivery' : 'To the pickup location'}
+                      {fees.length > 1 ? ` from ${f.merchantName}` : ''}
+                    </dt>
+                    <dd className="shrink-0 font-bold tabular-nums">{formatNaira(f.feeKobo)}</dd>
+                  </div>
+                ))
+              ) : (
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted">{fulfilment === 'delivery' ? 'Delivery' : 'To the pickup location'}</dt>
+                  <dd className="text-right text-muted">{pricing.isError ? 'Couldn’t load' : 'Choose where first'}</dd>
+                </div>
+              )}
               {pay && pay.fromCredit > 0 ? (
                 <div className="flex justify-between text-ticket-ink">
                   <dt>From store credit</dt>

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
-import type { CancelReason, Kobo, RejectionReason } from '@/domain/types'
+import type { CancelReason, Kobo, PackageSize, RejectionReason } from '@/domain/types'
 import { api } from './index'
 import type { MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput } from '@/domain/sellers'
@@ -22,6 +22,7 @@ export const keys = {
   merchantListings: ['merchant-listings'] as const,
   priceReviews: ['price-reviews'] as const,
   cancelRates: ['cancel-rates'] as const,
+  deliveryPricing: ['delivery-pricing'] as const,
   pending: ['pending'] as const,
   myOrders: ['my-orders'] as const,
   merchantOrders: ['merchant-orders'] as const,
@@ -92,6 +93,7 @@ export const useMyOrders = () => useQuery({ queryKey: keys.myOrders, queryFn: ()
 export const useMerchantOrders = () => useQuery({ queryKey: keys.merchantOrders, queryFn: () => api.listMerchantOrders(), enabled: useHasShop() })
 export const useSellerApplications = () =>
   useQuery({ queryKey: keys.sellerApplications, queryFn: () => api.listSellerApplications(), enabled: useIs('admin') })
+export const useDeliveryPricing = () => useQuery({ queryKey: keys.deliveryPricing, queryFn: () => api.getDeliveryPricing(), staleTime: 5 * 60_000 })
 export const useCancelRates = () => useQuery({ queryKey: keys.cancelRates, queryFn: () => api.listCancelRates(), enabled: useIs('admin') })
 export const usePriceReviews = () => useQuery({ queryKey: keys.priceReviews, queryFn: () => api.listPriceReviews(), enabled: useIs('admin') })
 export const usePendingListings = () => useQuery({ queryKey: keys.pending, queryFn: () => api.listPendingListings(), enabled: useIs('admin') })
@@ -364,6 +366,27 @@ export function useDeliveryActions() {
     release: useMutation({ mutationFn: (orderId: string) => api.releaseDelivery(orderId), onSettled: invalidate }),
     confirm: useMutation({ mutationFn: ({ id, pin }: { id: string; pin: string }) => api.confirmDelivery(id, pin), onSettled: invalidate }),
   }
+}
+
+export function useSetDeliveryPrice() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ areaA, areaB, priceKobo }: { areaA: string; areaB: string; priceKobo: Kobo }) => api.setDeliveryPrice(areaA, areaB, priceKobo),
+    onSettled: () => qc.invalidateQueries({ queryKey: keys.deliveryPricing }),
+  })
+}
+
+export function useSetDeliverySizeExtra() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ size, extraKobo }: { size: PackageSize; extraKobo: Kobo }) => api.setDeliverySizeExtra(size, extraKobo),
+    onSettled: () => qc.invalidateQueries({ queryKey: keys.deliveryPricing }),
+  })
+}
+
+export function useSetShopDeliveryArea() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: (area: string) => api.setShopDeliveryArea(area), onSettled: invalidate })
 }
 
 export function useCancelOrder() {

@@ -66,12 +66,13 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={s.tone}>{s.label}</Badge>
             <span className="text-sm font-extrabold tabular-nums">{o.isPrize ? 'Won in a draw' : formatNaira(o.priceKobo)}</span>
+            {audience === 'buyer' && o.deliveryFeeKobo > 0 && !cancelled ? <span className="text-xs text-subtle">+ {formatNaira(o.deliveryFeeKobo)} delivery</span> : null}
           </div>
         </div>
       </div>
 
       {cancelled && o.cancelReason ? (
-        <Notice tone="neutral" icon={XIcon} title={audience === 'buyer' ? `Refunded ${formatNaira(o.priceKobo)} to your wallet` : `Buyer refunded ${formatNaira(o.priceKobo)}`}>
+        <Notice tone="neutral" icon={XIcon} title={audience === 'buyer' ? `Refunded ${formatNaira(o.priceKobo + o.deliveryFeeKobo)} to your wallet` : `Buyer refunded ${formatNaira(o.priceKobo)}`}>
           {audience === 'buyer' ? CANCEL_REASON_FOR_BUYER[o.cancelReason] : CANCEL_REASON_TEXT[o.cancelReason]}
           {o.cancelNote ? ` “${o.cancelNote}”` : ''}
         </Notice>
@@ -162,7 +163,7 @@ function CancelSheet({ order: o, onClose }: { order: OrderView; onClose: () => v
     <Sheet open onClose={() => !cancel.isPending && onClose()} title="Cancel order">
       <h2 className="pr-10 font-display text-2xl font-extrabold">Cancel this order?</h2>
       <p className="text-sm text-muted">
-        {o.listingTitle}{o.quantity > 1 ? ` × ${o.quantity}` : ''}. The buyer gets {formatNaira(o.priceKobo)} back straight away and sees your reason. This can’t be undone, and cancelling often affects your standing.
+        {o.listingTitle}{o.quantity > 1 ? ` × ${o.quantity}` : ''}. The buyer gets {formatNaira(o.priceKobo)} back straight away, plus any delivery fee they no longer need and sees your reason. This can’t be undone, and cancelling often affects your standing.
       </p>
       <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
         <fieldset className="flex flex-col gap-1">

@@ -9,6 +9,7 @@ import type { HandoverDetails } from '@/domain/listing'
 import type { PinResult } from '@/domain/delivery'
 import type { SavedAddress, SavedAddressInput } from '@/domain/addresses'
 import type { CheckoutDetails } from '@/domain/cart'
+import type { DeliveryPricing } from '@/domain/deliveryFees'
 import type { PayoutAccount, PayoutLine } from '@/domain/payouts'
 import type { NotificationPreference, PushPreferences, PushSubscriptionKeys } from '@/domain/push'
 import type { OrderError } from '@/domain/orders'
@@ -19,6 +20,7 @@ import type { SellerApplicationInput, SellerApplicationStatus } from '@/domain/s
 import type {
   CancelReason,
   Category,
+  PackageSize,
   RejectionReason,
   DrawResult,
   FeeMode,
@@ -133,6 +135,8 @@ export interface NewProductInput {
   images?: string[]
   /** How many they have. Left out by older callers: one. */
   stock?: number
+  /** Left out by older callers: the usual size for its category. */
+  packageSize?: PackageSize
   /** The platform fee follows from this (platformFeeBps) and comes out of the seller's payout. */
   priceKobo: Kobo
 }
@@ -601,6 +605,12 @@ export interface DrawMartApi {
   dispatchOrder(orderId: string): Promise<void>
   /** Before it's ready for a rider. The buyer is refunded straight away, the way they paid. */
   cancelOrder(orderId: string, reason: CancelReason, note: string): Promise<void>
+  /** What delivery costs, for checkout and the admin page. Public, since it's only prices. */
+  getDeliveryPricing(): Promise<DeliveryPricing>
+  setDeliveryPrice(areaA: string, areaB: string, priceKobo: Kobo): Promise<void>
+  setDeliverySizeExtra(size: PackageSize, extraKobo: Kobo): Promise<void>
+  /** Where this seller's items leave from. */
+  setShopDeliveryArea(area: string): Promise<void>
   /** Each seller's orders and cancellations in the last 30 days. Admins only. */
   listCancelRates(): Promise<CancelRateView[]>
 

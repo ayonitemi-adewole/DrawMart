@@ -1,3 +1,4 @@
+import { areaPairPrice, deliveryFeeKobo, placeholderPricing } from '@/domain/deliveryFees'
 import { isProductCode } from '@/domain/productCode'
 import { describe, expect, it } from 'vitest'
 import { verifyDraw } from '@/domain/draw'
@@ -287,7 +288,8 @@ describe('mock api', () => {
     const order = await buyNow(api, p.id, delivery)
     expect(order).toMatchObject({ status: 'paid', priceKobo: k(20_000), feeKobo: k(1_500), // 7.5% under ₦50,000
       listingTitle: 'Office chair', merchantName: 'Ikeja Partner Store' })
-    expect((await api.getWallet()).balance.cashKobo).toBe(before - k(20_000))
+    expect(order.deliveryFeeKobo).toBeGreaterThan(0)
+    expect((await api.getWallet()).balance.cashKobo).toBe(before - k(20_000) - order.deliveryFeeKobo)
     expect((await api.getListing(p.id)).status).toBe('sold')
     await expect(buyNow(api, p.id, delivery)).rejects.toMatchObject({ code: 'not_for_sale' })
 
@@ -345,7 +347,7 @@ describe('mock api', () => {
 
     const [order] = await api.checkout({ listingIds: [p.id], quantities: { [p.id]: 3 }, fulfilment: 'delivery', delivery, pickupPointId: null })
     expect(order).toMatchObject({ quantity: 3, priceKobo: k(6_000) })
-    expect((await api.getWallet()).balance.cashKobo).toBe(before - k(6_000))
+    expect((await api.getWallet()).balance.cashKobo).toBe(before - k(6_000) - order.deliveryFeeKobo)
     expect(await api.getListing(p.id)).toMatchObject({ stock: 2, status: 'for_sale' })
 
     await api.addToCart(p.id, 2)
@@ -407,7 +409,9 @@ describe('mock api', () => {
     await shopper()
     const details = { fulfilment: 'delivery' as const, delivery, pickupPointId: null }
     await expect(api.checkout({ listingIds: [p.id], expectedTotalKobo: k(10_000), ...details })).rejects.toThrow('price has just changed')
-    await api.checkout({ listingIds: [p.id], expectedTotalKobo: k(12_500), ...details })
+    const fee = deliveryFeeKobo(placeholderPricing(), 'ikeja', delivery.location, 'large')
+    await expect(api.checkout({ listingIds: [p.id], expectedTotalKobo: k(12_500), ...details })).rejects.toThrow('price has just changed') // without delivery
+    await api.checkout({ listingIds: [p.id], expectedTotalKobo: k(12_500) + fee, ...details })
 
     // Stock: removing the last sells it out, and restocking brings it back. A pause stays a pause.
     await seller()
@@ -466,6 +470,66 @@ describe('mock api', () => {
     await api.auth.signInWithPassword('admin@drawmart.test', 'drawmart-demo')
     const mineRate = (await api.listCancelRates()).find((r) => r.merchantId === order.merchantId)
     expect(mineRate?.cancelled).toBe(2)
+  })
+
+  it('charges one delivery fee per seller, and refunds it only when nothing’s left to deliver', async () => {
+    const api = make()
+    const pricing = placeholderPricing()
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const product = (title: string, packageSize: 'small' | 'large') => api.createProduct({ title, description: '', category: 'Home', priceKobo: k(5_000), packageSize })
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const [small, large] = [await product('Small thing', 'small'), await product('Large thing', 'large')]
+    for (const p of [small, large]) await api.approveListing(p.id)
+    await api.auth.signInWithPassword('lekki@drawmart.test', 'drawmart-demo')
+    const other = await product('Other seller', 'small')
+    await api.approveListing(other.id)
+
+    await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    await api.topUp(k(100_000))
+    const start = (await api.getWallet()).balance.cashKobo
+    const details = { fulfilment: 'delivery' as const, delivery, pickupPointId: null }
+    const orders = await api.checkout({ listingIds: [small.id, large.id, other.id], ...details })
+    const fromIkeja = deliveryFeeKobo(pricing, 'ikeja', delivery.location, 'large')
+    const fromLekki = deliveryFeeKobo(pricing, 'lekki', delivery.location, 'small')
+    expect(orders.map((o) => o.deliveryFeeKobo).sort((a, b) => a - b)).toEqual([0, fromLekki, fromIkeja].sort((a, b) => a - b))
+    const paid = start - (await api.getWallet()).balance.cashKobo
+    expect(paid).toBe(k(15_000) + fromIkeja + fromLekki)
+
+    // Cancelling the order holding the fee moves it to what's still coming.
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const fromStore = orders.filter((o) => o.merchantId === small.merchantId)
+    const holder = fromStore.find((o) => o.deliveryFeeKobo > 0)!
+    const rest = fromStore.find((o) => o.id !== holder.id)!
+    await api.cancelOrder(holder.id, 'damaged', '')
+    await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    expect((await api.getWallet()).balance.cashKobo).toBe(start - paid + k(5_000))
+    const mine = await api.listMyOrders()
+    expect(mine.find((o) => o.id === holder.id)?.deliveryFeeKobo).toBe(0)
+    expect(mine.find((o) => o.id === rest.id)?.deliveryFeeKobo).toBe(fromIkeja)
+
+    // The last one brings the fee back too.
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    await api.cancelOrder(rest.id, 'damaged', '')
+    await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    expect((await api.getWallet()).balance.cashKobo).toBe(start - paid + k(10_000) + fromIkeja)
+  })
+
+  it('prices a pickup location, lets admins edit prices, and lets a seller set their area', async () => {
+    const api = make()
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const p = await api.createProduct({ title: 'To collect', description: '', category: 'Phones', priceKobo: k(5_000) })
+    await api.approveListing(p.id)
+    await api.setShopDeliveryArea('yaba')
+    await expect(api.setShopDeliveryArea('mars')).rejects.toThrow('Pick an area')
+    await expect(api.setDeliveryPrice('yaba', 'lekki', k(999))).rejects.toThrow('₦1,000')
+    await api.setDeliveryPrice('yaba', 'lekki', k(4_200))
+    await expect(api.setDeliverySizeExtra('large', k(4_001))).rejects.toThrow('₦4,000')
+    expect(areaPairPrice(await api.getDeliveryPricing(), 'lekki', 'yaba')).toBe(k(4_200))
+
+    await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    await api.topUp(k(50_000))
+    const [order] = await api.checkout({ listingIds: [p.id], fulfilment: 'pickup', delivery: { address: '', location: null, contactPhone: '0803 123 4567' }, pickupPointId: 'lekki' })
+    expect(order.deliveryFeeKobo).toBe(k(4_200)) // from Yaba to the Lekki pickup location, small
   })
 
   it('only marks an order delivered through a delivery account and the buyer’s PIN', async () => {
@@ -1312,7 +1376,8 @@ describe('mock api', () => {
     const before = (await api.getWallet()).balance.cashKobo
     const orders = await api.checkout({ listingIds: lines.map((l) => l.listing.id), fulfilment: 'delivery', delivery, pickupPointId: null })
     expect(orders.map((o) => [o.isPrize, o.handledBy])).toEqual([[true, 'drawmart'], [false, 'store']])
-    expect((await api.getWallet()).balance.cashKobo).toBe(before - cheap[0].priceKobo)
+    expect(orders[0].deliveryFeeKobo).toBe(0) // the won item
+    expect((await api.getWallet()).balance.cashKobo).toBe(before - cheap[0].priceKobo - orders[1].deliveryFeeKobo)
     expect(await api.listCart()).toEqual([])
     expect((await api.getListing(draw.id)).status).toBe('drawn')
     await expect(api.addToCart(draw.id)).rejects.toThrow(/already arranged/)

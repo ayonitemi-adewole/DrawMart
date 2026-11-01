@@ -113,6 +113,7 @@ function CartSummary({ lines }: { lines: { amountKobo: number | null; quantity: 
           <span className="text-on-brand">Continue to checkout</span>
         </Link>
       ) : null}
+      <p className="text-xs text-subtle">Delivery is added at checkout, based on where it’s going.</p>
       <p className="text-xs text-subtle">Items in your cart aren’t held for you. Someone else can still buy them until you pay.</p>
     </Card>
   )

@@ -17,6 +17,7 @@ import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto'
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { verifyDraw, winningTicketNumber, createSeed } from '@/domain/draw'
 import { computeListingEconomics, platformFeeBps } from '@/domain/fees'
+import { DELIVERY_AREAS, areaFromText, defaultSizeFor, deliveryFeeKobo, placeholderPriceKobo, placeholderPricing } from '@/domain/deliveryFees'
 import { addDays, cautionFeeFor, localDate } from '@/domain/listing'
 import { DEMO_ACCOUNTS } from '@/api/demoAccounts'
 
@@ -732,7 +733,9 @@ describe('regular products and orders', () => {
     expect(order.quantity).toBe(3)
     expect(Number(order.price_kobo)).toBe(600_000)
     expect(Number(order.fee_kobo)).toBe(Math.round(600_000 * platformFeeBps(200_000) / 10_000))
-    expect(Number((await balance(shopper)).cash)).toBe(Number(before) - 600_000)
+    const [{ fee }] = await admin<{ fee: string }>(`select delivery_fee_kobo fee from public.orders where id = $1`, [ids[0]])
+    expect(Number(fee)).toBeGreaterThan(0)
+    expect(Number((await balance(shopper)).cash)).toBe(Number(before) - 600_000 - Number(fee))
     expect(await admin(`select stock, status from public.listings where id = $1`, [id])).toEqual([{ stock: 2, status: 'for_sale' }])
     const [line] = await admin<{ amount_kobo: string }>(`select amount_kobo from public.payouts where order_id = $1`, [ids[0]])
     expect(Number(line.amount_kobo)).toBe(600_000 - Number(order.fee_kobo))
@@ -787,9 +790,11 @@ describe('regular products and orders', () => {
     expect(kinds).toEqual(expect.arrayContaining(['store_price_approved', 'store_price_rejected']))
 
     // A price they haven't seen is never charged.
-    const e = await expectFail(buy(1_000_000), 'invalid_input')
+    const [{ fee }] = await admin<{ fee: string }>(`select private.delivery_fee('vi', 6.45, 3.43, 'large') fee`)
+    const e = await expectFail(buy(1_000_000 + Number(fee)), 'invalid_input')
     expect(e.detail).toContain('price has just changed')
-    await buy(1_250_000)
+    await expectFail(buy(1_250_000), 'invalid_input') // leaving out delivery
+    await buy(1_250_000 + Number(fee))
 
     // Stock follows sales, and a sale at the same moment isn't overwritten: it adds or removes.
     await expectFail(asUser(seller, `select public.change_stock($1, -2)`, [id]), 'invalid_input')
@@ -863,7 +868,8 @@ describe('regular products and orders', () => {
 
   it('sells once, paying with credit first, and records the order', async () => {
     await admin(`insert into public.ledger_entries (user_id, kind, credit_kobo, memo) values ($1, 'store_credit', 300000, 'credit')`, [buyer])
-    await asUser(buyer, `select public.top_up(1500000)`)
+    const [{ fee }] = await admin<{ fee: string }>(`select private.delivery_fee('ikeja', 6.45, 3.43, 'large') fee`)
+    await asUser(buyer, `select public.top_up($1)`, [1_500_000 + Number(fee)])
     const [{ id }] = await asUser<{ id: string }>(buyer, `select public.buy_now($1, $2, $3, $4, $5) id`, [productId, ...delivery])
     expect(await balance(buyer)).toEqual({ cash: String(2_500_000 + 1_500_000 - 3_700_000), credit: '0' })
     const [order] = await asUser<{ status: string; price_kobo: number; fee_kobo: number; delivery_address: string }>(buyer, `select * from public.orders where id = $1`, [id])
@@ -1511,6 +1517,110 @@ describe('saved pickups', () => {
   })
 })
 
+describe('delivery fees', () => {
+  const VI = '11111111-1111-4111-8111-000000000005'
+  const LAT = 6.45
+  const LNG = 3.43
+  let ikeja: string, vi: string, staff: string
+  const product = async (seller: string, title: string, packageSize?: string, category = 'Home') => {
+    const [{ id }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [{ title, description: '', category, priceKobo: 500_000, packageSize, stock: 3 }])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    return id
+  }
+  const pay = async (who: string, ids: string[], over: Record<string, unknown> = {}) =>
+    (await asUser<{ ids: string[] }>(who, `select public.checkout($1) ids`, [{ listingIds: ids, fulfilment: 'delivery', address: '15 Awolowo Road, Ikoyi', phone: '0803 123 4567', lat: LAT, lng: LNG, ...over }]))[0].ids
+  const feeOf = async (id: string) => Number((await admin<{ fee: string }>(`select delivery_fee_kobo fee from public.orders where id = $1`, [id]))[0].fee)
+
+  beforeAll(async () => {
+    ikeja = await newUser('fee-ikeja@example.com', { merchantId: IKEJA })
+    vi = await newUser('fee-vi@example.com', { merchantId: VI })
+    staff = await newUser('fee-staff@example.com', { role: 'admin' })
+    await asUser(ikeja, `select public.set_shop_delivery_area('ikeja')`)
+    await asUser(vi, `select public.set_shop_delivery_area('vi')`)
+  })
+
+  it('has the same areas, prices and rules as src/domain', async () => {
+    const areas = await admin<{ id: string; name: string; lat: number; lng: number }>(`select id, name, lat, lng from public.delivery_areas order by sort`)
+    expect(areas).toEqual(DELIVERY_AREAS)
+    const prices = await admin<{ area_a: string; area_b: string; price_kobo: number }>(`select area_a, area_b, price_kobo from public.delivery_prices`)
+    expect(prices).toHaveLength((areas.length * (areas.length + 1)) / 2)
+    for (const p of prices) expect(Number(p.price_kobo)).toBe(placeholderPriceKobo(areas.find((a) => a.id === p.area_a)!, areas.find((a) => a.id === p.area_b)!))
+    const pricing = placeholderPricing()
+    for (const text of ['Ikeja', 'Surulere', 'Victoria Island', 'Lagos Island', 'Lekki Phase 1', 'Somewhere new', '']) {
+      expect((await admin<{ a: string }>(`select private.area_from_text($1) a`, [text]))[0].a).toBe(areaFromText(text))
+    }
+    for (const c of ['Phones', 'Fashion', 'Electronics', 'Home', 'Cars'] as const) {
+      expect((await admin<{ s: string }>(`select private.package_size_of(null, $1) s`, [c]))[0].s).toBe(defaultSizeFor(c))
+    }
+    for (const [lat, lng] of [[6.45, 3.43], [6.6, 3.34], [6.45, 3.6], [6.42, 2.8], [6.58, 4.2], [6.5, 3.38], [6.62, 3.4]]) {
+      for (const size of ['small', 'medium', 'large'] as const) {
+        const [{ fee }] = await admin<{ fee: string }>(`select private.delivery_fee('ikeja', $1, $2, $3) fee`, [lat, lng, size])
+        expect(Number(fee)).toBe(deliveryFeeKobo(pricing, 'ikeja', { lat, lng }, size))
+      }
+    }
+  })
+
+  it('charges one fee per seller for their largest package, and only cancelling the last brings it back', async () => {
+    const buyer = await newUser('fee-buyer@example.com')
+    await asUser(buyer, `select public.top_up(5000000)`)
+    const [small, large, other] = [await product(ikeja, 'Fee small', 'small'), await product(ikeja, 'Fee large', 'large'), await product(vi, 'Fee other', 'small')]
+    const start = await balance(buyer)
+    const fromIkeja = deliveryFeeKobo(placeholderPricing(), 'ikeja', { lat: LAT, lng: LNG }, 'large')
+    const fromVi = deliveryFeeKobo(placeholderPricing(), 'vi', { lat: LAT, lng: LNG }, 'small')
+    const ids = await pay(buyer, [small, large, other])
+    const fees = await Promise.all(ids.map(feeOf))
+    expect([...fees].sort((a, b) => a - b)).toEqual([0, fromVi, fromIkeja].sort((a, b) => a - b))
+    expect(Number((await balance(buyer)).cash)).toBe(Number(start.cash) - 1_500_000 - fromIkeja - fromVi)
+    expect(await admin(`select kind from public.ledger_entries where user_id = $1 and kind = 'delivery_fee'`, [buyer])).toHaveLength(2)
+
+    // It isn't part of the seller's money.
+    const holder = ids[fees.indexOf(fromIkeja)]
+    const [row] = await admin<{ amount_kobo: string; fee_kobo: string }>(`select p.amount_kobo, o.fee_kobo from public.payouts p join public.orders o on o.id = p.order_id where p.order_id = $1`, [holder])
+    expect(Number(row.amount_kobo)).toBe(500_000 - Number(row.fee_kobo))
+
+    const rest = ids[fees.indexOf(0)]
+    await asUser(ikeja, `select public.cancel_order($1, 'damaged')`, [holder])
+    expect(Number((await balance(buyer)).cash)).toBe(Number(start.cash) - 1_000_000 - fromIkeja - fromVi)
+    expect(await feeOf(holder)).toBe(0)
+    expect(await feeOf(rest)).toBe(fromIkeja)
+    await asUser(ikeja, `select public.cancel_order($1, 'damaged')`, [rest])
+    expect(Number((await balance(buyer)).cash)).toBe(Number(start.cash) - 500_000 - fromVi)
+  })
+
+  it('charges the trip to a pickup location, nothing for a car, and spends credit first', async () => {
+    const buyer = await newUser('fee-buyer2@example.com')
+    await asUser(buyer, `select public.top_up(5000000)`)
+    await admin(`insert into public.ledger_entries (user_id, kind, credit_kobo, memo) values ($1, 'store_credit', 510000, 'credit')`, [buyer])
+    const item = await product(ikeja, 'Fee pickup', 'small')
+    const [pickup] = await pay(buyer, [item], { fulfilment: 'pickup', address: null, lat: null, lng: null, pickupPointId: 'lekki' })
+    const [point] = await admin<{ lat: number; lng: number }>(`select lat, lng from public.pickup_points where id = 'lekki'`)
+    expect(await feeOf(pickup)).toBe(deliveryFeeKobo(placeholderPricing(), 'ikeja', point, 'small'))
+    expect(await admin(`select cash_kobo, credit_kobo, fee_cash_kobo, fee_credit_kobo from private.order_payments where order_id = $1`, [pickup])).toEqual([{ cash_kobo: 0, credit_kobo: 500_000, fee_cash_kobo: await feeOf(pickup) - 10_000, fee_credit_kobo: 10_000 }])
+
+    const car = await product(ikeja, 'Fee car', 'large', 'Cars')
+    const [carOrder] = await pay(buyer, [car])
+    expect(await feeOf(carOrder)).toBe(0)
+  })
+
+  it('keeps prices within the range, for admins only, and lets anyone read them', async () => {
+    await expectFail(asUser(ikeja, `select public.set_delivery_price('ikeja', 'lekki', 200000)`), 'forbidden')
+    await expectFail(asUser(staff, `select public.set_delivery_price('ikeja', 'lekki', 99999)`), 'invalid_input')
+    await expectFail(asUser(staff, `select public.set_delivery_price('ikeja', 'mars', 200000)`), 'not_found')
+    const read = `select price_kobo from public.delivery_prices where area_a = 'ikeja' and area_b = 'lekki'`
+    const [{ price_kobo: was }] = await admin<{ price_kobo: number }>(read)
+    await asUser(staff, `select public.set_delivery_price('lekki', 'ikeja', 420000)`) // either way round
+    expect(await asUser(null, read)).toEqual([{ price_kobo: 420000 }])
+    await asUser(staff, `select public.set_delivery_price('ikeja', 'lekki', $1)`, [was])
+
+    await expectFail(asUser(staff, `select public.set_delivery_size_extra('large', 400001)`), 'invalid_input')
+    await expectFail(asUser(staff, `select public.set_delivery_size_extra('huge', 100)`), 'invalid_input')
+    await expectFail(asUser(ikeja, `select public.set_shop_delivery_area('mars')`), 'invalid_input')
+    const anyone = await newUser('fee-nobody@example.com')
+    await expectFail(asUser(anyone, `select public.set_shop_delivery_area('ikeja')`), 'forbidden')
+    await expectFail(asUser(ikeja, `select public.create_product($1)`, [{ title: 'Bad', description: '', category: 'Home', priceKobo: 500_000, packageSize: 'huge' }]), 'invalid_input')
+  })
+})
+
 describe('cart and checkout', () => {
   let buyer: string
   let store: string
@@ -1579,7 +1689,9 @@ describe('cart and checkout', () => {
 
     const ids = await checkout(buyer, details([a, b]))
     expect(ids).toHaveLength(2)
-    expect(await balance(buyer)).toEqual({ cash: String(Number(before.cash) - 1_300_000), credit: '0' })
+    const [{ fee }] = await admin<{ fee: string }>(`select sum(delivery_fee_kobo) fee from public.orders where id = any($1::uuid[])`, [ids])
+    expect(Number(fee)).toBeGreaterThan(0)
+    expect(await balance(buyer)).toEqual({ cash: String(Number(before.cash) - 1_300_000 - Number(fee)), credit: '0' })
     expect(await asUser(buyer, `select * from public.cart_items`)).toEqual([])
     const rows = await admin<{ checkout_id: string; fulfilment: string; is_prize: boolean; handled_by: string }>(`select * from public.orders where id = any($1::uuid[])`, [ids])
     expect(new Set(rows.map((r) => r.checkout_id)).size).toBe(1)
@@ -1606,7 +1718,9 @@ describe('cart and checkout', () => {
     await add(winner, other)
     const before = await balance(winner)
     const ids = await checkout(winner, details([prize, other]))
-    expect(Number((await balance(winner)).cash)).toBe(Number(before.cash) - 300_000)
+    const [{ fee }] = await admin<{ fee: string }>(`select sum(delivery_fee_kobo) fee from public.orders where id = any($1::uuid[])`, [ids])
+    expect(await admin(`select delivery_fee_kobo from public.orders where listing_id = $1`, [prize])).toEqual([{ delivery_fee_kobo: 0 }])
+    expect(Number((await balance(winner)).cash)).toBe(Number(before.cash) - 300_000 - Number(fee))
     const [row] = await admin<{ id: string; price_kobo: string; is_prize: boolean; handled_by: string }>(`select * from public.orders where listing_id = $1`, [prize])
     expect(row).toMatchObject({ is_prize: true, handled_by: 'drawmart' })
     expect(Number(row.price_kobo)).toBe(0)

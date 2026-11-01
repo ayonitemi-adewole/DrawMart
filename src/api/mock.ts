@@ -32,6 +32,7 @@ import {
 } from '@/domain/listing'
 import { nairaToKobo } from '@/domain/money'
 import { canChangeInReview, withdrawalFees } from '@/domain/listingActions'
+import { checkoutDeliveryFees, deliveryPriceError, placeholderPricing, sizeExtraError, type DeliveryPricing } from '@/domain/deliveryFees'
 import { canCancelOrder, cancelError, stockAfterCancel } from '@/domain/orderCancel'
 import { canControlProduct, repriceNeedsReview, statusAfterStock, stockChangeError } from '@/domain/productControls'
 import { closingReminderSent, pickupReminderDue } from '@/domain/storeNotifications'
@@ -87,7 +88,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v36' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v37' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -99,7 +100,7 @@ const TOLU_SHOP = 'm-tolu'
 const DAY = 24 * 60 * 60 * 1000
 
 /** The PIN and who's carrying it stay out of the order everyone else sees. */
-type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState; paidCashKobo: Kobo; paidCreditKobo: Kobo }
+type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState; paidCashKobo: Kobo; paidCreditKobo: Kobo; paidFeeCashKobo: Kobo; paidFeeCreditKobo: Kobo; checkoutId: string }
 
 interface Db {
   users: User[]
@@ -119,6 +120,7 @@ interface Db {
   addresses: Record<string, SavedAddress[]>
   /** Listing ids in each buyer's cart, oldest first. */
   carts: Record<string, string[]>
+  deliveryPricing: DeliveryPricing
   priceReviews: { listingId: string; newPriceKobo: Kobo; requestedAt: string }[]
   /** By buyer, then listing. Anything not in here is one. */
   cartQuantities: Record<string, Record<string, number>>
@@ -458,7 +460,7 @@ const SEED_PRODUCTS: { merchantId: string; title: string; description: string; c
 function productListing(input: NewProductInput & { merchantId: string; status: ListingStatus }, at: number): Listing {
   return {
     id: uid('L'), productCode: newProductCode(), kind: 'product', merchantId: input.merchantId, title: input.title.trim(), description: input.description.trim(), category: input.category,
-    images: input.images ?? [], priceKobo: input.priceKobo, ticketPriceKobo: 0, buyerTicketPriceKobo: 0, ticketCount: 0, ticketsSold: 0, stock: input.stock ?? 1,
+    images: input.images ?? [], priceKobo: input.priceKobo, ticketPriceKobo: 0, buyerTicketPriceKobo: 0, ticketCount: 0, ticketsSold: 0, stock: input.stock ?? 1, packageSize: input.packageSize ?? null,
     feeMode: 'seller', feeBps: platformFeeBps(input.priceKobo), unsoldPolicy: 'refund', fallbackPriceKobo: null, durationDays: 0, extended: false,
     status: input.status, handover: null, cautionFee: { amountKobo: 0, status: 'none' }, commitment: '', createdAt: iso(at), closesAt: iso(at), boostedUntil: null, soldOutAt: null, drawAt: null, pickupBatchId: null,
   }
@@ -555,6 +557,7 @@ async function freshDb(): Promise<Db> {
     pendingLimits: {},
     orders: [],
     carts: {},
+    deliveryPricing: placeholderPricing(),
     priceReviews: [],
     cartQuantities: {},
     saved: {},
@@ -884,7 +887,7 @@ function statsBetween(db: Db, l: Listing, from: string, to: string) {
 
 /** `forBuyer`: the buyer's own screens, the only place a PIN may go. */
 function orderView(db: Db, order: MockOrder, forBuyer = false): OrderView {
-  const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, ...o } = order
+  const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, paidFeeCashKobo: _feeCash, paidFeeCreditKobo: _feeCredit, checkoutId: _checkoutId, ...o } = order
   const l = db.listings.find((x) => x.id === o.listingId)!
   const merchant = db.merchants.find((m) => m.id === o.merchantId)!
   return { ...o, deliveryPin: forBuyer && o.status !== 'delivered' && o.status !== 'cancelled' ? pin : null, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, merchantName: merchant.name }
@@ -1133,7 +1136,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     if (l.kind === 'product') {
       const problems = validateProduct(input).map((e) => PRODUCT_ERROR_TEXT[e])
       if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
-      Object.assign(l, details, { stock: (input as NewProductInput).stock ?? l.stock, feeBps: platformFeeBps(input.priceKobo), closesAt: iso(now()) })
+      Object.assign(l, details, { stock: (input as NewProductInput).stock ?? l.stock, packageSize: (input as NewProductInput).packageSize ?? l.packageSize ?? null, feeBps: platformFeeBps(input.priceKobo), closesAt: iso(now()) })
       return
     }
     const raffle = input as NewListingInput
@@ -1434,32 +1437,45 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           if (isCar(v) && views.length > 1) throw new ApiError('invalid_input', 'Cars are arranged on their own, not with other items.')
           if (isWonPrize(v) && db.orders.some((o) => o.listingId === v.id)) throw new ApiError('invalid_input', `${v.title} has already been arranged.`)
         }
-        if (expectedTotalKobo !== undefined && expectedTotalKobo !== checkoutTotalKobo(views, (v) => quantities[v.id] ?? 1)) throw new ApiError('invalid_input', 'A price has just changed. Check the new total.')
+        const to = details.fulfilment === 'pickup' ? PICKUP_POINTS.find((p) => p.id === details.pickupPointId)?.location : details.delivery.location
+        const fees = to ? checkoutDeliveryFees(views, to, db.deliveryPricing) : []
+        const grandTotal = checkoutTotalKobo(views, (v) => quantities[v.id] ?? 1) + fees.reduce((n, f) => n + f.feeKobo, 0)
+        if (expectedTotalKobo !== undefined && expectedTotalKobo !== grandTotal) throw new ApiError('invalid_input', 'A price has just changed. Check the new total.')
         const mine = db.ledger.filter((e) => e.userId === buyer())
         let balance = balanceFromLedger(mine)
-        if (balance.cashKobo + balance.creditKobo < checkoutTotalKobo(views, (v) => quantities[v.id] ?? 1)) throw new ApiError('insufficient_funds', ORDER_ERROR_TEXT.insufficient_funds)
+        if (balance.cashKobo + balance.creditKobo < grandTotal) throw new ApiError('insufficient_funds', ORDER_ERROR_TEXT.insufficient_funds)
 
         const at = iso(now())
         const pickup = details.fulfilment === 'pickup'
         const pickupPoint = pickup ? (PICKUP_POINTS.find((p) => p.id === details.pickupPointId) ?? null) : null
         if (pickup && !pickupPoint) throw new ApiError('invalid_input', CHECKOUT_ERROR_TEXT.pickup_point_required)
+        const checkoutId = uid('C')
+        const unpaid = new Map(fees.map((f) => [f.merchantId, f.feeKobo]))
         const orders = listings.map((l, i) => {
           const v = views[i]
           const prize = isWonPrize(v)
           const quantity = quantities[v.id] ?? 1
           const price = lineAmountKobo(v, quantity)!
           let paid = { fromCash: 0, fromCredit: 0 }
+          let paidFee = { fromCash: 0, fromCredit: 0 }
+          const deliveryFeeKobo = prize ? 0 : (unpaid.get(l.merchantId) ?? 0)
+          if (!prize) unpaid.delete(l.merchantId)
           if (!prize) {
             const pay = splitPayment(price, balance)
             paid = pay
             balance = { cashKobo: balance.cashKobo - pay.fromCash, creditKobo: balance.creditKobo - pay.fromCredit }
             db.ledger.push({ id: uid('E'), userId: buyer(), kind: 'order_payment', cashKobo: -pay.fromCash, creditKobo: -pay.fromCredit, memo: `Bought · ${l.title}${quantity > 1 ? ` × ${quantity}` : ''}`, listingId: l.id, createdAt: at })
+            if (deliveryFeeKobo > 0) {
+              paidFee = splitPayment(deliveryFeeKobo, balance)
+              balance = { cashKobo: balance.cashKobo - paidFee.fromCash, creditKobo: balance.creditKobo - paidFee.fromCredit }
+              db.ledger.push({ id: uid('E'), userId: buyer(), kind: 'delivery_fee', cashKobo: -paidFee.fromCash, creditKobo: -paidFee.fromCredit, memo: `Delivery · ${l.title}`, listingId: l.id, createdAt: at })
+            }
             const taken = takeStock(l.stock, quantity)
             l.stock = taken.stock
             if (taken.soldOut) l.status = 'sold'
           }
           const order: MockOrder = {
-            pin: newDeliveryPin(), riderId: null, pinState: { attempts: 0, lockedUntil: null }, paidCashKobo: paid.fromCash, paidCreditKobo: paid.fromCredit,
+            pin: newDeliveryPin(), riderId: null, pinState: { attempts: 0, lockedUntil: null }, paidCashKobo: paid.fromCash, paidCreditKobo: paid.fromCredit, paidFeeCashKobo: paidFee.fromCash, paidFeeCreditKobo: paidFee.fromCredit, checkoutId, deliveryFeeKobo,
             cancelledAt: null, cancelReason: null, cancelNote: null,
             id: uid('O'), listingId: l.id, buyerId: buyer(), merchantId: l.merchantId, quantity, priceKobo: price, feeKobo: prize ? 0 : saleEconomics(price, l.feeBps).feeKobo,
             delivery: pickup ? { address: '', location: null, contactPhone: details.delivery.contactPhone.trim() } : { address: details.delivery.address.trim(), location: details.delivery.location, contactPhone: details.delivery.contactPhone.trim() },
@@ -1795,6 +1811,31 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     listMerchantOrders: () =>
       tx((db) => db.orders.filter((o) => o.merchantId === shopId(db) && o.handledBy === 'store').sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((o) => orderView(db, o))),
 
+    getDeliveryPricing: () => tx((db) => db.deliveryPricing),
+
+    setDeliveryPrice: (areaA, areaB, priceKobo) =>
+      tx((db) => {
+        const problem = deliveryPriceError(priceKobo)
+        if (problem) throw new ApiError('invalid_input', problem)
+        const [a, b] = areaA <= areaB ? [areaA, areaB] : [areaB, areaA]
+        const row = db.deliveryPricing.prices.find((p) => p.areaA === a && p.areaB === b)
+        if (!row) throw new ApiError('not_found', 'That area doesn’t exist.')
+        row.priceKobo = priceKobo
+      }),
+
+    setDeliverySizeExtra: (size, extraKobo) =>
+      tx((db) => {
+        const problem = sizeExtraError(extraKobo)
+        if (problem) throw new ApiError('invalid_input', problem)
+        db.deliveryPricing.sizeExtras[size] = extraKobo
+      }),
+
+    setShopDeliveryArea: (area) =>
+      tx((db) => {
+        if (!db.deliveryPricing.areas.some((a) => a.id === area)) throw new ApiError('invalid_input', 'Pick an area.')
+        db.merchants.find((m) => m.id === shopId(db))!.deliveryArea = area
+      }),
+
     cancelOrder: (orderId, reason, note) =>
       tx((db) => {
         const o = db.orders.find((x) => x.id === orderId && x.handledBy === 'store' && x.merchantId === shopId(db))
@@ -1808,6 +1849,18 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         Object.assign(o, { status: 'cancelled', cancelledAt: at, cancelReason: reason, cancelNote: note.trim() || null })
         db.payouts = db.payouts.filter((p) => !(p.orderId === o.id && p.status === 'waiting'))
         db.ledger.push({ id: uid('E'), userId: o.buyerId, kind: 'order_refund', cashKobo: o.paidCashKobo, creditKobo: o.paidCreditKobo, memo: `Refund · ${l.title}`, listingId: l.id, createdAt: at })
+        // One fee covers everything from this seller in this checkout: it moves to what's still coming, or comes back with the last.
+        if (o.deliveryFeeKobo > 0) {
+          const other = db.orders.find((x) => x.checkoutId === o.checkoutId && x.merchantId === o.merchantId && x.id !== o.id && x.status !== 'cancelled' && !x.isPrize)
+          if (other) {
+            other.deliveryFeeKobo += o.deliveryFeeKobo
+            other.paidFeeCashKobo += o.paidFeeCashKobo
+            other.paidFeeCreditKobo += o.paidFeeCreditKobo
+            o.deliveryFeeKobo = 0
+          } else {
+            db.ledger.push({ id: uid('E'), userId: o.buyerId, kind: 'order_refund', cashKobo: o.paidFeeCashKobo, creditKobo: o.paidFeeCreditKobo, memo: `Delivery refund · ${l.title}`, listingId: l.id, createdAt: at })
+          }
+        }
         const was = l.status
         Object.assign(l, stockAfterCancel(reason, l, o.quantity))
         if (was === 'sold' && l.status === 'for_sale') for (const userId of saversOf(db, l.id)) alertSaved(db, userId, l.id, l, 'saved_back_on_sale', now())

@@ -71,11 +71,16 @@ export interface CautionFee {
 /** A CAC-registered store, or an ID-verified individual (regular products only, never raffles). */
 export type MerchantKind = 'store' | 'individual'
 
+/** How big a product's package is, which affects its delivery fee (deliveryFees.ts). */
+export type PackageSize = 'small' | 'medium' | 'large'
+
 export interface Merchant {
   id: string
   kind: MerchantKind
   name: string
   area: string // e.g. "Ikeja"
+  /** The delivery area its items leave from (deliveryFees.ts). */
+  deliveryArea?: string | null
   /** Empty for individual sellers. */
   cacNumber: string
   verified: boolean
@@ -118,6 +123,8 @@ export interface Listing {
   status: ListingStatus
   /** Only while rejected, and only seen by its store and admins. Null on rows rejected before reasons existed. */
   rejection?: ListingRejection | null
+  /** Null means the usual size for its category (deliveryFees.ts packageSizeOf). */
+  packageSize?: PackageSize | null
   /** The price an admin last reviewed. A big change from this needs another review. */
   reviewedPriceKobo?: Kobo | null
   /** Counts changes while in review, so an admin only approves the version they saw. */
@@ -167,6 +174,7 @@ export type LedgerKind =
   | 'store_credit' // consolation credit after losing a draw
   | 'order_payment' // bought a fixed-price item
   | 'order_refund' // a seller cancelled it; doesn't touch the weekly limit
+  | 'delivery_fee' // what a buyer paid for delivery at checkout
   | 'adjustment'
 
 /** Append-only wallet ledger. Balances are always derived, never stored. */
@@ -218,6 +226,8 @@ export interface Order {
   feeKobo: Kobo
   /** How many. priceKobo and feeKobo are for all of them. */
   quantity: number
+  /** What the buyer paid for delivery. One fee covers everything from a seller in a checkout, so only one of those orders has it. Not part of the seller's payout. */
+  deliveryFeeKobo: Kobo
   cancelledAt: ISODate | null
   cancelReason: CancelReason | null
   cancelNote: string | null
