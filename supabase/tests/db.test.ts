@@ -711,6 +711,38 @@ describe('regular products and orders', () => {
     await expect(admin(prize, [other, id])).rejects.toThrow(/orders_one_prize_per_listing/)
   })
 
+  it('sells several at once as one order, with the fee and payout on the whole', async () => {
+    const seller = await newUser('qty-store@example.com', { merchantId: '11111111-1111-4111-8111-000000000005' })
+    const shopper = await newUser('qty-shopper@example.com')
+    await asUser(shopper, `select public.top_up(5000000)`)
+    const [{ id }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [{ title: 'Case pack', description: '', category: 'Phones', priceKobo: 200_000, stock: 5 }])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    const buy = (quantity: unknown) => asUser<{ ids: string[] }>(shopper, `select public.checkout($1) ids`, [{ listingIds: [id], quantities: { [id]: quantity }, fulfilment: 'delivery', address: delivery[0], phone: delivery[1], lat: delivery[2], lng: delivery[3] }])
+
+    await expectFail(asUser(shopper, `select public.add_to_cart($1, 6)`, [id]), 'invalid_input')
+    await asUser(shopper, `select public.add_to_cart($1, 2)`, [id])
+    await asUser(shopper, `select public.add_to_cart($1, 4)`, [id])
+    expect(await asUser(shopper, `select quantity from public.cart_items where listing_id = $1`, [id])).toEqual([{ quantity: 4 }])
+
+    for (const bad of [0, -1, 'lots', 6]) await expectFail(buy(bad), 'invalid_input')
+    const before = (await balance(shopper)).cash
+    const [{ ids }] = await buy(3)
+    expect(ids).toHaveLength(1)
+    const [order] = await admin<{ quantity: number; price_kobo: string; fee_kobo: string }>(`select quantity, price_kobo, fee_kobo from public.orders where id = $1`, [ids[0]])
+    expect(order.quantity).toBe(3)
+    expect(Number(order.price_kobo)).toBe(600_000)
+    expect(Number(order.fee_kobo)).toBe(Math.round(600_000 * platformFeeBps(200_000) / 10_000))
+    expect(Number((await balance(shopper)).cash)).toBe(Number(before) - 600_000)
+    expect(await admin(`select stock, status from public.listings where id = $1`, [id])).toEqual([{ stock: 2, status: 'for_sale' }])
+    const [line] = await admin<{ amount_kobo: string }>(`select amount_kobo from public.payouts where order_id = $1`, [ids[0]])
+    expect(Number(line.amount_kobo)).toBe(600_000 - Number(order.fee_kobo))
+    expect((await asUser<{ m: { listings: { units: number; listingId: string }[] } }>(seller, `select public.merchant_metrics(7) m`))[0].m.listings.find((l) => l.listingId === id)?.units).toBe(3)
+
+    await buy(2)
+    expect(await admin(`select stock, status from public.listings where id = $1`, [id])).toEqual([{ stock: 0, status: 'sold' }])
+    await expectFail(buy(1), 'not_for_sale')
+  })
+
   it('sells once, paying with credit first, and records the order', async () => {
     await admin(`insert into public.ledger_entries (user_id, kind, credit_kobo, memo) values ($1, 'store_credit', 300000, 'credit')`, [buyer])
     await asUser(buyer, `select public.top_up(1500000)`)

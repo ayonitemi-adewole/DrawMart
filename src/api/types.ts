@@ -149,6 +149,7 @@ export interface DeliveryJob {
   id: string
   productCode: string
   listingTitle: string
+  quantity: number
   listingImage: string | null
   category: Category
   fulfilment: Fulfilment
@@ -347,12 +348,17 @@ export interface PendingWinnerStory {
 /** One item in a buyer's cart. */
 export interface CartLine {
   listing: ListingView
-  /** What it costs today (0 for a won item); null if it's no longer available. */
+  /** What the quantity costs today (0 for a won item); null if it's no longer available. */
   amountKobo: Kobo | null
+  /** What can be bought now. Below `wanted` if stock has run low since it was added. */
+  quantity: number
+  wanted: number
 }
 
 export interface CheckoutInput extends CheckoutDetails {
   listingIds: string[]
+  /** By listing id. A listing not in here is one. */
+  quantities?: Record<string, number>
 }
 
 export interface ListingFilter {
@@ -450,8 +456,8 @@ export interface DrawMartApi {
   listMyListings(): Promise<ListingView[]>
   listResults(): Promise<DrawResultView[]>
   listCart(): Promise<CartLine[]>
-  /** Regular products and draws the buyer has won. Never cars. */
-  addToCart(listingId: string): Promise<void>
+  /** Regular products and draws the buyer has won. Never cars. If it's already there, this sets its quantity. */
+  addToCart(listingId: string, quantity?: number): Promise<void>
   removeFromCart(listingId: string): Promise<void>
   /** Which kinds of push notification this buyer wants. Everything's on until they say otherwise. */
   getPushPreferences(): Promise<PushPreferences>

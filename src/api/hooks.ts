@@ -264,6 +264,14 @@ export function useCheckout() {
   return useMutation({ mutationFn: (input: CheckoutInput) => api.checkout(input), onSettled: () => void invalidate() })
 }
 
+export function useSetCartQuantity() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ listingId, quantity }: { listingId: string; quantity: number }) => api.addToCart(listingId, quantity),
+    onSettled: () => qc.invalidateQueries({ queryKey: keys.cart }),
+  })
+}
+
 export function useAddToCart() {
   const qc = useQueryClient()
   return useMutation({ mutationFn: (listingId: string) => api.addToCart(listingId), onSettled: () => qc.invalidateQueries({ queryKey: keys.cart }) })

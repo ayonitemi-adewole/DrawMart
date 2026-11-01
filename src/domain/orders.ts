@@ -51,9 +51,31 @@ export const PRODUCT_ERROR_TEXT: Record<ProductError, string> = {
 
 // --------------------------------------------------------------- stock
 
-/** After one is sold: it's sold out once none are left. */
-export function takeStock(stock: number): { stock: number; soldOut: boolean } {
-  const left = Math.max(0, stock - 1)
+export const MAX_ORDER_QUANTITY = 99
+
+type QuantityListing = Pick<Listing, 'kind' | 'status' | 'stock' | 'category'>
+
+/** Draws, won items and cars are one at a time. */
+export function maxOrderQuantity(l: QuantityListing): number {
+  return l.kind === 'product' && l.status === 'for_sale' && l.category !== 'Cars' ? Math.min(l.stock, MAX_ORDER_QUANTITY) : 1
+}
+
+/** A quantity that can be bought now, from whatever was asked for. */
+export function clampQuantity(l: QuantityListing, wanted: number): number {
+  return Math.min(Math.max(1, Number.isInteger(wanted) ? wanted : 1), maxOrderQuantity(l))
+}
+
+export function quantityError(l: QuantityListing & Pick<Listing, 'title'>, quantity: number): string | null {
+  if (!Number.isInteger(quantity) || quantity < 1) return 'Choose at least one.'
+  const max = maxOrderQuantity(l)
+  if (quantity <= max) return null
+  if (max === 1) return `You can only buy one of ${l.title} at a time.`
+  return max === MAX_ORDER_QUANTITY ? `You can buy up to ${MAX_ORDER_QUANTITY} of ${l.title} at a time.` : `Only ${max} left of ${l.title}.`
+}
+
+/** After an order: it's sold out once none are left. */
+export function takeStock(stock: number, quantity = 1): { stock: number; soldOut: boolean } {
+  const left = Math.max(0, stock - quantity)
   return { stock: left, soldOut: left === 0 }
 }
 

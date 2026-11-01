@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { nairaToKobo as k } from './money'
-import { lowStockLabel, MAX_STOCK, saleEconomics, salePriceKobo, takeStock, validateProduct } from './orders'
+import { clampQuantity, lowStockLabel, MAX_ORDER_QUANTITY, MAX_STOCK, maxOrderQuantity, quantityError, saleEconomics, salePriceKobo, takeStock, validateProduct } from './orders'
 
 describe('stock', () => {
   const title = 'Chair'
@@ -12,7 +12,25 @@ describe('stock', () => {
     for (const stock of [0, -1, 1.5, NaN, MAX_STOCK + 1]) expect(validateProduct({ title, priceKobo, stock })).toEqual(['stock_invalid'])
   })
 
+  it('limits an order to what’s left, and one at a time for draws, prizes and cars', () => {
+    const on = { kind: 'product' as const, status: 'for_sale' as const, stock: 3, category: 'Phones' as const, title: 'Case' }
+    expect(maxOrderQuantity(on)).toBe(3)
+    expect(maxOrderQuantity({ ...on, stock: 500 })).toBe(MAX_ORDER_QUANTITY)
+    expect(maxOrderQuantity({ ...on, category: 'Cars' })).toBe(1)
+    expect(maxOrderQuantity({ ...on, kind: 'raffle' })).toBe(1)
+    expect(maxOrderQuantity({ ...on, status: 'drawn' })).toBe(1)
+    expect(quantityError(on, 3)).toBeNull()
+    expect(quantityError(on, 4)).toBe('Only 3 left of Case.')
+    for (const n of [0, -1, 1.5]) expect(quantityError(on, n)).toBe('Choose at least one.')
+    expect(quantityError({ ...on, category: 'Cars' }, 2)).toContain('one of Case')
+    expect(clampQuantity(on, 9)).toBe(3)
+    expect(clampQuantity(on, NaN)).toBe(1)
+    expect(clampQuantity(on, 0)).toBe(1)
+  })
+
   it('is sold out when the last one goes', () => {
+    expect(takeStock(5, 2)).toEqual({ stock: 3, soldOut: false })
+    expect(takeStock(2, 2)).toEqual({ stock: 0, soldOut: true })
     expect(takeStock(3)).toEqual({ stock: 2, soldOut: false })
     expect(takeStock(1)).toEqual({ stock: 0, soldOut: true })
   })

@@ -209,6 +209,8 @@ export interface Order {
   priceKobo: Kobo
   /** Platform fee, taken from the store's payout. */
   feeKobo: Kobo
+  /** How many. priceKobo and feeKobo are for all of them. */
+  quantity: number
   /** Pickup orders have an empty address and no pin, only the phone. */
   delivery: Delivery
   fulfilment: Fulfilment

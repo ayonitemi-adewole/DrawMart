@@ -327,6 +327,39 @@ describe('mock api', () => {
     expect((await api.listPayouts()).filter((l) => l.listingId === p.id && l.kind === 'sale')).toHaveLength(2)
   })
 
+  it('sells several at once as one order, with the fee and payout on the whole', async () => {
+    const api = make()
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const p = await api.createProduct({ title: 'Case pack', description: '', category: 'Phones', priceKobo: k(2_000), stock: 5 })
+    await api.approveListing(p.id)
+    await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    await api.topUp(k(20_000))
+    const before = (await api.getWallet()).balance.cashKobo
+
+    await expect(api.addToCart(p.id, 6)).rejects.toThrow('Only 5 left')
+    await api.addToCart(p.id, 2)
+    await api.addToCart(p.id, 4) // changes it, rather than adding a second line
+    expect((await api.listCart()).find((c) => c.listing.id === p.id)).toMatchObject({ quantity: 4, wanted: 4, amountKobo: k(8_000) })
+    await expect(api.checkout({ listingIds: [p.id], quantities: { [p.id]: 6 }, fulfilment: 'delivery', delivery, pickupPointId: null })).rejects.toThrow('Only 5 left')
+
+    const [order] = await api.checkout({ listingIds: [p.id], quantities: { [p.id]: 3 }, fulfilment: 'delivery', delivery, pickupPointId: null })
+    expect(order).toMatchObject({ quantity: 3, priceKobo: k(6_000) })
+    expect((await api.getWallet()).balance.cashKobo).toBe(before - k(6_000))
+    expect(await api.getListing(p.id)).toMatchObject({ stock: 2, status: 'for_sale' })
+
+    await api.addToCart(p.id, 2)
+    await api.auth.signInWithPassword('chidi@drawmart.test', 'drawmart-demo')
+    await api.topUp(k(20_000))
+    await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+    await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    expect((await api.listCart()).find((c) => c.listing.id === p.id)).toMatchObject({ quantity: 1, wanted: 2, amountKobo: k(2_000) })
+
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const lines = (await api.listPayouts()).filter((l) => l.listingId === p.id)
+    expect(lines.map((l) => l.amountKobo)).toContain(order.priceKobo - order.feeKobo)
+  })
+
   it('only marks an order delivered through a delivery account and the buyer’s PIN', async () => {
     let t = Date.now()
     const api = make(() => t)

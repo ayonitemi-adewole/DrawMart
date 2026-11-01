@@ -43,9 +43,13 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
           {audience === 'buyer' ? (
             <Link to={`/listings/${o.listingId}`} className="truncate font-bold text-ink no-underline hover:underline">
               {o.listingTitle}
+              {o.quantity > 1 ? ` × ${o.quantity}` : ''}
             </Link>
           ) : (
-            <strong className="truncate">{o.listingTitle}</strong>
+            <strong className="truncate">
+              {o.listingTitle}
+              {o.quantity > 1 ? ` × ${o.quantity}` : ''}
+            </strong>
           )}
           <ProductId code={o.productCode} copy />
           <span className="text-xs text-subtle">

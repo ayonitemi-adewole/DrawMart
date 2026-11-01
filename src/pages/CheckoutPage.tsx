@@ -8,6 +8,7 @@ import { CheckCircleIcon, MapPinIcon, PhoneIcon, ShieldIcon, StoreIcon, TruckIco
 import { useToast } from '@/components/toast'
 import { Button, Card, EmptyState, ErrorState, Field, Notice, PageTitle, ProductImage, Segmented, Skeleton, buttonClass, cx, errorMessage, inputCls } from '@/components/ui'
 import { MAX_ADDRESS_LABEL, MAX_SAVED_ADDRESSES, SAVED_ADDRESS_ERROR_TEXT, preferredAddress, suggestedPhone, type SavedAddress } from '@/domain/addresses'
+import { clampQuantity } from '@/domain/orders'
 import { CHECKOUT_ERROR_TEXT, checkoutTotalKobo, isCar, isWonPrize, lineAmountKobo, validateCheckout } from '@/domain/cart'
 import { directionsUrl } from '@/domain/location'
 import { formatNaira } from '@/domain/money'
@@ -19,36 +20,37 @@ import type { Delivery, Fulfilment } from '@/domain/types'
 export function CheckoutPage() {
   const [params] = useSearchParams()
   const item = params.get('item')
-  return item ? <SingleItem id={item} /> : <WholeCart />
+  return item ? <SingleItem id={item} wanted={Number(params.get('qty') ?? 1)} /> : <WholeCart />
 }
 
-function SingleItem({ id }: { id: string }) {
+function SingleItem({ id, wanted }: { id: string; wanted: number }) {
   const q = useListing(id)
   if (q.isPending) return <Skeleton className="h-96" />
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />
-  return <CheckoutFlow items={[q.data]} />
+  return <CheckoutFlow items={[q.data]} quantities={{ [id]: clampQuantity(q.data, wanted) }} />
 }
 
 function WholeCart() {
   const q = useCart()
   if (q.isPending) return <Skeleton className="h-96" />
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />
-  return <CheckoutFlow items={q.data.filter((l) => l.amountKobo !== null).map((l) => l.listing)} />
+  const lines = q.data.filter((l) => l.amountKobo !== null)
+  return <CheckoutFlow items={lines.map((l) => l.listing)} quantities={Object.fromEntries(lines.map((l) => [l.listing.id, l.quantity]))} />
 }
 
 type Step = 'where' | 'review'
 
 /** Waits for saved addresses and the account phone, which the form starts from. */
-function CheckoutFlow({ items }: { items: ListingView[] }) {
+function CheckoutFlow({ items, quantities }: { items: ListingView[]; quantities: Record<string, number> }) {
   const addresses = useAddresses()
   const me = useMe()
   if (addresses.isPending || me.isPending) return <Skeleton className="h-96" />
   // If they can't load, a new address still works.
-  return <CheckoutForm items={items} addresses={addresses.data ?? []} accountPhone={me.data?.phone ?? null} />
+  return <CheckoutForm items={items} quantities={quantities} addresses={addresses.data ?? []} accountPhone={me.data?.phone ?? null} />
 }
 
 /** Two steps: a saved or new address with a pin, or a pickup location; then review and pay. */
-function CheckoutForm({ items, addresses, accountPhone }: { items: ListingView[]; addresses: SavedAddress[]; accountPhone: string | null }) {
+function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: ListingView[]; quantities: Record<string, number>; addresses: SavedAddress[]; accountPhone: string | null }) {
   const wallet = useWallet()
   const points = usePickupPoints()
   const checkout = useCheckout()
@@ -94,7 +96,9 @@ function CheckoutForm({ items, addresses, accountPhone }: { items: ListingView[]
   }
 
   const available = items.every((l) => lineAmountKobo(l) !== null)
-  const total = checkoutTotalKobo(items)
+  const quantityOf = (l: ListingView) => quantities[l.id] ?? 1
+  const total = checkoutTotalKobo(items, quantityOf)
+  const itemCount = items.reduce((n, l) => n + quantityOf(l), 0)
   const balance = wallet.data?.balance
   const pay = balance ? splitPayment(total, balance) : null
   const short = balance ? balance.cashKobo + balance.creditKobo < total : false
@@ -114,7 +118,7 @@ function CheckoutForm({ items, addresses, accountPhone }: { items: ListingView[]
     }
     if (short || !available) return
     checkout.mutate(
-      { listingIds: items.map((l) => l.id), ...details },
+      { listingIds: items.map((l) => l.id), quantities, ...details },
       {
         onSuccess: (orders) => {
           setPlaced(orders)
@@ -286,14 +290,14 @@ function CheckoutForm({ items, addresses, accountPhone }: { items: ListingView[]
         <aside className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-24">
           <Card className="flex flex-col gap-3 p-5">
             <strong>
-              {items.length} {items.length === 1 ? 'item' : 'items'}
+              {itemCount} {itemCount === 1 ? 'item' : 'items'}
             </strong>
             <ul className="flex flex-col gap-3">
               {items.map((l) => (
                 <li key={l.id} className="flex items-center gap-3 text-sm">
                   <ProductImage category={l.category} src={l.images[0]} alt="" size="sm" className="size-12 shrink-0" />
-                  <span className="min-w-0 flex-1 truncate font-semibold">{l.title}</span>
-                  <span className="shrink-0 font-bold tabular-nums">{isWonPrize(l) ? 'Won' : formatNaira(lineAmountKobo(l) ?? 0)}</span>
+                  <span className="min-w-0 flex-1 truncate font-semibold">{l.title}{quantityOf(l) > 1 ? ` × ${quantityOf(l)}` : ''}</span>
+                  <span className="shrink-0 font-bold tabular-nums">{isWonPrize(l) ? 'Won' : formatNaira(lineAmountKobo(l, quantityOf(l)) ?? 0)}</span>
                 </li>
               ))}
             </ul>

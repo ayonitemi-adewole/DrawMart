@@ -1,6 +1,8 @@
 import { Link } from 'react-router'
 import { ProductId } from '@/components/ProductId'
-import { useCart, useRemoveFromCart } from '@/api/hooks'
+import { useCart, useRemoveFromCart, useSetCartQuantity } from '@/api/hooks'
+import { QuantityPicker } from '@/components/QuantityPicker'
+import { maxOrderQuantity } from '@/domain/orders'
 import { CartIcon, TrophyIcon, XIcon } from '@/components/icons'
 import { useToast } from '@/components/toast'
 import { Badge, Card, EmptyState, ErrorState, IconButton, Notice, PageTitle, ProductImage, Skeleton, buttonClass, errorMessage } from '@/components/ui'
@@ -11,6 +13,7 @@ import { formatNaira } from '@/domain/money'
 export function CartPage() {
   const q = useCart()
   const remove = useRemoveFromCart()
+  const setQuantity = useSetCartQuantity()
   const toast = useToast()
 
   return (
@@ -36,7 +39,7 @@ export function CartPage() {
       ) : (
         <div className="grid gap-6 lg:grid-cols-[1fr_340px] lg:items-start">
           <Card className="divide-y divide-line overflow-hidden">
-            {q.data.map(({ listing: l, amountKobo }) => {
+            {q.data.map(({ listing: l, amountKobo, quantity, wanted }) => {
               const prize = isWonPrize(l)
               return (
                 <div key={l.id} className="flex items-center gap-3 p-4">
@@ -58,6 +61,20 @@ export function CartPage() {
                     ) : (
                       <span className="text-sm font-extrabold tabular-nums">{formatNaira(amountKobo)}</span>
                     )}
+                    {amountKobo !== null && maxOrderQuantity(l) > 1 ? (
+                      <QuantityPicker
+                        value={quantity}
+                        max={maxOrderQuantity(l)}
+                        disabled={setQuantity.isPending}
+                        label={`How many of ${l.title}`}
+                        onChange={(n) => setQuantity.mutate({ listingId: l.id, quantity: n }, { onError: (e) => toast(errorMessage(e), 'error') })}
+                      />
+                    ) : null}
+                    {amountKobo !== null && wanted > quantity ? (
+                      <span className="text-xs font-semibold text-hot-ink">
+                        You wanted {wanted}, but only {quantity} {quantity === 1 ? 'is' : 'are'} left.
+                      </span>
+                    ) : null}
                   </div>
                   <IconButton
                     aria-label={`Remove ${l.title} from your cart`}
@@ -70,22 +87,23 @@ export function CartPage() {
               )
             })}
           </Card>
-          <CartSummary lines={q.data.map((l) => l.amountKobo)} />
+          <CartSummary lines={q.data} />
         </div>
       )}
     </div>
   )
 }
 
-function CartSummary({ lines }: { lines: (number | null)[] }) {
-  const ready = lines.filter((a): a is number => a !== null)
-  const total = ready.reduce((s, a) => s + a, 0)
+function CartSummary({ lines }: { lines: { amountKobo: number | null; quantity: number }[] }) {
+  const ready = lines.filter((l) => l.amountKobo !== null)
+  const total = ready.reduce((s, l) => s + l.amountKobo!, 0)
+  const count = ready.reduce((s, l) => s + l.quantity, 0)
   const gone = lines.length - ready.length
   return (
     <Card className="flex flex-col gap-4 p-5 lg:sticky lg:top-24">
       <div className="flex items-baseline justify-between">
         <span className="text-sm text-muted">
-          {ready.length} {ready.length === 1 ? 'item' : 'items'}
+          {count} {count === 1 ? 'item' : 'items'}
         </span>
         <span className="font-display text-3xl font-extrabold tabular-nums">{formatNaira(total)}</span>
       </div>

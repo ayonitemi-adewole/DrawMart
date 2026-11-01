@@ -1,10 +1,12 @@
+import { useState } from 'react'
 import { Link, useLocation } from 'react-router'
-import { useAccess, useAddToCart, useCart, useConversations, useMerchant, useMyOrders } from '@/api/hooks'
+import { useAccess, useCart, useConversations, useMerchant, useMyOrders, useSetCartQuantity } from '@/api/hooks'
 import type { ListingView, OrderView } from '@/api/types'
 import { isCar } from '@/domain/cart'
 import { handoverMethodFor } from '@/domain/listing'
 import { formatNaira } from '@/domain/money'
-import { lowStockLabel, salePriceKobo } from '@/domain/orders'
+import { clampQuantity, lowStockLabel, maxOrderQuantity, salePriceKobo } from '@/domain/orders'
+import { QuantityPicker } from './QuantityPicker'
 import { CartIcon, ChatIcon, CheckCircleIcon, LockIcon, ShieldIcon, TruckIcon } from './icons'
 import { useToast } from './toast'
 import { Badge, Button, Card, Notice, buttonClass, errorMessage } from './ui'
@@ -15,7 +17,8 @@ export function BuyNowPanel({ listing: l }: { listing: ListingView }) {
   const { pathname } = useLocation()
   const orders = useMyOrders()
   const cart = useCart()
-  const add = useAddToCart()
+  const add = useSetCartQuantity()
+  const [wanted, setWanted] = useState(1)
   const shop = useMerchant()
   const toast = useToast()
   const price = salePriceKobo(l)
@@ -37,6 +40,9 @@ export function BuyNowPanel({ listing: l }: { listing: ListingView }) {
 
   const product = l.kind === 'product'
   const lowStock = lowStockLabel(l)
+  const max = maxOrderQuantity(l)
+  const quantity = clampQuantity(l, wanted)
+  const total = price * quantity
 
   return (
     <Card className="flex flex-col gap-4 p-5">
@@ -61,6 +67,14 @@ export function BuyNowPanel({ listing: l }: { listing: ListingView }) {
         </Link>
       ) : (
         <>
+          {max > 1 && !ownItem && !inCart ? (
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-sm font-bold">
+                Quantity
+              </span>
+              <QuantityPicker value={quantity} max={max} onChange={setWanted} label="Quantity" />
+            </div>
+          ) : null}
           {/* Cars are arranged one at a time, so they skip the cart. */}
           {isCar(l) || ownItem ? null : inCart ? (
             <Link to="/cart" className={buttonClass('primary', 'lg')}>
@@ -69,13 +83,13 @@ export function BuyNowPanel({ listing: l }: { listing: ListingView }) {
               </span>
             </Link>
           ) : (
-            <Button size="lg" loading={add.isPending} onClick={() => add.mutate(l.id, { onSuccess: () => toast('Added to your cart.'), onError: (e) => toast(errorMessage(e), 'error') })}>
+            <Button size="lg" loading={add.isPending} onClick={() => add.mutate({ listingId: l.id, quantity }, { onSuccess: () => toast('Added to your cart.'), onError: (e) => toast(errorMessage(e), 'error') })}>
               <CartIcon size={18} /> Add to cart
             </Button>
           )}
           {ownItem ? null : (
-            <Link to={`/checkout?item=${l.id}`} className={buttonClass(isCar(l) ? 'primary' : 'outline', 'lg')}>
-              {isCar(l) ? <span className="text-on-brand">Buy now for {formatNaira(price)}</span> : `Buy now for ${formatNaira(price)}`}
+            <Link to={`/checkout?item=${l.id}${quantity > 1 ? `&qty=${quantity}` : ''}`} className={buttonClass(isCar(l) ? 'primary' : 'outline', 'lg')}>
+              {isCar(l) ? <span className="text-on-brand">Buy now for {formatNaira(total)}</span> : `Buy now for ${formatNaira(total)}`}
             </Link>
           )}
         </>

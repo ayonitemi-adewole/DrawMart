@@ -79,7 +79,7 @@ function JobCard({ job: j, tab }: { job: DeliveryJob; tab: Tab }) {
     <div className="flex min-w-0 flex-1 gap-3">
       <ProductImage category={j.category} src={j.listingImage ?? undefined} alt="" size="sm" className="size-16 shrink-0" />
       <div className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
-        <strong className="leading-tight">{j.listingTitle}</strong>
+        <strong className="leading-tight">{j.listingTitle}{j.quantity > 1 ? ` × ${j.quantity}` : ''}</strong>
         <ProductId code={j.productCode} />
         <span className="text-xs text-subtle">
           {j.collectFrom.name} → {destination(j)}
@@ -146,7 +146,7 @@ function JobDetails({ job: j }: { job: DeliveryJob }) {
       <Card className="flex gap-3 p-4">
         <ProductImage category={j.category} src={j.listingImage ?? undefined} alt={j.listingTitle} size="sm" className="size-18 shrink-0" />
         <div className="flex min-w-0 flex-col gap-1">
-          <h1 className="font-display text-xl leading-tight font-extrabold">{j.listingTitle}</h1>
+          <h1 className="font-display text-xl leading-tight font-extrabold">{j.listingTitle}{j.quantity > 1 ? ` × ${j.quantity}` : ''}</h1>
           <ProductId code={j.productCode} copy />
           <Badge tone="sky" className="w-fit">{pickup ? 'For a pickup location' : 'To the buyer'}</Badge>
         </div>

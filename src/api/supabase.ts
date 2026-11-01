@@ -16,7 +16,7 @@ import type { PinResult } from '@/domain/delivery'
 import { lineAmountKobo } from '@/domain/cart'
 import { WINNER_CONSENT_VERSION } from '@/domain/winnerStories'
 import { DEFAULT_PUSH_PREFERENCES } from '@/domain/push'
-import { ORDER_ERROR_TEXT } from '@/domain/orders'
+import { ORDER_ERROR_TEXT, clampQuantity } from '@/domain/orders'
 import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication } from '@/domain/sellers'
 import type { Category, Fulfilment, PickupPoint, FeeMode, Handover, LedgerEntry, LedgerKind, ListingKind, ListingStatus, Merchant, OrderStatus, RejectionReason, UnsoldPolicy, User } from '@/domain/types'
 import { DEMO_ACCOUNTS } from './demoAccounts'
@@ -198,6 +198,7 @@ interface OrderRow {
   user_id: string
   merchant_id: string
   price_kobo: number
+  quantity: number
   fee_kobo: number
   delivery_address: string | null
   delivery_phone: string
@@ -377,6 +378,7 @@ function toOrderView(o: OrderRow): OrderView {
     merchantId: o.merchant_id,
     priceKobo: num(o.price_kobo),
     feeKobo: num(o.fee_kobo),
+    quantity: o.quantity,
     delivery: { address: o.delivery_address ?? '', location: toPoint(o.delivery_lat, o.delivery_lng), contactPhone: o.delivery_phone },
     fulfilment: o.fulfilment,
     pickupPoint: o.pickup_point ? toPickupPoint(o.pickup_point) : null,
@@ -684,17 +686,20 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
 
     listCart: async () => {
       const me = await requireId()
-      const rows = unwrap(await client.from('cart_items').select('listing_id').eq('user_id', me).order('added_at').returns<{ listing_id: string }[]>())
+      const rows = unwrap(await client.from('cart_items').select('listing_id, quantity').eq('user_id', me).order('added_at').returns<{ listing_id: string; quantity: number }[]>())
       const ids = rows.map((r) => r.listing_id)
       if (!ids.length) return []
+      const wanted = new Map(rows.map((r) => [r.listing_id, r.quantity]))
       const listings = await views(unwrap(await client.from('listings').select(LISTING_SELECT).in('id', ids).returns<ListingRow[]>()))
       return ids.flatMap((id) => {
         const listing = listings.find((l) => l.id === id)
-        return listing ? [{ listing, amountKobo: lineAmountKobo(listing) }] : []
+        if (!listing) return []
+        const quantity = clampQuantity(listing, wanted.get(id) ?? 1)
+        return [{ listing, quantity, wanted: wanted.get(id) ?? 1, amountKobo: lineAmountKobo(listing, quantity) }]
       })
     },
 
-    addToCart: (listingId) => rpc('add_to_cart', { p_listing_id: listingId }),
+    addToCart: (listingId, quantity = 1) => rpc('add_to_cart', { p_listing_id: listingId, p_quantity: quantity }),
     removeFromCart: (listingId) => rpc('remove_from_cart', { p_listing_id: listingId }),
 
     getPushPreferences: async () => {
@@ -737,6 +742,7 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       const ids = await rpc<string[]>('checkout', {
         p: {
           listingIds: input.listingIds,
+          quantities: input.quantities ?? {},
           fulfilment: input.fulfilment,
           address: pickup ? null : input.delivery.address,
           phone: input.delivery.contactPhone,

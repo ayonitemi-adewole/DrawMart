@@ -28,12 +28,14 @@ export const CART_ERROR_TEXT: Record<CartError, string> = {
 }
 
 /** What a line costs today (a won item is free), or null if it can't be bought any more. */
-export function lineAmountKobo(l: CartListing): Kobo | null {
-  return isWonPrize(l) ? 0 : salePriceKobo(l)
+export function lineAmountKobo(l: CartListing, quantity = 1): Kobo | null {
+  if (isWonPrize(l)) return 0
+  const price = salePriceKobo(l)
+  return price === null ? null : price * quantity
 }
 
-export function checkoutTotalKobo(lines: readonly CartListing[]): Kobo {
-  return lines.reduce((sum, l) => sum + (lineAmountKobo(l) ?? 0), 0)
+export function checkoutTotalKobo<L extends CartListing>(lines: readonly L[], quantityOf: (l: L) => number = () => 1): Kobo {
+  return lines.reduce((sum, l) => sum + (lineAmountKobo(l, quantityOf(l)) ?? 0), 0)
 }
 
 export interface CheckoutDetails {
