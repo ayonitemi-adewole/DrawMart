@@ -129,7 +129,7 @@ function ProductDetail({ listing: l }: { listing: ListingView }) {
               <Badge tone="neutral" className="bg-surface/85 backdrop-blur">
                 {l.category}
               </Badge>
-              {l.status === "sold" ? <Badge tone="hot">SOLD</Badge> : null}
+              {l.status === "sold" ? <Badge tone="hot">SOLD OUT</Badge> : null}
             </div>
           </div>
           <div className="flex animate-fade-up flex-col gap-3 [animation-delay:60ms]">

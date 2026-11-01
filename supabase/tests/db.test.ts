@@ -670,6 +670,47 @@ describe('regular products and orders', () => {
     await expectFail(asUser(buyer, `select public.buy_now($1, $2, $3, $4, $5)`, [live.id, ...delivery]), 'not_for_sale')
   })
 
+  it('sells a product until its stock runs out, charging each buyer once', async () => {
+    const stockStore = await newUser('stock-store@example.com', { merchantId: '11111111-1111-4111-8111-000000000005' })
+    const other = await newUser('stock-shopper@example.com')
+    const rival = await newUser('stock-rival@example.com')
+    for (const u of [other, rival]) await asUser(u, `select public.top_up(1000000)`)
+    const item = { title: 'Phone case', description: '', category: 'Phones', priceKobo: 200_000 }
+    for (const stock of [0, -1, 1.5, 'lots', 10_001]) {
+      const e = await expectFail(asUser(stockStore, `select public.create_product($1)`, [{ ...item, stock }]), 'invalid_input')
+      expect(e.detail).toContain('how many')
+    }
+    const [{ id }] = await asUser<{ id: string }>(stockStore, `select public.create_product($1) id`, [{ ...item, stock: 3 }])
+    const read = async () => (await admin<{ stock: number; status: string }>(`select stock, status from public.listings where id = $1`, [id]))[0]
+    expect((await read()).stock).toBe(3)
+    await asUser(stockStore, `select public.update_listing($1, $2)`, [id, { ...item, stock: 2 }])
+    expect((await read()).stock).toBe(2)
+    await asUser(stockStore, `select public.update_listing($1, $2)`, [id, item]) // an older app leaves it alone
+    expect((await read()).stock).toBe(2)
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+
+    const buy = (who: string) => asUser(who, `select public.checkout($1)`, [{ listingIds: [id], fulfilment: 'delivery', address: delivery[0], phone: delivery[1], lat: delivery[2], lng: delivery[3] }])
+    await asUser(rival, `select public.add_to_cart($1)`, [id])
+    await buy(other)
+    expect(await read()).toEqual({ stock: 1, status: 'for_sale' })
+    await asUser(other, `select public.add_to_cart($1)`, [id]) // can buy another while there's stock
+    await asUser(other, `select public.buy_now($1, $2, $3, $4, $5)`, [id, ...delivery]) // the old route takes one too
+    expect(await read()).toEqual({ stock: 0, status: 'sold' })
+
+    const spent = async () => (await balance(rival)).cash
+    const before = await spent()
+    await expectFail(buy(rival), 'not_for_sale')
+    expect(await spent()).toBe(before)
+    expect(await admin(`select 1 from public.orders where listing_id = $1`, [id])).toHaveLength(2)
+    expect(await admin(`select 1 from public.ledger_entries where user_id = $1 and listing_id = $2 and kind = 'order_payment'`, [other, id])).toHaveLength(2)
+    expect(await admin(`select 1 from public.payouts where listing_id = $1 and kind = 'sale'`, [id])).toHaveLength(2)
+    await expect(admin(`update public.listings set status = 'for_sale' where id = $1`, [id])).rejects.toThrow(/listings_on_sale_has_stock/)
+    // A won item can still only be arranged once.
+    const prize = `insert into public.orders (listing_id, user_id, merchant_id, price_kobo, fee_kobo, delivery_address, delivery_phone, is_prize) select id, $1, merchant_id, 0, 0, 'x', 'x', true from public.listings where id = $2`
+    await admin(prize, [other, id])
+    await expect(admin(prize, [other, id])).rejects.toThrow(/orders_one_prize_per_listing/)
+  })
+
   it('sells once, paying with credit first, and records the order', async () => {
     await admin(`insert into public.ledger_entries (user_id, kind, credit_kobo, memo) values ($1, 'store_credit', 300000, 'credit')`, [buyer])
     await asUser(buyer, `select public.top_up(1500000)`)

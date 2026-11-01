@@ -4,10 +4,10 @@ import type { ListingView, OrderView } from '@/api/types'
 import { isCar } from '@/domain/cart'
 import { handoverMethodFor } from '@/domain/listing'
 import { formatNaira } from '@/domain/money'
-import { salePriceKobo } from '@/domain/orders'
+import { lowStockLabel, salePriceKobo } from '@/domain/orders'
 import { CartIcon, ChatIcon, CheckCircleIcon, LockIcon, ShieldIcon, TruckIcon } from './icons'
 import { useToast } from './toast'
-import { Button, Card, Notice, buttonClass, errorMessage } from './ui'
+import { Badge, Button, Card, Notice, buttonClass, errorMessage } from './ui'
 
 /** Fixed-price checkout for regular products and for draws that ended unsold. */
 export function BuyNowPanel({ listing: l }: { listing: ListingView }) {
@@ -23,24 +23,32 @@ export function BuyNowPanel({ listing: l }: { listing: ListingView }) {
   const inCart = cart.data?.some((c) => c.listing.id === l.id)
   const ownItem = shop.data?.id === l.merchantId
 
-  if (mine) return <OrderPlaced order={mine} listing={l} />
+  // Nothing left to buy: show their order. If there's more, they can buy another below it.
+  if (mine && price === null) return <OrderPlaced order={mine} listing={l} />
 
   if (price === null)
     return (
       <Card className="p-5">
-        <Notice tone="neutral" title={l.status === 'sold' ? 'Sold' : 'Not on sale'}>
-          {l.status === 'sold' ? 'Someone has already bought this item.' : 'This item isn’t on sale right now.'}
+        <Notice tone="neutral" title={l.status === 'sold' ? 'Sold out' : 'Not on sale'}>
+          {l.status === 'sold' ? 'This item has sold out.' : 'This item isn’t on sale right now.'}
         </Notice>
       </Card>
     )
 
   const product = l.kind === 'product'
+  const lowStock = lowStockLabel(l)
 
   return (
     <Card className="flex flex-col gap-4 p-5">
+      {mine ? (
+        <Notice icon={TruckIcon} title="You bought this" action={<Link to="/tickets?view=orders" className="text-sm font-bold">Track your order</Link>}>
+          {ORDER_STEP[mine.status]}
+        </Notice>
+      ) : null}
       <div className="flex flex-col gap-1">
         <span className="text-xs font-extrabold tracking-[0.14em] text-brand uppercase">{product ? 'Buy now · no draw' : 'Draw ended · now for sale'}</span>
         <span className="font-display text-4xl font-extrabold tabular-nums">{formatNaira(price)}</span>
+        {lowStock ? <Badge tone="hot" className="w-fit">{lowStock}</Badge> : null}
         <span className="text-sm text-muted">
           {product
             ? `Sold by ${l.merchant.name} at a fixed price. Pay from your wallet; the store delivers anywhere in Lagos.`

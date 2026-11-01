@@ -104,6 +104,8 @@ export interface Listing {
   buyerTicketPriceKobo: Kobo // what a buyer actually pays per ticket (0 for products)
   ticketCount: number // 0 for products
   ticketsSold: number
+  /** How many are left to buy at a fixed price. Draws are always one item. */
+  stock: number
   feeMode: FeeMode
   feeBps: number // platform fee in basis points (1000 = 10%)
   unsoldPolicy: UnsoldPolicy

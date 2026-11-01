@@ -128,6 +128,8 @@ export interface NewProductInput {
   description: string
   category: Category
   images?: string[]
+  /** How many they have. Left out by older callers: one. */
+  stock?: number
   /** The platform fee follows from this (platformFeeBps) and comes out of the seller's payout. */
   priceKobo: Kobo
 }

@@ -131,7 +131,10 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
             <div className="flex flex-wrap gap-1.5">
               <Badge tone="neutral">{l.category}</Badge>
               {product ? (
-                <Badge tone="brand">Regular product</Badge>
+                <>
+                  <Badge tone="brand">Regular product</Badge>
+                  <Badge tone="sky">{l.stock.toLocaleString('en-NG')} in stock</Badge>
+                </>
               ) : (
                 <>
                   <Badge tone="sky">{l.durationDays}-day draw</Badge>

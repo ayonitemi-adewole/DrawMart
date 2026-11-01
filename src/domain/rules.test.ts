@@ -7,7 +7,7 @@ const user: User = { id: 'u1', displayName: 'Test', state: 'Lagos', weeklyLimitK
 const listing: Listing = {
   id: 'l1', productCode: 'PRD-222222', kind: 'raffle', merchantId: 'm1', title: 'Phone', description: '', category: 'Phones', images: [],
   priceKobo: k(1_000_000), ticketPriceKobo: k(5_000), buyerTicketPriceKobo: k(5_000),
-  ticketCount: 200, ticketsSold: 190, feeMode: 'seller', feeBps: 1000, unsoldPolicy: 'refund', fallbackPriceKobo: null, durationDays: 7, extended: false,
+  ticketCount: 200, ticketsSold: 190, stock: 1, feeMode: 'seller', feeBps: 1000, unsoldPolicy: 'refund', fallbackPriceKobo: null, durationDays: 7, extended: false,
   status: 'live', commitment: 'x',
   handover: { method: 'pickup', address: '1 Test Street, Ikeja', location: null, contactPhone: '08031234567', date: '2026-10-02', slot: 'morning' },
   cautionFee: { amountKobo: k(2_500), status: 'held' }, createdAt: '2026-10-01T00:00:00Z', closesAt: '2026-11-01T00:00:00Z', boostedUntil: null, soldOutAt: null, drawAt: null, pickupBatchId: null,

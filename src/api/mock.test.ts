@@ -296,6 +296,37 @@ describe('mock api', () => {
     await expect(api.dispatchOrder(order.id)).rejects.toThrow(ApiError)
   })
 
+  it('sells a product until its stock runs out, and shows it gone in other carts', async () => {
+    const api = make()
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const input = { title: 'Phone case', description: '', category: 'Phones' as const, priceKobo: k(2_000) }
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    await expect(api.createProduct({ ...input, stock: 0 })).rejects.toMatchObject({ code: 'invalid_input' })
+    const p = await api.createProduct({ ...input, stock: 3 })
+    expect(p.stock).toBe(3)
+    expect((await api.updateListing(p.id, { ...input, stock: 2 })).stock).toBe(2)
+    await api.approveListing(p.id, 1)
+
+    await api.auth.signInWithPassword('chidi@drawmart.test', 'drawmart-demo')
+    await api.topUp(k(10_000))
+    await api.addToCart(p.id)
+    await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    await api.topUp(k(10_000))
+    await buyNow(api, p.id, delivery)
+    expect(await api.getListing(p.id)).toMatchObject({ stock: 1, status: 'for_sale' })
+    await api.addToCart(p.id) // having bought one doesn't stop them buying another
+    await buyNow(api, p.id, delivery)
+    expect(await api.getListing(p.id)).toMatchObject({ stock: 0, status: 'sold' })
+    expect((await api.listMyOrders()).filter((o) => o.listingId === p.id)).toHaveLength(2)
+    await expect(buyNow(api, p.id, delivery)).rejects.toMatchObject({ code: 'not_for_sale' })
+
+    await api.auth.signInWithPassword('chidi@drawmart.test', 'drawmart-demo')
+    expect((await api.listCart()).find((c) => c.listing.id === p.id)?.listing.status).toBe('sold')
+    await expect(buyNow(api, p.id, delivery)).rejects.toMatchObject({ code: 'not_for_sale' })
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    expect((await api.listPayouts()).filter((l) => l.listingId === p.id && l.kind === 'sale')).toHaveLength(2)
+  })
+
   it('only marks an order delivered through a delivery account and the buyer’s PIN', async () => {
     let t = Date.now()
     const api = make(() => t)

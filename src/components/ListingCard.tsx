@@ -137,7 +137,7 @@ export function ListingCard({
               {l.status === "drawn" ? <Badge tone="neutral">DRAWN</Badge> : null}
               {l.status === "sold_out" ? <Badge tone="ticket">SOLD OUT</Badge> : null}
               {l.status === "sold" ? (
-                <Badge tone="hot">SOLD</Badge>
+                <Badge tone="hot">SOLD OUT</Badge>
               ) : forSale ? (
                 <Badge tone="sky">BUY NOW</Badge>
               ) : null}

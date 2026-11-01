@@ -1224,6 +1224,10 @@ function ProductCard({ listing: l, onOpen }: { listing: ListingView; onOpen: (mo
           <dt className="text-subtle">Price</dt>
           <dd className="font-bold tabular-nums">{formatNaira(l.priceKobo)}</dd>
         </div>
+        <div className="flex items-center justify-between">
+          <dt className="text-subtle">In stock</dt>
+          <dd className="font-bold tabular-nums">{l.stock.toLocaleString('en-NG')}</dd>
+        </div>
         <div className="flex items-center justify-between text-xs">
           <dt className="text-subtle">Your payout after the platform fee</dt>
           <dd className="font-semibold tabular-nums">{formatNaira(payoutKobo)}</dd>

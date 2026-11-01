@@ -112,6 +112,7 @@ interface ListingRow {
   created_at: string
   closes_at: string
   pickup_batch_id: string | null
+  stock: number
   rejection_reason: RejectionReason | null
   rejection_note: string | null
   revision: number
@@ -331,6 +332,7 @@ function toListingView(l: ListingRow, me: string | null, mine: Mine): ListingVie
     buyerTicketPriceKobo: num(l.buyer_ticket_price_kobo),
     ticketCount: l.ticket_count,
     ticketsSold: l.tickets_sold,
+    stock: l.stock,
     feeMode: l.fee_mode,
     feeBps: l.fee_bps,
     unsoldPolicy: l.unsold_policy,

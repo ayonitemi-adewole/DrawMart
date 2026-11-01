@@ -51,7 +51,7 @@ import { checkPin, isDeliveryPin, newDeliveryPin, type PinState } from '@/domain
 import { newProductCode } from '@/domain/productCode'
 import { MAX_SAVED_ADDRESSES, SAVED_ADDRESS_ERROR_TEXT, sortAddresses, validateSavedAddress, type SavedAddress, type SavedAddressInput } from '@/domain/addresses'
 import { CART_ERROR_TEXT, CHECKOUT_ERROR_TEXT, cartError, checkoutTotalKobo, isCar, isWonPrize, lineAmountKobo, validateCheckout } from '@/domain/cart'
-import { ORDER_ERROR_TEXT, PRODUCT_ERROR_TEXT, saleEconomics, validateProduct } from '@/domain/orders'
+import { ORDER_ERROR_TEXT, PRODUCT_ERROR_TEXT, saleEconomics, takeStock, validateProduct } from '@/domain/orders'
 import { MAX_MESSAGES_PER_MINUTE, messageError } from '@/domain/messages'
 import { fillDays, lagosDay } from '@/domain/metrics'
 import { BOOST_DEFAULTS, BOOST_ERROR_TEXT, DEFAULT_BOOST_PACKAGES, boostEndsAt, boostWindow, boostsUnlocked, canBoost } from '@/domain/boosts'
@@ -85,7 +85,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v32' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v33' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -453,7 +453,7 @@ const SEED_PRODUCTS: { merchantId: string; title: string; description: string; c
 function productListing(input: NewProductInput & { merchantId: string; status: ListingStatus }, at: number): Listing {
   return {
     id: uid('L'), productCode: newProductCode(), kind: 'product', merchantId: input.merchantId, title: input.title.trim(), description: input.description.trim(), category: input.category,
-    images: input.images ?? [], priceKobo: input.priceKobo, ticketPriceKobo: 0, buyerTicketPriceKobo: 0, ticketCount: 0, ticketsSold: 0,
+    images: input.images ?? [], priceKobo: input.priceKobo, ticketPriceKobo: 0, buyerTicketPriceKobo: 0, ticketCount: 0, ticketsSold: 0, stock: input.stock ?? 1,
     feeMode: 'seller', feeBps: platformFeeBps(input.priceKobo), unsoldPolicy: 'refund', fallbackPriceKobo: null, durationDays: 0, extended: false,
     status: input.status, handover: null, cautionFee: { amountKobo: 0, status: 'none' }, commitment: '', createdAt: iso(at), closesAt: iso(at), boostedUntil: null, soldOutAt: null, drawAt: null, pickupBatchId: null,
   }
@@ -471,6 +471,7 @@ async function makeListing(s: SeedListing, now: number, seeds: Record<string, st
     id,
     productCode: newProductCode(),
     kind: 'raffle',
+    stock: 1,
     merchantId: s.merchantId,
     title: s.title,
     description: s.description,
@@ -1079,7 +1080,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     const listing: Listing = {
       id, productCode: newProductCode(), kind: 'raffle', merchantId: shopId(db), title: input.title.trim(), description: input.description.trim(), category: input.category, images: input.images ?? [],
       priceKobo: input.priceKobo, ticketPriceKobo: input.ticketPriceKobo, buyerTicketPriceKobo: econ.buyerTicketKobo,
-      ticketCount: econ.ticketCount, ticketsSold: 0, feeMode: input.feeMode, feeBps,
+      ticketCount: econ.ticketCount, ticketsSold: 0, stock: 1, feeMode: input.feeMode, feeBps,
       unsoldPolicy: input.unsoldPolicy, fallbackPriceKobo: input.unsoldPolicy === 'convert_to_sale' ? input.fallbackPriceKobo! : null,
       durationDays: input.durationDays, extended: false, status: 'pending_review',
       handover: { ...input.handover, address: input.handover.address.trim(), method: handoverMethodFor(input.category) },
@@ -1117,7 +1118,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     if (l.kind === 'product') {
       const problems = validateProduct(input).map((e) => PRODUCT_ERROR_TEXT[e])
       if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
-      Object.assign(l, details, { feeBps: platformFeeBps(input.priceKobo), closesAt: iso(now()) })
+      Object.assign(l, details, { stock: (input as NewProductInput).stock ?? l.stock, feeBps: platformFeeBps(input.priceKobo), closesAt: iso(now()) })
       return
     }
     const raffle = input as NewListingInput
@@ -1276,7 +1277,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (l.merchantId === db.sellerShops[buyer()]) throw new ApiError('forbidden', 'You can’t buy your own item.')
         const problem = cartError(listingView(db, l))
         if (problem) throw new ApiError('invalid_input', CART_ERROR_TEXT[problem])
-        if (db.orders.some((o) => o.listingId === l.id && o.buyerId === buyer())) throw new ApiError('invalid_input', 'You’ve already arranged this item.')
+        if (l.status !== 'for_sale' && db.orders.some((o) => o.listingId === l.id && o.buyerId === buyer())) throw new ApiError('invalid_input', 'You’ve already arranged this item.')
         const cart = (db.carts[buyer()] ??= [])
         if (!cart.includes(l.id)) cart.push(l.id)
       }),
@@ -1400,6 +1401,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     checkout: ({ listingIds, ...details }) =>
       tx((db) => {
         if (!listingIds.length) throw new ApiError('invalid_input', 'Your cart is empty.')
+        if (new Set(listingIds).size !== listingIds.length) throw new ApiError('not_found', 'One of those items no longer exists.')
         const listings = listingIds.map((id) => getListingOr404(db, id))
         const views = listings.map((l) => listingView(db, l))
         const problems = validateCheckout(details, views.some(isCar)).map((e) => CHECKOUT_ERROR_TEXT[e])
@@ -1408,7 +1410,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           if (v.merchantId === db.sellerShops[buyer()]) throw new ApiError('forbidden', 'You can’t buy your own item.')
           if (lineAmountKobo(v) === null) throw new ApiError('not_for_sale', `${v.title} isn’t for sale any more.`)
           if (isCar(v) && views.length > 1) throw new ApiError('invalid_input', 'Cars are arranged on their own, not with other items.')
-          if (db.orders.some((o) => o.listingId === v.id)) throw new ApiError('invalid_input', `${v.title} has already been arranged.`)
+          if (isWonPrize(v) && db.orders.some((o) => o.listingId === v.id)) throw new ApiError('invalid_input', `${v.title} has already been arranged.`)
         }
         const mine = db.ledger.filter((e) => e.userId === buyer())
         let balance = balanceFromLedger(mine)
@@ -1426,7 +1428,9 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
             const pay = splitPayment(price, balance)
             balance = { cashKobo: balance.cashKobo - pay.fromCash, creditKobo: balance.creditKobo - pay.fromCredit }
             db.ledger.push({ id: uid('E'), userId: buyer(), kind: 'order_payment', cashKobo: -pay.fromCash, creditKobo: -pay.fromCredit, memo: `Bought · ${l.title}`, listingId: l.id, createdAt: at })
-            l.status = 'sold'
+            const taken = takeStock(l.stock)
+            l.stock = taken.stock
+            if (taken.soldOut) l.status = 'sold'
           }
           const order: MockOrder = {
             pin: newDeliveryPin(), riderId: null, pinState: { attempts: 0, lockedUntil: null },

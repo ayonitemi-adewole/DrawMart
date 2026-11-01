@@ -68,7 +68,7 @@ export function ListingKindChooser({ onPick }: { onPick: (k: ListingKind) => voi
   )
 }
 
-const FIELD: Record<ProductError, 'title' | 'price'> = { title_required: 'title', price_too_low: 'price' }
+const FIELD: Record<ProductError, 'title' | 'price' | 'stock'> = { title_required: 'title', price_too_low: 'price', stock_invalid: 'stock' }
 
 /** `form` starts from an existing product: to fix and resend it, edit it in review, or copy it. */
 export function NewProduct({ onBack, onDone, form }: { onBack: () => void; onDone: () => void; form?: ListingForm | null }) {
@@ -85,12 +85,13 @@ export function NewProduct({ onBack, onDone, form }: { onBack: () => void; onDon
   const [category, setCategory] = useState<Category>(source?.category ?? 'Phones')
   const [photos, setPhotos] = useState<string[]>(source?.images ?? [])
   const [price, setPrice] = useState(source ? String(source.priceKobo / 100) : '')
+  const [stock, setStock] = useState(String(source && source.stock > 0 ? source.stock : 1))
   const [showErrors, setShowErrors] = useState(false)
   const [created, setCreated] = useState<ListingView | null>(null)
 
-  const input = { title, priceKobo: parseNairaInput(price) }
+  const input = { title, priceKobo: parseNairaInput(price), stock: Number(stock.replace(/,/g, '').trim() || NaN) }
   const errors = validateProduct(input)
-  const fieldError = (f: 'title' | 'price') => {
+  const fieldError = (f: 'title' | 'price' | 'stock') => {
     const e = showErrors ? errors.find((x) => FIELD[x] === f) : undefined
     return e ? PRODUCT_ERROR_TEXT[e] : undefined
   }
@@ -104,7 +105,7 @@ export function NewProduct({ onBack, onDone, form }: { onBack: () => void; onDon
       toast('A few details need fixing first.', 'error')
       return
     }
-    const details = { title, description, category, images: photos, priceKobo: input.priceKobo }
+    const details = { title, description, category, images: photos, priceKobo: input.priceKobo, stock: input.stock }
     if (changing) {
       // The listing leaves the rejected list as soon as this lands, so don't rely on this form still being there.
       ;(form?.mode === 'edit' ? update : resubmit)
@@ -147,9 +148,12 @@ export function NewProduct({ onBack, onDone, form }: { onBack: () => void; onDon
           <PhotoPicker photos={photos} onChange={setPhotos} />
         </Section>
 
-        <Section n={2} title="Price" sub="Buyers pay exactly this. DrawMart’s fee, set from the price, comes out of your payout.">
+        <Section n={2} title="Price and stock" sub="Buyers pay exactly this. DrawMart’s fee, set from the price, comes out of your payout.">
           <Field label="Price (₦)" htmlFor="p-price" error={fieldError('price')} hint="Delivery in Lagos is included in this price.">
             <input id="p-price" inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value)} className={inputCls} placeholder="250,000" />
+          </Field>
+          <Field label="How many do you have?" htmlFor="p-stock" error={fieldError('stock')} hint="Each order takes one. It shows as sold out when they’re gone.">
+            <input id="p-stock" inputMode="numeric" value={stock} onChange={(e) => setStock(e.target.value)} className={inputCls} />
           </Field>
         </Section>
 
