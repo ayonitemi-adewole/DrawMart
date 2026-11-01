@@ -17,6 +17,7 @@ import type { DayMetrics, ListingMetricsInput, MetricRange } from '@/domain/metr
 import type { SellerApplicationInput, SellerApplicationStatus } from '@/domain/sellers'
 import type {
   Category,
+  RejectionReason,
   DrawResult,
   FeeMode,
   Handover,
@@ -520,6 +521,8 @@ export interface DrawMartApi {
   /** Replaces the saved items; an empty list removes them. Edits don't extend the deadline. */
   savePickupItems(items: PickupItemInput[]): Promise<SavedPickupView | null>
   /** Queues a regular product for admin review. */
+  /** Takes one of this store's rejected listings back to review with its fixed details. */
+  resubmitListing(id: string, input: NewListingInput | NewProductInput): Promise<ListingView>
   createProduct(input: NewProductInput): Promise<ListingView>
   /** Orders for this store's items, with delivery details. */
   listMerchantOrders(): Promise<OrderView[]>
@@ -529,7 +532,8 @@ export interface DrawMartApi {
   // Admin
   listPendingListings(): Promise<ListingView[]>
   approveListing(id: string): Promise<void>
-  rejectListing(id: string): Promise<void>
+  /** Rejected listings go back to the store with this reason, to fix and send again. */
+  rejectListing(id: string, reason: RejectionReason, note: string): Promise<void>
   /** Won items DrawMart sends from escrow, newest first. */
   listPrizeOrders(): Promise<OrderView[]>
 

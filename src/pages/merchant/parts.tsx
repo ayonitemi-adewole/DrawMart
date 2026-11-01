@@ -1,12 +1,37 @@
 import { useRef, useState, type ReactNode } from 'react'
 import { CATEGORY_STYLE } from '@/components/category'
-import { PlusIcon, XIcon } from '@/components/icons'
+import { ClipboardIcon, PlusIcon, XIcon } from '@/components/icons'
 import { useToast } from '@/components/toast'
-import { Card, cx, errorMessage } from '@/components/ui'
+import { Button, Card, Notice, cx, errorMessage } from '@/components/ui'
+import type { ListingView } from '@/api/types'
+import { rejectionReasonText } from '@/domain/rejection'
 import { CATEGORIES, type Category } from '@/domain/types'
 import { photoToDataUrl } from '@/lib/image'
 
 /** Form pieces shared by the raffle and regular-product listing forms. */
+
+/** Why an admin turned this listing down, in their words. Rows from before reasons existed have none. */
+export function RejectionNotice({ listing: l, onFix }: { listing: ListingView; onFix?: () => void }) {
+  return (
+    <Notice
+      tone="hot"
+      icon={XIcon}
+      title={l.rejection ? rejectionReasonText(l.rejection.reason, l.category) : 'Not approved'}
+      action={
+        onFix ? (
+          <Button variant="outline" onClick={onFix}>
+            <ClipboardIcon size={16} /> Fix and resend
+          </Button>
+        ) : undefined
+      }
+    >
+      {l.rejection?.note ? <span className="block whitespace-pre-line">{l.rejection.note}</span> : null}
+      <span className="block">
+        {l.kind === 'raffle' ? 'Change what’s needed and send it again. Your caution fee goes back on hold, so you don’t pay it twice.' : 'Change what’s needed and send it again.'}
+      </span>
+    </Notice>
+  )
+}
 
 export function CategoryPicker({ value, onChange }: { value: Category; onChange: (c: Category) => void }) {
   return (

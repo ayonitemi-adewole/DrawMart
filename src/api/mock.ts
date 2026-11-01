@@ -31,6 +31,7 @@ import {
   validateListingTerms,
 } from '@/domain/listing'
 import { nairaToKobo } from '@/domain/money'
+import { newRejection, REJECTION_ERROR_TEXT, rejectionError, resentCautionFee } from '@/domain/rejection'
 import { DEMO_ACCOUNTS } from './demoAccounts'
 import {
   PURCHASE_ERROR_TEXT,
@@ -80,7 +81,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v26' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v29' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -792,7 +793,7 @@ function listingView(db: Db, l: Listing, audience: 'buyer' | 'full' = 'buyer'): 
   const merchant = db.merchants.find((m) => m.id === l.merchantId)!
   const myNumbers = db.tickets.filter((t) => t.listingId === l.id && t.userId === (db.viewer ?? ME)).map((t) => t.number)
   const r = db.results.find((x) => x.listingId === l.id)
-  return { ...l, handover: audience === 'full' ? l.handover : null, merchant, myNumbers, result: r ? resultView(db, r) : null }
+  return { ...l, handover: audience === 'full' ? l.handover : null, rejection: audience === 'full' ? l.rejection : null, merchant, myNumbers, result: r ? resultView(db, r) : null }
 }
 
 function conversationView(db: Db, c: MockConversation, me: ChatSide): ConversationView {
@@ -1012,14 +1013,15 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
   }
 
   /** Checks one draw item and adds it for review, with its own pickup booking and fee. */
+  const raffleProblems = (input: NewListingInput) => [
+    ...validateListingEconomics(input).map((e) => LISTING_ERROR_TEXT[e]),
+    ...validateListingTerms(input).map((e) => LISTING_TERMS_ERROR_TEXT[e]),
+    ...validateHandover(input.handover, localDate(new Date(now()))).map((e) => HANDOVER_ERROR_TEXT[e]),
+  ]
+
   async function addRaffle(db: Db, input: NewListingInput): Promise<Listing> {
     if (readSession()?.role === 'buyer') throw new ApiError('forbidden', 'Only registered stores can run raffle draws.')
-    const today = localDate(new Date(now()))
-    const problems = [
-      ...validateListingEconomics(input).map((e) => LISTING_ERROR_TEXT[e]),
-      ...validateListingTerms(input).map((e) => LISTING_TERMS_ERROR_TEXT[e]),
-      ...validateHandover(input.handover, today).map((e) => HANDOVER_ERROR_TEXT[e]),
-    ]
+    const problems = raffleProblems(input)
     if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
     // DrawMart sets the fee from the item's value; the store never chooses it.
     const feeBps = platformFeeBps(input.priceKobo)
@@ -1513,6 +1515,40 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         return saved
       }),
 
+    resubmitListing: (id, input) =>
+      tx((db) => {
+        const l = getListingOr404(db, id)
+        if (l.merchantId !== shopId(db)) throw new ApiError('not_found', 'That listing doesn’t exist.')
+        if (l.status !== 'rejected') throw new ApiError('invalid_input', 'Only rejected listings can be sent again.')
+        const details = { title: input.title.trim(), description: input.description.trim(), category: input.category, images: input.images ?? [], priceKobo: input.priceKobo }
+        if (l.kind === 'product') {
+          const problems = validateProduct(input).map((e) => PRODUCT_ERROR_TEXT[e])
+          if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+          Object.assign(l, details, { feeBps: platformFeeBps(input.priceKobo), closesAt: iso(now()) })
+        } else {
+          const raffle = input as NewListingInput
+          const problems = raffleProblems(raffle)
+          if (l.pickupBatchId && handoverMethodFor(input.category) === 'inspection') problems.push(PICKUP_ERROR_TEXT.cars_not_allowed)
+          if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+          const feeBps = platformFeeBps(input.priceKobo)
+          const econ = computeListingEconomics({ ...raffle, feeBps })
+          const amountKobo = resentCautionFee(l.cautionFee.amountKobo, input.category)
+          Object.assign(l, details, {
+            ticketPriceKobo: raffle.ticketPriceKobo, buyerTicketPriceKobo: econ.buyerTicketKobo, ticketCount: econ.ticketCount,
+            feeMode: raffle.feeMode, feeBps, unsoldPolicy: raffle.unsoldPolicy,
+            fallbackPriceKobo: raffle.unsoldPolicy === 'convert_to_sale' ? raffle.fallbackPriceKobo! : null,
+            durationDays: raffle.durationDays, closesAt: iso(now() + raffle.durationDays * DAY),
+            handover: { ...raffle.handover, address: raffle.handover.address.trim(), method: handoverMethodFor(input.category) },
+            cautionFee: { amountKobo, status: 'held' },
+          })
+          // Every item in a shared pickup shows the same fee; settlePickups settles its status.
+          for (const m of db.listings) if (l.pickupBatchId && m.pickupBatchId === l.pickupBatchId) m.cautionFee = { ...m.cautionFee, amountKobo }
+        }
+        l.status = 'pending_review'
+        l.rejection = null
+        return listingView(db, l, 'full')
+      }),
+
     createProduct: (input: NewProductInput) =>
       tx((db) => {
         const problems = validateProduct(input).map((e) => PRODUCT_ERROR_TEXT[e])
@@ -1764,11 +1800,14 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         alertRelists(db, l, now())
       }),
 
-    rejectListing: (id) =>
+    rejectListing: (id, reason, note) =>
       tx((db) => {
         const l = getListingOr404(db, id)
         if (l.status !== 'pending_review') throw new ApiError('invalid_input', 'Only listings in review can be rejected.')
+        const problem = rejectionError(l.kind, { reason, note })
+        if (problem) throw new ApiError('invalid_input', REJECTION_ERROR_TEXT[problem])
         l.status = 'rejected'
+        l.rejection = newRejection(reason, note)
         l.cautionFee = settleCautionFee(l.cautionFee, 'rejected')
       }),
 

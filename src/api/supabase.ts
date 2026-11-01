@@ -16,7 +16,7 @@ import { WINNER_CONSENT_VERSION } from '@/domain/winnerStories'
 import { DEFAULT_PUSH_PREFERENCES } from '@/domain/push'
 import { ORDER_ERROR_TEXT } from '@/domain/orders'
 import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication } from '@/domain/sellers'
-import type { Category, Fulfilment, PickupPoint, FeeMode, Handover, LedgerEntry, LedgerKind, ListingKind, ListingStatus, Merchant, OrderStatus, UnsoldPolicy, User } from '@/domain/types'
+import type { Category, Fulfilment, PickupPoint, FeeMode, Handover, LedgerEntry, LedgerKind, ListingKind, ListingStatus, Merchant, OrderStatus, RejectionReason, UnsoldPolicy, User } from '@/domain/types'
 import { DEMO_ACCOUNTS } from './demoAccounts'
 import {
   type AccountRole,
@@ -110,6 +110,8 @@ interface ListingRow {
   created_at: string
   closes_at: string
   pickup_batch_id: string | null
+  rejection_reason: RejectionReason | null
+  rejection_note: string | null
   boosted_until: string | null
   sold_out_at: string | null
   draw_at: string | null
@@ -313,6 +315,7 @@ function toListingView(l: ListingRow, me: string | null, mine: Mine): ListingVie
     soldOutAt: l.sold_out_at,
     drawAt: l.draw_at,
     pickupBatchId: l.pickup_batch_id,
+    rejection: l.rejection_reason ? { reason: l.rejection_reason, note: l.rejection_note } : null,
     handover: l.handover
       ? { method: l.handover.method, address: l.handover.address, location: toPoint(l.handover.lat, l.handover.lng), contactPhone: l.handover.contact_phone, date: l.handover.date, slot: l.handover.slot }
       : null,
@@ -903,6 +906,13 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       const items = await Promise.all(input.map(async (item) => ({ ...item, images: await uploadPhotos(merchantId, item.images ?? []) })))
       await rpc('save_pickup_items', { p_items: items })
       return readSavedPickup()
+    },
+
+    resubmitListing: async (id, input) => {
+      const merchantId = await myMerchantId()
+      const images = await uploadPhotos(merchantId, input.images ?? [])
+      await rpc('resubmit_listing', { p_listing_id: id, p: { ...input, images } })
+      return getListing(id)
     },
 
     createProduct: async (input: NewProductInput) => {

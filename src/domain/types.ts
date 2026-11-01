@@ -79,6 +79,14 @@ export interface Merchant {
   verified: boolean
 }
 
+/** Why an admin turned a listing down (rejection.ts). */
+export type RejectionReason = 'photos_unclear' | 'price_wrong' | 'item_not_allowed' | 'failed_escrow_check' | 'other'
+
+export interface ListingRejection {
+  reason: RejectionReason
+  note: string | null
+}
+
 export interface Listing {
   id: string
   /** The ID people see, type and search for, e.g. PRD-7K3Q9X. Never changes. See domain/productCode.ts. */
@@ -104,6 +112,8 @@ export interface Listing {
   durationDays: number
   extended: boolean
   status: ListingStatus
+  /** Only while rejected, and only seen by its store and admins. Null on rows rejected before reasons existed. */
+  rejection?: ListingRejection | null
   /** Raffles only: products stay with the store until they're sold. */
   handover: Handover | null
   cautionFee: CautionFee

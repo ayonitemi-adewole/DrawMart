@@ -1,6 +1,6 @@
 import { useRef, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router'
-import { useMe, useMerchant, useMySellerApplication, useSubmitSellerApplication } from '@/api/hooks'
+import { useMe, useMerchant, useMerchantListings, useMySellerApplication, useSubmitSellerApplication } from '@/api/hooks'
 import type { SellerApplicationView } from '@/api/types'
 import { CameraIcon, ChartIcon, CheckIcon, ClockIcon, IdCardIcon, LayoutIcon, PlusIcon, ShieldIcon, StoreIcon, TruckIcon, XIcon, type IconComponent } from '@/components/icons'
 import { useToast } from '@/components/toast'
@@ -281,9 +281,12 @@ const SELL_TABS: SellTab[] = ['items', 'orders', 'insights', 'new']
 /** Once approved: the seller's own items, orders to send, and a regular-product form. */
 function SellerDashboard() {
   const shop = useMerchant()
+  const listings = useMerchantListings()
   const [params, setParams] = useSearchParams()
   const tab: SellTab = SELL_TABS.find((t) => t === params.get('tab')) ?? 'items'
   const setTab = (t: SellTab) => setParams(t === 'items' ? {} : { tab: t }, { replace: true })
+  const fixId = params.get('fix')
+  const fixing = fixId ? listings.data?.find((l) => l.id === fixId && l.status === 'rejected') : undefined
 
   return (
     <div className="flex flex-col gap-6">
@@ -317,15 +320,24 @@ function SellerDashboard() {
           { value: 'new', label: <><PlusIcon size={16} /> New item</> },
         ]}
       />
-      <div key={tab} className="animate-fade-in">
-        {tab === 'orders' ? (
+      <div key={fixing?.id ?? tab} className="animate-fade-in">
+        {fixing ? (
+          <NewProduct fixing={fixing} onBack={() => setTab('items')} onDone={() => setTab('items')} />
+        ) : tab === 'orders' ? (
           <MerchantOrders />
         ) : tab === 'insights' ? (
           <SellerInsights />
         ) : tab === 'new' ? (
           <NewProduct onBack={() => setTab('items')} onDone={() => setTab('items')} />
         ) : (
-          <MerchantListings onNew={() => setTab('new')} emptyBody="List your first item. We check it, then it goes on sale at your price." />
+          <MerchantListings
+            onNew={() => setTab('new')}
+            onFix={(l) => {
+              setParams({ fix: l.id }, { replace: true })
+              window.scrollTo({ top: 0 })
+            }}
+            emptyBody="List your first item. We check it, then it goes on sale at your price."
+          />
         )}
       </div>
     </div>

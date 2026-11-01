@@ -16,7 +16,7 @@ import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto'
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { verifyDraw, winningTicketNumber, createSeed } from '@/domain/draw'
 import { computeListingEconomics, platformFeeBps } from '@/domain/fees'
-import { addDays, localDate } from '@/domain/listing'
+import { addDays, cautionFeeFor, localDate } from '@/domain/listing'
 import { DEMO_ACCOUNTS } from '@/api/demoAccounts'
 
 const sql = (file: string) => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')
@@ -346,7 +346,7 @@ describe('store → admin → draw', () => {
     const far = listingInput()
     const e = await expectFail(asUser(store, `select public.create_listing($1)`, [{ ...far, handover: { ...(far.handover as object), location: { lat: 9.06, lng: 7.49 } } }]), 'invalid_input')
     expect(e.detail).toContain('outside Lagos')
-    await asUser(adminUser, `select public.reject_listing($1)`, [id])
+    await asUser(adminUser, `select public.reject_listing($1, 'photos_unclear')`, [id])
   })
 
   it('prices listings exactly like computeListingEconomics', async () => {
@@ -359,7 +359,7 @@ describe('store → admin → draw', () => {
       expect(row.ticket_count).toBe(econ.ticketCount)
       expect(Number(row.buyer_ticket_price_kobo)).toBe(econ.buyerTicketKobo)
       expect(Number(row.caution_fee_kobo)).toBe(1_000_000)
-      await asUser(adminUser, `select public.reject_listing($1)`, [id])
+      await asUser(adminUser, `select public.reject_listing($1, 'photos_unclear')`, [id])
     }
   })
 
@@ -716,11 +716,68 @@ describe('regular products and orders', () => {
     expect(Number(o.price_kobo)).toBe(165_000_000)
   })
 
+  it('shows the store the reason, and only the store and admins', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
+    await expectFail(asUser(store, `select public.reject_listing($1, 'photos_unclear')`, [id]), 'forbidden')
+    for (const [reason, note] of [[null, null], ['nonsense', null], ['other', 'no']]) {
+      const e = await expectFail(asUser(staff, `select public.reject_listing($1, $2, $3)`, [id, reason, note]), 'invalid_input')
+      expect(e.detail).toBeTruthy()
+    }
+    await asUser(staff, `select public.reject_listing($1, 'photos_unclear', $2)`, [id, '  The cover is too dark. '])
+    const cols = `select rejection_reason, rejection_note, caution_fee_status from public.listings where id = $1`
+    expect(await asUser(store, cols, [id])).toEqual([{ rejection_reason: 'photos_unclear', rejection_note: 'The cover is too dark.', caution_fee_status: 'kept' }])
+    const stranger = await newUser('rejection-stranger@example.com')
+    expect(await asUser(stranger, cols, [id])).toEqual([])
+    await expectFail(asUser(stranger, `select public.resubmit_listing($1, $2)`, [id, listingInput()]), 'forbidden')
+  })
+
+  it('takes a fixed listing back to review on the same row, checked like a new one', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
+    const read = `select l.product_code, l.title, l.status, l.rejection_reason, l.rejection_note, l.caution_fee_kobo, l.caution_fee_status, l.commitment, h.method
+      from public.listings l join public.listing_handovers h on h.listing_id = l.id where l.id = $1`
+    const [before] = await admin<Record<string, unknown>>(read, [id])
+    await expectFail(asUser(store, `select public.resubmit_listing($1, $2)`, [id, listingInput()]), 'invalid_input') // not rejected yet
+    await asUser(staff, `select public.reject_listing($1, 'price_wrong')`, [id])
+
+    await expectFail(asUser(store, `select public.resubmit_listing($1, $2)`, [id, listingInput({ title: ' ' })]), 'invalid_input')
+    expect((await admin<{ status: string }>(`select status from public.listings where id = $1`, [id]))[0].status).toBe('rejected')
+
+    await asUser(store, `select public.resubmit_listing($1, $2)`, [id, listingInput({ title: 'Fixed title' })])
+    expect((await admin(read, [id]))[0]).toEqual({ ...before, title: 'Fixed title' })
+    const seeds = await admin(`select 1 from private.listing_seeds where listing_id = $1`, [id])
+    expect(seeds).toHaveLength(1)
+
+    // Moving to a dearer category moves the fee and the handover; going back doesn't lower it.
+    await asUser(staff, `select public.reject_listing($1, 'other', 'Wrong category')`, [id])
+    await asUser(store, `select public.resubmit_listing($1, $2)`, [id, listingInput({ category: 'Cars' })])
+    const [car] = await admin<{ caution_fee_kobo: string; method: string }>(read, [id])
+    expect(car.method).toBe('inspection')
+    expect(Number(car.caution_fee_kobo)).toBe(cautionFeeFor('Cars'))
+    await asUser(staff, `select public.reject_listing($1, 'other', 'Wrong category')`, [id])
+    await asUser(store, `select public.resubmit_listing($1, $2)`, [id, listingInput({ category: 'Phones' })])
+    const [phone] = await admin<{ caution_fee_kobo: string; method: string }>(read, [id])
+    expect(phone.method).toBe('pickup')
+    expect(Number(phone.caution_fee_kobo)).toBe(cautionFeeFor('Cars'))
+    await asUser(staff, `select public.reject_listing($1, 'photos_unclear')`, [id])
+  })
+
+  it('resends a product with no fee, and has no escrow reason for one', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_product($1) id`, [product])
+    await expectFail(asUser(staff, `select public.reject_listing($1, 'failed_escrow_check')`, [id]), 'invalid_input')
+    await asUser(staff, `select public.reject_listing($1, 'price_wrong')`, [id])
+    await asUser(store, `select public.resubmit_listing($1, $2)`, [id, { ...product, priceKobo: 4_000_000 }])
+    const [row] = await admin<{ status: string; price_kobo: string; fee_bps: number; caution_fee_status: string; rejection_reason: string | null }>(
+      `select status, price_kobo, fee_bps, caution_fee_status, rejection_reason from public.listings where id = $1`, [id])
+    expect(row).toMatchObject({ status: 'pending_review', fee_bps: platformFeeBps(4_000_000), caution_fee_status: 'none', rejection_reason: null })
+    expect(Number(row.price_kobo)).toBe(4_000_000)
+    await asUser(staff, `select public.reject_listing($1, 'price_wrong')`, [id])
+  })
+
   it('keeps the caution fee rules for raffles when rejecting', async () => {
     const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
-    await asUser(staff, `select public.reject_listing($1)`, [id])
+    await asUser(staff, `select public.reject_listing($1, 'photos_unclear')`, [id])
     const [{ id: pid }] = await asUser<{ id: string }>(store, `select public.create_product($1) id`, [product])
-    await asUser(staff, `select public.reject_listing($1)`, [pid])
+    await asUser(staff, `select public.reject_listing($1, 'photos_unclear')`, [pid])
     const rows = await admin<{ kind: string; caution_fee_status: string }>(`select kind, caution_fee_status from public.listings where id in ($1, $2) order by kind`, [pid, id])
     expect(rows).toEqual([{ kind: 'product', caution_fee_status: 'none' }, { kind: 'raffle', caution_fee_status: 'kept' }])
   })
@@ -1124,8 +1181,13 @@ describe('shared pickups', () => {
     expect(await fees(unsold)).toEqual(['kept', 'kept'])
 
     const rejected = await batch([item('Fine'), item('Rejected', 'Home')])
-    await asUser(staff, `select public.reject_listing($1)`, [rejected[1]])
+    await asUser(staff, `select public.reject_listing($1, 'photos_unclear')`, [rejected[1]])
     expect(await fees(rejected)).toEqual(['kept', 'kept'])
+
+    // Fixed and resent, the shared fee goes back on hold. A car still can't join.
+    await expectFail(asUser(store, `select public.resubmit_listing($1, $2)`, [rejected[1], listingInput({ category: 'Cars' })]), 'invalid_input')
+    await asUser(store, `select public.resubmit_listing($1, $2)`, [rejected[1], listingInput({ title: 'Fixed', category: 'Home' })])
+    expect(await fees(rejected)).toEqual(['held', 'held'])
   })
 
   it('leaves listings on their own settling as before', async () => {

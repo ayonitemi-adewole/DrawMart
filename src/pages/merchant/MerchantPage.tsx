@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router'
 import { api } from '@/api'
-import { useCreateListing, useCreateListingBatch, useSavePickupItems, useSavedPickup, useMerchant, useMerchantListings, useMerchantOrders } from '@/api/hooks'
+import { useCreateListing, useCreateListingBatch, useResubmitListing, useSavePickupItems, useSavedPickup, useMerchant, useMerchantListings, useMerchantOrders } from '@/api/hooks'
 import type { ListingView, PickupItemInput } from '@/api/types'
 import { Countdown } from '@/components/Countdown'
 import {
@@ -53,6 +53,8 @@ import { calendarDay, dateTime } from '@/lib/time'
 import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
 import { listingMatchesSearch } from '@/domain/productCode'
 import { ListingKindChooser, MerchantOrders, NewProduct } from './NewProduct'
+import { RejectionNotice } from './parts'
+import { resentCautionFee } from '@/domain/rejection'
 import { CategoryPicker, PhotoPicker, Section } from './parts'
 
 const FEE_MODES: { id: FeeMode; label: string; hint: string }[] = [
@@ -84,6 +86,8 @@ export function MerchantPage() {
   const setTab = (t: Tab, k?: string) => setParams(t === 'draws' ? {} : k ? { tab: t, kind: k } : { tab: t }, { replace: true })
 
   const data = listings.data ?? []
+  const fixId = params.get('fix')
+  const fixing = fixId ? data.find((l) => l.id === fixId && l.status === 'rejected') : undefined
   const active = data.filter(isActive)
   const review = data.filter((l) => l.status === 'pending_review')
   const toSend = orders.data?.filter((o) => o.status === 'paid').length ?? 0
@@ -125,7 +129,7 @@ export function MerchantPage() {
         ) : null}
       </div>
 
-      {!(tab === 'new' && kind === 'raffle') ? <SavedPickupReminder onContinue={() => setTab('new', 'raffle')} /> : null}
+      {!fixing && !(tab === 'new' && kind === 'raffle') ? <SavedPickupReminder onContinue={() => setTab('new', 'raffle')} /> : null}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile icon={TicketIcon} label="Live & on sale" value={active.length} hint={`${active.filter((l) => l.kind === 'raffle').length} draws`} />
@@ -146,11 +150,21 @@ export function MerchantPage() {
         ]}
       />
 
-      <div key={tab} className="animate-fade-in">
-        {tab === 'orders' ? (
+      <div key={fixing?.id ?? tab} className="animate-fade-in">
+        {fixing?.kind === 'product' ? (
+          <NewProduct fixing={fixing} onBack={() => setTab('draws')} onDone={() => setTab('draws')} />
+        ) : fixing ? (
+          <NewListing fixing={fixing} onDone={() => setTab('draws')} />
+        ) : tab === 'orders' ? (
           <MerchantOrders />
         ) : tab !== 'new' ? (
-          <MerchantListings onNew={() => setTab('new')} />
+          <MerchantListings
+            onNew={() => setTab('new')}
+            onFix={(l) => {
+              setParams({ fix: l.id }, { replace: true })
+              window.scrollTo({ top: 0 })
+            }}
+          />
         ) : kind === 'product' ? (
           <NewProduct onBack={() => setTab('new')} onDone={() => setTab('draws')} />
         ) : kind === 'raffle' ? (
@@ -190,11 +204,13 @@ const payoutOf = (d: DraftItem) => computeListingEconomics({ ...d, feeBps: platf
 /**
  * Two steps: describe the draw (or several, to share one pickup and one fee),
  * then book the pickup (or inspection) and pay the caution fee.
+ * `fixing` opens a rejected draw with its details filled in, to send it again.
  */
-function NewListing({ onDone }: { onDone: () => void }) {
+function NewListing({ onDone, fixing }: { onDone: () => void; fixing?: ListingView }) {
   const create = useCreateListing()
   const createBatch = useCreateListingBatch()
-  const sending = create.isPending || createBatch.isPending
+  const resubmit = useResubmitListing()
+  const sending = create.isPending || createBatch.isPending || resubmit.isPending
   const savedPickup = useSavedPickup()
   const savePickup = useSavePickupItems()
   const toast = useToast()
@@ -204,21 +220,21 @@ function NewListing({ onDone }: { onDone: () => void }) {
   const top = useRef<HTMLDivElement>(null)
 
   // Step 1: the draw
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
-  const [category, setCategory] = useState<Category>('Phones')
-  const [photos, setPhotos] = useState<string[]>([])
-  const [price, setPrice] = useState('')
-  const [ticket, setTicket] = useState('')
-  const [feeMode, setFeeMode] = useState<FeeMode>('seller')
-  const [durationDays, setDurationDays] = useState(14)
-  const [customDeadline, setCustomDeadline] = useState(false)
-  const [unsoldPolicy, setUnsoldPolicy] = useState<UnsoldPolicy>('refund')
-  const [fallbackPrice, setFallbackPrice] = useState('')
+  const [title, setTitle] = useState(fixing?.title ?? '')
+  const [description, setDescription] = useState(fixing?.description ?? '')
+  const [category, setCategory] = useState<Category>(fixing?.category ?? 'Phones')
+  const [photos, setPhotos] = useState<string[]>(fixing?.images ?? [])
+  const [price, setPrice] = useState(fixing ? String(fixing.priceKobo / 100) : '')
+  const [ticket, setTicket] = useState(fixing ? String(fixing.ticketPriceKobo / 100) : '')
+  const [feeMode, setFeeMode] = useState<FeeMode>(fixing?.feeMode ?? 'seller')
+  const [durationDays, setDurationDays] = useState(fixing?.durationDays ?? 14)
+  const [customDeadline, setCustomDeadline] = useState(() => !!fixing && !(RULES.durationPresetsDays as readonly number[]).includes(fixing.durationDays))
+  const [unsoldPolicy, setUnsoldPolicy] = useState<UnsoldPolicy>(fixing?.unsoldPolicy ?? 'refund')
+  const [fallbackPrice, setFallbackPrice] = useState(fixing?.fallbackPriceKobo ? String(fixing.fallbackPriceKobo / 100) : '')
   const [showErrors, setShowErrors] = useState(false)
   // Items already saved for this pickup. Empty while listing a single item.
   const [batch, setBatch] = useState<DraftItem[]>([])
-  const [restored, setRestored] = useState(false)
+  const [restored, setRestored] = useState(!!fixing) // a fix isn't part of the saved pickup
 
   // Coming back: pick up the items saved earlier.
   useEffect(() => {
@@ -228,12 +244,19 @@ function NewListing({ onDone }: { onDone: () => void }) {
   }, [restored, savedPickup.isPending, savedPickup.data])
 
   // Step 2: handover
-  const [address, setAddress] = useState('')
-  const [location, setLocation] = useState<GeoPoint | null>(null)
-  const [phone, setPhone] = useState('')
-  const [date, setDate] = useState(() => addDays(today, 2))
-  const [slot, setSlot] = useState<TimeSlot>('morning')
-  const [agreed, setAgreed] = useState(false)
+  const [address, setAddress] = useState(fixing?.handover?.address ?? '')
+  const [location, setLocation] = useState<GeoPoint | null>(fixing?.handover?.location ?? null)
+  const [phone, setPhone] = useState(fixing?.handover?.contactPhone ?? '')
+  // The old day may have passed by the time a rejected listing is fixed.
+  const [firstDate] = useState(() => {
+    const old = fixing?.handover?.date
+    const { min, max } = handoverDateRange(today)
+    return old && old >= min && old <= max ? old : addDays(today, 2)
+  })
+  const [date, setDate] = useState(firstDate)
+  const dateMoved = !!fixing?.handover && firstDate !== fixing.handover.date && date === firstDate
+  const [slot, setSlot] = useState<TimeSlot>(fixing?.handover?.slot ?? 'morning')
+  const [agreed, setAgreed] = useState(!!fixing) // they accepted these terms when they first sent it
   const [showHandoverErrors, setShowHandoverErrors] = useState(false)
   const [created, setCreated] = useState<ListingView[] | null>(null)
 
@@ -265,7 +288,11 @@ function NewListing({ onDone }: { onDone: () => void }) {
   const items = sharing ? batch : [draft]
   const method = sharing ? 'pickup' : handoverMethodFor(category)
   // One fee for the pickup, including the item being written (cars can't join a pickup).
-  const cautionFee = pickupCautionFee([...items.map((i) => i.category), ...(sharing && !formBlank && category !== 'Cars' ? [category] : [])])
+  const cautionFee = fixing
+    ? resentCautionFee(fixing.cautionFee.amountKobo, category)
+    : pickupCautionFee([...items.map((i) => i.category), ...(sharing && !formBlank && category !== 'Cars' ? [category] : [])])
+  const feeToTopUp = fixing ? cautionFee - fixing.cautionFee.amountKobo : 0
+  const carInPickup = !!fixing?.pickupBatchId && category === 'Cars'
   const handover = { address, location, contactPhone: phone, date, slot }
   const handoverErrors = validateHandover(handover, today)
   const handoverError = (e: HandoverError) => (showHandoverErrors && handoverErrors.includes(e) ? HANDOVER_ERROR_TEXT[e] : undefined)
@@ -357,6 +384,10 @@ function NewListing({ onDone }: { onDone: () => void }) {
 
   async function onContinue(e: FormEvent) {
     e.preventDefault()
+    if (carInPickup) {
+      toast(PICKUP_ERROR_TEXT.cars_not_allowed, 'error')
+      return
+    }
     if (sharing && formBlank) {
       go('handover')
       return
@@ -381,6 +412,17 @@ function NewListing({ onDone }: { onDone: () => void }) {
       return
     }
     const onError = (err: unknown) => toast(errorMessage(err), 'error')
+    if (fixing) {
+      // The listing leaves the rejected list as soon as this lands, so don't rely on this form still being there.
+      resubmit
+        .mutateAsync({ id: fixing.id, input: { ...items[0], handover } })
+        .then(() => {
+          toast(`${title.trim()} is back in review.`)
+          onDone()
+        })
+        .catch(onError)
+      return
+    }
     const onSent = (listings: ListingView[]) => {
       setCreated(listings)
       if (savedPickup.data) savePickup.mutate([]) // sent, so nothing is saved any more
@@ -393,6 +435,7 @@ function NewListing({ onDone }: { onDone: () => void }) {
   return (
     <div ref={top} className="flex scroll-mt-6 flex-col gap-5">
       <Stepper step={step} method={method} />
+      {fixing ? <RejectionNotice listing={fixing} /> : null}
 
       {step === 'done' && created ? (
         <SentForReview listings={created} onDone={onDone} />
@@ -515,7 +558,7 @@ function NewListing({ onDone }: { onDone: () => void }) {
                   </div>
                 ) : null}
 
-                {sharing && category === 'Cars' ? <Notice tone="hot" icon={CarIcon}>{PICKUP_ERROR_TEXT.cars_not_allowed}</Notice> : null}
+                {(sharing || carInPickup) && category === 'Cars' ? <Notice tone="hot" icon={CarIcon}>{PICKUP_ERROR_TEXT.cars_not_allowed}</Notice> : null}
                 <HandoverNotice method={handoverMethodFor(category)} cautionFee={cautionFee} sharing={sharing} />
               </Section>
 
@@ -537,12 +580,12 @@ function NewListing({ onDone }: { onDone: () => void }) {
                         ? 'Add and continue to pickup details'
                         : 'Continue to pickup details'}
                 </Button>
-                {category !== 'Cars' && !batchFull ? (
+                {category !== 'Cars' && !batchFull && !fixing ? (
                   <Button type="button" size="lg" variant="outline" loading={savePickup.isPending} onClick={() => void onAddAnother()} disabled={formBlank}>
                     <PlusIcon size={18} /> Save and add another
                   </Button>
                 ) : null}
-                {category !== 'Cars' ? (
+                {category !== 'Cars' && !fixing ? (
                   <Button type="button" size="lg" variant="outline" disabled={savePickup.isPending || (formBlank && !sharing)} onClick={() => void onSaveForLater()}>
                     Save for later
                   </Button>
@@ -551,7 +594,7 @@ function NewListing({ onDone }: { onDone: () => void }) {
                   {sharing ? 'Close' : 'Cancel'}
                 </Button>
               </div>
-              {category !== 'Cars' ? (
+              {category !== 'Cars' && !fixing ? (
                 <p className="text-xs text-subtle">Saved items stay here for {RULES.savedPickupDays} days from your first save, then they’re removed. Nothing is paid or reviewed until you send them.</p>
               ) : null}
             </form>
@@ -602,7 +645,7 @@ function NewListing({ onDone }: { onDone: () => void }) {
                   />
                 </Field>
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <Field label={method === 'inspection' ? 'Inspection day' : 'Pickup day'} htmlFor="handover-date" error={handoverError('date_out_of_range')}>
+                  <Field label={method === 'inspection' ? 'Inspection day' : 'Pickup day'} htmlFor="handover-date" error={handoverError('date_out_of_range')} hint={dateMoved ? 'Your last day has passed, so we picked a new one. Change it if it doesn’t suit you.' : undefined}>
                     <input
                       id="handover-date"
                       type="date"
@@ -631,7 +674,11 @@ function NewListing({ onDone }: { onDone: () => void }) {
                   <div className="flex flex-col gap-1">
                     <h2 className="font-display text-lg font-extrabold">{method === 'inspection' ? 'Inspection caution fee' : 'Delivery caution fee'}</h2>
                     <p className="text-sm text-muted">
-                      {items.length > 1 ? `One fee for all ${items.length} items, the highest among them. Held by DrawMart until the draws end.` : 'Paid now, held by DrawMart until your draw ends.'}
+                      {feeToTopUp > 0
+                        ? `You’ve paid ${formatNaira(fixing!.cautionFee.amountKobo)}. This category’s fee is higher, so you pay the ${formatNaira(feeToTopUp)} difference.`
+                        : fixing
+                          ? 'You’ve paid this already. It goes back on hold, so you don’t pay it twice.'
+                          : items.length > 1 ? `One fee for all ${items.length} items, the highest among them. Held by DrawMart until the draws end.` : 'Paid now, held by DrawMart until your draw ends.'}
                     </p>
                   </div>
                   <span className="font-display text-3xl font-extrabold tabular-nums">{formatNaira(cautionFee)}</span>
@@ -672,7 +719,7 @@ function NewListing({ onDone }: { onDone: () => void }) {
 
               <div className="flex flex-wrap gap-2">
                 <Button type="submit" size="lg" loading={sending}>
-                  <ShieldIcon size={18} /> Pay {formatNaira(cautionFee)} and send for review
+                  <ShieldIcon size={18} /> {feeToTopUp > 0 ? `Pay ${formatNaira(feeToTopUp)} and send for review` : fixing ? 'Send for review again' : `Pay ${formatNaira(cautionFee)} and send for review`}
                 </Button>
                 <Button type="button" size="lg" variant="ghost" onClick={() => go('details')} disabled={sending}>
                   Back
@@ -1037,9 +1084,9 @@ const CAUTION_TEXT: Record<ListingView['cautionFee']['status'], string> = {
   none: '',
 }
 
-type StatusFilter = 'all' | 'live' | 'pending_review' | 'done'
+type StatusFilter = 'all' | 'live' | 'pending_review' | 'rejected' | 'done'
 
-export function MerchantListings({ onNew, emptyBody }: { onNew: () => void; emptyBody?: string }) {
+export function MerchantListings({ onNew, onFix, emptyBody }: { onNew: () => void; onFix: (l: ListingView) => void; emptyBody?: string }) {
   const q = useMerchantListings()
   const [filter, setFilter] = useState<StatusFilter>('all')
   const [search, setSearch] = useState('')
@@ -1047,7 +1094,7 @@ export function MerchantListings({ onNew, emptyBody }: { onNew: () => void; empt
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />
 
   const inFilter = (l: ListingView, f: StatusFilter) =>
-    f === 'all' ? true : f === 'live' ? isActive(l) : f === 'pending_review' ? l.status === 'pending_review' : !isActive(l) && l.status !== 'pending_review'
+    f === 'all' ? true : f === 'live' ? isActive(l) : f === 'pending_review' || f === 'rejected' ? l.status === f : !isActive(l) && l.status !== 'pending_review' && l.status !== 'rejected'
   const found = q.data.filter((l) => listingMatchesSearch(l, search))
   const items = found.filter((l) => inFilter(l, filter))
   const count = (f: StatusFilter) => found.filter((l) => inFilter(l, f)).length
@@ -1064,6 +1111,7 @@ export function MerchantListings({ onNew, emptyBody }: { onNew: () => void; empt
             { value: 'all', label: 'All', count: found.length },
             { value: 'live', label: 'Live & on sale', count: count('live') },
             { value: 'pending_review', label: 'In review', count: count('pending_review') },
+            ...(q.data.some((l) => l.status === 'rejected') ? [{ value: 'rejected' as const, label: 'Rejected', count: count('rejected') }] : []),
             { value: 'done', label: 'Finished', count: count('done') },
           ]}
         />
@@ -1085,7 +1133,7 @@ export function MerchantListings({ onNew, emptyBody }: { onNew: () => void; empt
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
           {items.map((l) => {
-            if (l.kind === 'product') return <ProductCard key={l.id} listing={l} />
+            if (l.kind === 'product') return <ProductCard key={l.id} listing={l} onFix={() => onFix(l)} />
             const econ = computeListingEconomics(l)
             const s = statusFor(l)
             const h = l.handover
@@ -1104,7 +1152,9 @@ export function MerchantListings({ onNew, emptyBody }: { onNew: () => void; empt
                     </span>
                   </div>
                 </div>
-                {l.status === 'pending_review' && h ? (
+                {l.status === 'rejected' ? (
+                  <RejectionNotice listing={l} onFix={() => onFix(l)} />
+                ) : l.status === 'pending_review' && h ? (
                   <div className="flex items-center gap-2 rounded-2xl bg-ground p-3 text-xs">
                     {h.method === 'inspection' ? <CarIcon size={16} className="shrink-0 text-brand" /> : <TruckIcon size={16} className="shrink-0 text-brand" />}
                     <span>
@@ -1131,7 +1181,7 @@ export function MerchantListings({ onNew, emptyBody }: { onNew: () => void; empt
                   <div className="flex items-center justify-between text-xs">
                     <dt className="text-subtle">{l.pickupBatchId ? 'Caution fee (shared pickup)' : 'Caution fee'}</dt>
                     <dd className={cx('font-semibold', l.cautionFee.status === 'refunded' ? 'text-brand' : l.cautionFee.status === 'kept' ? 'text-hot-ink' : 'text-muted')}>
-                      {formatNaira(l.cautionFee.amountKobo)} {CAUTION_TEXT[l.cautionFee.status]}
+                      {formatNaira(l.cautionFee.amountKobo)} {l.status === 'rejected' ? 'kept unless you resend' : CAUTION_TEXT[l.cautionFee.status]}
                     </dd>
                   </div>
                 </dl>
@@ -1146,7 +1196,7 @@ export function MerchantListings({ onNew, emptyBody }: { onNew: () => void; empt
 }
 
 /** A regular product: no tickets, so just its price, payout and status. */
-function ProductCard({ listing: l }: { listing: ListingView }) {
+function ProductCard({ listing: l, onFix }: { listing: ListingView; onFix: () => void }) {
   const s = statusFor(l)
   const { payoutKobo } = saleEconomics(l.priceKobo, l.feeBps)
   return (
@@ -1164,6 +1214,7 @@ function ProductCard({ listing: l }: { listing: ListingView }) {
           </span>
         </div>
       </div>
+      {l.status === 'rejected' ? <RejectionNotice listing={l} onFix={onFix} /> : null}
       <dl className="flex flex-col gap-1 border-t border-dashed border-line pt-3 text-sm">
         <div className="flex items-center justify-between">
           <dt className="text-subtle">Price</dt>

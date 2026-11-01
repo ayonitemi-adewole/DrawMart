@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
-import type { Kobo } from '@/domain/types'
+import type { Kobo, RejectionReason } from '@/domain/types'
 import { api } from './index'
 import type { MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput } from '@/domain/sellers'
@@ -365,6 +365,11 @@ export function useSavePickupItems() {
   })
 }
 
+export function useResubmitListing() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: ({ id, input }: { id: string; input: NewListingInput | NewProductInput }) => api.resubmitListing(id, input), onSettled: invalidate })
+}
+
 export function useCreateProduct() {
   const invalidate = useInvalidateAll()
   return useMutation({ mutationFn: (input: NewProductInput) => api.createProduct(input), onSettled: invalidate })
@@ -417,7 +422,8 @@ export function useCreateListing() {
 export function useReviewListing() {
   const invalidate = useInvalidateAll()
   return useMutation({
-    mutationFn: ({ id, approve }: { id: string; approve: boolean }) => (approve ? api.approveListing(id) : api.rejectListing(id)),
+    mutationFn: (d: { id: string; approve: true } | { id: string; approve: false; reason: RejectionReason; note: string }) =>
+      d.approve ? api.approveListing(d.id) : api.rejectListing(d.id, d.reason, d.note),
     onSettled: invalidate,
   })
 }

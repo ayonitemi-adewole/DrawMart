@@ -1,12 +1,14 @@
-import { useState } from 'react'
+import { useState, type FormEvent } from 'react'
 import { usePendingListings, useReviewListing } from '@/api/hooks'
 import type { ListingView } from '@/api/types'
 import { CalendarIcon, CarIcon, CheckIcon, ClipboardIcon, LockIcon, MapPinIcon, TruckIcon, XIcon } from '@/components/icons'
 import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
 import { Sheet } from '@/components/Sheet'
 import { useToast } from '@/components/toast'
-import { Badge, Button, Card, EmptyState, ErrorState, PageTitle, ProductImage, Skeleton, cx, errorMessage } from '@/components/ui'
+import { Badge, Button, Card, EmptyState, ErrorState, Field, PageTitle, ProductImage, Skeleton, cx, errorMessage, inputCls } from '@/components/ui'
 import { computeListingEconomics } from '@/domain/fees'
+import { REJECTION_ERROR_TEXT, REJECTION_NOTE_MAX, rejectionError, rejectionReasonsFor, rejectionReasonText } from '@/domain/rejection'
+import type { RejectionReason } from '@/domain/types'
 import { saleEconomics } from '@/domain/orders'
 import { listingMatchesSearch } from '@/domain/productCode'
 import { TIME_SLOTS, UNSOLD_POLICY_LABEL } from '@/domain/listing'
@@ -85,16 +87,35 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
   const checks = product ? PRODUCT_CHECKS : CHECKS[method]
   const [checked, setChecked] = useState<boolean[]>(() => checks.map(() => false))
   const [confirmReject, setConfirmReject] = useState(false)
+  const [reason, setReason] = useState<RejectionReason | null>(null)
+  const [note, setNote] = useState('')
+  const [showRejectError, setShowRejectError] = useState(false)
+  const rejectProblem = rejectionError(l.kind, { reason, note })
   const ready = checked.every(Boolean)
   const econ = computeListingEconomics(l)
   const busy = review.isPending
 
-  function decide(approve: boolean) {
+  function approve() {
     review.mutate(
-      { id: l.id, approve },
+      { id: l.id, approve: true },
       {
-        onSuccess: () => toast(approve ? `${l.title} is live.` : `${l.title} was rejected.`, approve ? 'success' : 'info'),
+        onSuccess: () => toast(`${l.title} is live.`),
         onError: (e) => toast(errorMessage(e), 'error'),
+      },
+    )
+  }
+
+  function reject(e: FormEvent) {
+    e.preventDefault()
+    if (rejectProblem || !reason) {
+      setShowRejectError(true)
+      return
+    }
+    review.mutate(
+      { id: l.id, approve: false, reason, note },
+      {
+        onSuccess: () => toast(`${l.title} was rejected. The store can see why.`, 'info'),
+        onError: (err) => toast(errorMessage(err), 'error'),
         onSettled: () => setConfirmReject(false),
       },
     )
@@ -195,7 +216,7 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
           ))}
         </ul>
         <div className="mt-auto flex flex-col gap-2 pt-1">
-          <Button loading={busy && review.variables?.approve} disabled={!ready || busy} onClick={() => decide(true)}>
+          <Button loading={busy && review.variables?.approve} disabled={!ready || busy} onClick={approve}>
             <LockIcon size={16} /> {ready ? (product ? 'Approve and put on sale' : 'Approve and go live') : 'Complete the checklist'}
           </Button>
           <Button variant="danger" disabled={busy} onClick={() => setConfirmReject(true)}>
@@ -207,22 +228,45 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
       <Sheet open={confirmReject} onClose={() => !busy && setConfirmReject(false)} title="Reject listing">
         <h2 className="pr-10 font-display text-2xl font-extrabold">Reject “{l.title}”?</h2>
         <p className="text-sm text-muted">
-          The store will need to submit a new listing
+          The store sees your reason and can fix the listing and send it again
           {product
             ? '.'
             : l.pickupBatchId
-              ? `. This item shares a pickup, so the store loses the whole ${formatNaira(l.cautionFee.amountKobo)} caution fee, even if its other draws sell out.`
-              : `, and its ${formatNaira(l.cautionFee.amountKobo)} caution fee is kept to cover the ${method === 'inspection' ? 'inspection visit' : 'pickup and return'}.`}{' '}
-          This can’t be undone.
+              ? `. This item shares a pickup, so unless they do, the store loses the whole ${formatNaira(l.cautionFee.amountKobo)} caution fee, even if its other draws sell out.`
+              : `. Unless they do, its ${formatNaira(l.cautionFee.amountKobo)} caution fee is kept to cover the ${method === 'inspection' ? 'inspection visit' : 'pickup and return'}.`}{' '}
         </p>
-        <div className="flex gap-2">
-          <Button variant="outline" className="flex-1" onClick={() => setConfirmReject(false)} disabled={busy}>
-            Keep in review
-          </Button>
-          <Button variant="danger" className="flex-1" loading={busy} onClick={() => decide(false)}>
-            Reject listing
-          </Button>
-        </div>
+        <form onSubmit={reject} noValidate className="flex flex-col gap-4">
+          <fieldset className="flex flex-col gap-1">
+            <legend className="mb-1.5 text-sm font-bold">Reason</legend>
+            {rejectionReasonsFor(l.kind).map((r) => (
+              <label key={r} className={cx('flex min-h-11 cursor-pointer items-center gap-3 rounded-xl border px-3 text-sm transition', reason === r ? 'border-brand bg-brand-soft' : 'border-line hover:border-line-strong')}>
+                <input type="radio" name={`reason-${l.id}`} checked={reason === r} onChange={() => setReason(r)} className="size-4 shrink-0 accent-brand" />
+                {rejectionReasonText(r, l.category)}
+              </label>
+            ))}
+            {showRejectError && rejectProblem === 'reason_required' ? (
+              <span className="text-xs font-semibold text-hot-ink" role="alert">
+                {REJECTION_ERROR_TEXT.reason_required}
+              </span>
+            ) : null}
+          </fieldset>
+          <Field
+            label={reason === 'other' ? 'What’s wrong?' : 'Note for the store (optional)'}
+            htmlFor={`reject-note-${l.id}`}
+            hint={`${note.length}/${REJECTION_NOTE_MAX}`}
+            error={showRejectError && rejectProblem && rejectProblem !== 'reason_required' ? REJECTION_ERROR_TEXT[rejectProblem] : undefined}
+          >
+            <textarea id={`reject-note-${l.id}`} value={note} maxLength={REJECTION_NOTE_MAX} onChange={(e) => setNote(e.target.value)} rows={3} className={cx(inputCls, 'py-3')} placeholder="e.g. The cover photo is too dark to see the screen." />
+          </Field>
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" className="flex-1" onClick={() => setConfirmReject(false)} disabled={busy}>
+              Keep in review
+            </Button>
+            <Button type="submit" variant="danger" className="flex-1" loading={busy}>
+              Reject listing
+            </Button>
+          </div>
+        </form>
       </Sheet>
     </Card>
   )

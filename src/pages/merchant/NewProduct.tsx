@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { api } from '@/api'
 import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
 import { matchesProductSearch } from '@/domain/productCode'
-import { useCreateProduct, useMerchant, useMerchantOrders } from '@/api/hooks'
+import { useCreateProduct, useMerchant, useMerchantOrders, useResubmitListing } from '@/api/hooks'
 import type { ListingView } from '@/api/types'
 import { CheckIcon, ClipboardIcon, ShieldIcon, StoreIcon, TicketIcon, TruckIcon, type IconComponent } from '@/components/icons'
 import { OrderCard } from '@/components/OrderCard'
@@ -12,7 +12,7 @@ import { platformFeeBps } from '@/domain/fees'
 import { formatNaira, parseNairaInput } from '@/domain/money'
 import { PRODUCT_ERROR_TEXT, saleEconomics, validateProduct, type ProductError } from '@/domain/orders'
 import type { Category, ListingKind } from '@/domain/types'
-import { CategoryPicker, PhotoPicker, Section } from './parts'
+import { CategoryPicker, PhotoPicker, RejectionNotice, Section } from './parts'
 
 const KINDS: { kind: ListingKind; icon: IconComponent; title: string; body: string; points: string[] }[] = [
   {
@@ -70,15 +70,18 @@ export function ListingKindChooser({ onPick }: { onPick: (k: ListingKind) => voi
 
 const FIELD: Record<ProductError, 'title' | 'price'> = { title_required: 'title', price_too_low: 'price' }
 
-export function NewProduct({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
+/** `fixing` opens a rejected product with its details filled in, to send it again. */
+export function NewProduct({ onBack, onDone, fixing }: { onBack: () => void; onDone: () => void; fixing?: ListingView }) {
   const create = useCreateProduct()
+  const resubmit = useResubmitListing()
+  const sending = create.isPending || resubmit.isPending
   const merchant = useMerchant()
   const toast = useToast()
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
-  const [category, setCategory] = useState<Category>('Phones')
-  const [photos, setPhotos] = useState<string[]>([])
-  const [price, setPrice] = useState('')
+  const [title, setTitle] = useState(fixing?.title ?? '')
+  const [description, setDescription] = useState(fixing?.description ?? '')
+  const [category, setCategory] = useState<Category>(fixing?.category ?? 'Phones')
+  const [photos, setPhotos] = useState<string[]>(fixing?.images ?? [])
+  const [price, setPrice] = useState(fixing ? String(fixing.priceKobo / 100) : '')
   const [showErrors, setShowErrors] = useState(false)
   const [created, setCreated] = useState<ListingView | null>(null)
 
@@ -98,8 +101,20 @@ export function NewProduct({ onBack, onDone }: { onBack: () => void; onDone: () 
       toast('A few details need fixing first.', 'error')
       return
     }
+    const details = { title, description, category, images: photos, priceKobo: input.priceKobo }
+    if (fixing) {
+      // The listing leaves the rejected list as soon as this lands, so don't rely on this form still being there.
+      resubmit
+        .mutateAsync({ id: fixing.id, input: details })
+        .then(() => {
+          toast(`${title.trim()} is back in review.`)
+          onDone()
+        })
+        .catch((err) => toast(errorMessage(err), 'error'))
+      return
+    }
     create.mutate(
-      { title, description, category, images: photos, priceKobo: input.priceKobo },
+      details,
       { onSuccess: setCreated, onError: (err) => toast(errorMessage(err), 'error') },
     )
   }
@@ -109,6 +124,7 @@ export function NewProduct({ onBack, onDone }: { onBack: () => void; onDone: () 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_360px] lg:items-start">
       <form onSubmit={onSubmit} noValidate className="flex min-w-0 flex-col gap-5">
+        {fixing ? <RejectionNotice listing={fixing} /> : null}
         <Section n={1} title="The product" sub="What buyers are getting.">
           <Field label="Product name" htmlFor="p-title" error={fieldError('title')}>
             <input id="p-title" value={title} onChange={(e) => setTitle(e.target.value)} className={inputCls} placeholder="e.g. Office chair, mesh back" />
@@ -139,10 +155,10 @@ export function NewProduct({ onBack, onDone }: { onBack: () => void; onDone: () 
         </Notice>
 
         <div className="flex flex-wrap gap-2">
-          <Button type="submit" size="lg" loading={create.isPending}>
-            <ClipboardIcon size={18} /> Send for review
+          <Button type="submit" size="lg" loading={sending}>
+            <ClipboardIcon size={18} /> {fixing ? 'Send for review again' : 'Send for review'}
           </Button>
-          <Button type="button" size="lg" variant="ghost" onClick={onBack} disabled={create.isPending}>
+          <Button type="button" size="lg" variant="ghost" onClick={onBack} disabled={sending}>
             Back
           </Button>
         </div>
