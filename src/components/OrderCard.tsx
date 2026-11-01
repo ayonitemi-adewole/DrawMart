@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router'
-import { useCancelOrder, useDispatchOrder } from '@/api/hooks'
+import { useCancelOrder, useDispatchOrder, useSellerConfirmOrder } from '@/api/hooks'
+import { needsConfirming } from '@/domain/orderConfirm'
+import { photoToDataUrl } from '@/lib/image'
 import type { OrderView } from '@/api/types'
 import { directionsUrl } from '@/domain/location'
 import { CANCEL_NOTE_MAX, CANCEL_REASONS, CANCEL_REASON_FOR_BUYER, CANCEL_REASON_TEXT, CANCEL_STOCK_TEXT, canCancelOrder, cancelError } from '@/domain/orderCancel'
@@ -9,16 +11,17 @@ import { formatNaira } from '@/domain/money'
 import { dateTime } from '@/lib/time'
 import { ProductId } from './ProductId'
 import { DeliveryPin } from './DeliveryPin'
-import { MapPinIcon, PhoneIcon, StoreIcon, TruckIcon, XIcon } from './icons'
+import { CameraIcon, ClockIcon, MapPinIcon, PhoneIcon, StoreIcon, TruckIcon, XIcon } from './icons'
 import { Sheet } from './Sheet'
 import { useToast } from './toast'
 import { Badge, Button, Card, Field, Notice, ProductImage, cx, errorMessage, inputCls, type Tone } from './ui'
 
-function statusOf(o: OrderView): { label: string; tone: Tone } {
+function statusOf(o: OrderView, audience: 'buyer' | 'store' | 'admin'): { label: string; tone: Tone } {
   const pickup = o.fulfilment === 'pickup'
   switch (o.status) {
     case 'paid':
-      return { label: o.isPrize ? 'Being prepared' : 'Paid · being prepared', tone: 'ticket' }
+      if (needsConfirming(o)) return { label: audience === 'buyer' ? 'Paid · waiting for the seller' : 'Paid · confirm it', tone: 'ticket' }
+      return { label: o.isPrize ? 'Being prepared' : o.confirmedAt ? 'Confirmed · being prepared' : 'Paid · being prepared', tone: 'ticket' }
     case 'dispatched':
       return { label: pickup ? 'On its way to the pickup location' : 'On the way', tone: 'sky' }
     case 'delivered':
@@ -36,12 +39,14 @@ function statusOf(o: OrderView): { label: string; tone: Tone } {
 export function OrderCard({ order: o, audience }: { order: OrderView; audience: 'buyer' | 'store' | 'admin' }) {
   const dispatch = useDispatchOrder()
   const toast = useToast()
-  const s = statusOf(o)
+  const s = statusOf(o, audience)
   const pickup = o.fulfilment === 'pickup'
   const sender = audience !== 'buyer'
   const onError = (e: unknown) => toast(errorMessage(e), 'error')
   const cancelled = o.status === 'cancelled'
   const [cancelling, setCancelling] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const waiting = needsConfirming(o)
 
   return (
     <Card className="flex min-w-0 animate-fade-up flex-col gap-4 p-4 sm:p-5">
@@ -113,8 +118,25 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
         ) : null}
       </div>}
 
+      {waiting && o.confirmBy ? (
+        <Notice tone="ticket" icon={ClockIcon} title={audience === 'buyer' ? `The seller has until ${dateTime(o.confirmBy)} to confirm` : `Confirm by ${dateTime(o.confirmBy)}`}>
+          {audience === 'buyer' ? 'They’ll send a photo of your item. If they don’t, you’re refunded automatically.' : 'Take a fresh photo of the item. If you don’t, the order cancels, the buyer is refunded and the product is paused.'}
+        </Notice>
+      ) : null}
+      {o.confirmPhoto && !cancelled ? (
+        <div className="flex items-center gap-3 text-sm text-muted">
+          <img src={o.confirmPhoto} alt="The seller’s photo of this item" className="size-16 rounded-xl border border-line bg-photo object-cover" />
+          {audience === 'buyer' ? 'The seller’s photo of your item.' : 'Your photo for this order.'}
+        </div>
+      ) : null}
       {audience === 'buyer' && o.deliveryPin ? <DeliveryPin pin={o.deliveryPin} pickup={pickup} /> : null}
-      {sender && o.status === 'paid' ? (
+      {sender && waiting ? (
+        <Button onClick={() => setConfirming(true)}>
+          <CameraIcon size={16} /> Confirm with a photo
+        </Button>
+      ) : null}
+      {confirming ? <ConfirmSheet order={o} onClose={() => setConfirming(false)} /> : null}
+      {sender && o.status === 'paid' && !waiting ? (
         <Button loading={dispatch.isPending} onClick={() => dispatch.mutate(o.id, { onSuccess: () => toast('A rider can now take it. They’ll confirm it with the buyer’s PIN.'), onError })}>
           <TruckIcon size={16} /> {pickup ? 'Ready to go to the pickup location' : 'Ready for a rider'}
         </Button>
@@ -132,6 +154,65 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
         </Link>
       ) : null}
     </Card>
+  )
+}
+
+function ConfirmSheet({ order: o, onClose }: { order: OrderView; onClose: () => void }) {
+  const confirm = useSellerConfirmOrder()
+  const toast = useToast()
+  const [photo, setPhoto] = useState<string | null>(null)
+  const [reading, setReading] = useState(false)
+
+  async function onPick(file: File | undefined) {
+    if (!file) return
+    setReading(true)
+    try {
+      setPhoto(await photoToDataUrl(file))
+    } catch (e) {
+      toast(errorMessage(e), 'error')
+    } finally {
+      setReading(false)
+    }
+  }
+
+  function onSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (!photo) {
+      toast('Add a photo of the item.', 'error')
+      return
+    }
+    confirm
+      .mutateAsync({ id: o.id, photo })
+      .then(() => {
+        toast('Confirmed. Mark it ready when a rider can collect it.')
+        onClose()
+      })
+      .catch((err) => toast(errorMessage(err), 'error'))
+  }
+
+  return (
+    <Sheet open onClose={() => !confirm.isPending && onClose()} title="Confirm order">
+      <h2 className="pr-10 font-display text-2xl font-extrabold">Confirm you have it</h2>
+      <p className="text-sm text-muted">
+        Take a fresh photo of {o.listingTitle}{o.quantity > 1 ? ` × ${o.quantity}` : ''}. The buyer will see it, so make sure it’s the actual item.
+      </p>
+      <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
+        {photo ? <img src={photo} alt="Your photo of the item" className="max-h-64 w-full rounded-2xl border border-line bg-photo object-contain" /> : null}
+        <label className="flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-xl border border-line-strong px-4 text-sm font-bold">
+          <CameraIcon size={16} /> {reading ? 'Reading…' : photo ? 'Take another' : 'Take a photo'}
+          {/* On phones this opens the camera. */}
+          <input type="file" accept="image/*" capture="environment" className="sr-only" onChange={(e) => void onPick(e.target.files?.[0])} />
+        </label>
+        <div className="flex gap-2">
+          <Button type="button" variant="outline" className="flex-1" onClick={onClose} disabled={confirm.isPending}>
+            Not yet
+          </Button>
+          <Button type="submit" className="flex-1" loading={confirm.isPending}>
+            Confirm order
+          </Button>
+        </div>
+      </form>
+    </Sheet>
   )
 }
 

@@ -280,7 +280,7 @@ export function MerchantOrders() {
     <section className="flex flex-col gap-4">
       {toSend.length ? (
         <Notice tone="ticket" icon={TruckIcon}>
-          {toSend.length === 1 ? '1 order is' : `${toSend.length} orders are`} waiting. Mark each one ready once a rider can collect it.
+          {toSend.length === 1 ? '1 order is' : `${toSend.length} orders are`} waiting. Confirm each one with a photo, then mark it ready when a rider can collect it.
         </Notice>
       ) : null}
       <Segmented<OrderTab>

@@ -203,6 +203,9 @@ interface OrderRow {
   merchant_id: string
   price_kobo: number
   quantity: number
+  confirm_by: string | null
+  confirmed_at: string | null
+  confirm_photo: string | null
   delivery_fee_kobo: number
   cancelled_at: string | null
   cancel_reason: CancelReason | null
@@ -389,6 +392,9 @@ function toOrderView(o: OrderRow): OrderView {
     priceKobo: num(o.price_kobo),
     feeKobo: num(o.fee_kobo),
     quantity: o.quantity,
+    confirmBy: o.confirm_by,
+    confirmedAt: o.confirmed_at,
+    confirmPhoto: o.confirm_photo,
     deliveryFeeKobo: num(o.delivery_fee_kobo),
     cancelledAt: o.cancelled_at,
     cancelReason: o.cancel_reason,
@@ -1070,6 +1076,10 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     setDeliveryPrice: (areaA, areaB, priceKobo) => rpc('set_delivery_price', { p_area_a: areaA, p_area_b: areaB, p_price_kobo: priceKobo }),
     setDeliverySizeExtra: (size, extraKobo) => rpc('set_delivery_size_extra', { p_size: size, p_extra_kobo: extraKobo }),
     setShopDeliveryArea: (area) => rpc('set_shop_delivery_area', { p_area: area }),
+    sellerConfirmOrder: async (orderId, photo) => {
+      const [url] = await uploadPhotos(await myMerchantId(), [photo])
+      await rpc('seller_confirm_order', { p_order_id: orderId, p_photo: url })
+    },
     cancelOrder: (orderId, reason, note) => rpc('cancel_order', { p_order_id: orderId, p_reason: reason, p_note: note }),
     listCancelRates: () => rpc<CancelRateView[]>('merchant_cancel_rates'),
     dispatchOrder: (orderId) => rpc('dispatch_order', { p_order_id: orderId }),

@@ -603,6 +603,8 @@ export interface DrawMartApi {
   markPayoutsPaid(ids: string[], reference: string): Promise<void>
   /** The store has sent the item. */
   dispatchOrder(orderId: string): Promise<void>
+  /** A seller's fresh photo of the item, needed before a rider can take it. */
+  sellerConfirmOrder(orderId: string, photo: string): Promise<void>
   /** Before it's ready for a rider. The buyer is refunded straight away, the way they paid. */
   cancelOrder(orderId: string, reason: CancelReason, note: string): Promise<void>
   /** What delivery costs, for checkout and the admin page. Public, since it's only prices. */

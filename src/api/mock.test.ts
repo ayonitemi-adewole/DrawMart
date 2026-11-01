@@ -294,6 +294,8 @@ describe('mock api', () => {
     await expect(buyNow(api, p.id, delivery)).rejects.toMatchObject({ code: 'not_for_sale' })
 
     expect((await api.listMerchantOrders()).map((o) => o.id)).toEqual([order.id])
+    await expect(api.dispatchOrder(order.id)).rejects.toThrow('Confirm it with a photo')
+    await api.sellerConfirmOrder(order.id, '/assets/confirm.jpg')
     await api.dispatchOrder(order.id)
     await expect(api.dispatchOrder(order.id)).rejects.toThrow(ApiError)
   })
@@ -463,6 +465,7 @@ describe('mock api', () => {
     const [second] = await api.checkout({ listingIds: [p.id], ...details })
     const [third] = await api.checkout({ listingIds: [p.id], ...details })
     await seller()
+    await api.sellerConfirmOrder(second.id, '/assets/confirm.jpg')
     await api.dispatchOrder(second.id)
     await expect(api.cancelOrder(second.id, 'damaged', '')).rejects.toThrow('ready for a rider')
     await api.cancelOrder(third.id, 'out_of_stock', '')
@@ -532,6 +535,45 @@ describe('mock api', () => {
     expect(order.deliveryFeeKobo).toBe(k(4_200)) // from Yaba to the Lekki pickup location, small
   })
 
+  it('cancels and pauses if a seller doesn’t confirm in time, with a reminder first', async () => {
+    let t = Date.now()
+    const api = make(() => t)
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const details = { fulfilment: 'delivery' as const, delivery, pickupPointId: null }
+    const seller = () => api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const shopper = () => api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    await seller()
+    const p = await api.createProduct({ title: 'Quiet shop lamp', description: '', category: 'Home', priceKobo: k(5_000), stock: 2 })
+    await api.approveListing(p.id)
+    await shopper()
+    await api.topUp(k(50_000))
+    const start = (await api.getWallet()).balance.cashKobo
+    const [late] = await api.checkout({ listingIds: [p.id], ...details })
+    const [onTime] = await api.checkout({ listingIds: [p.id], ...details })
+    expect(late.confirmBy).toBe(new Date(t + 12 * 3_600_000).toISOString())
+    await expect(api.sellerConfirmOrder(late.id, '/assets/confirm.jpg')).rejects.toThrow() // not the buyer's to confirm
+
+    await seller()
+    await expect(api.sellerConfirmOrder(onTime.id, 'nonsense')).rejects.toThrow('Add a photo')
+    await api.sellerConfirmOrder(onTime.id, '/assets/confirm.jpg')
+    const kinds = async () => (await api.listNotifications()).filter((n) => n.listingId === p.id).map((n) => n.kind)
+    t += 9.5 * 3_600_000
+    expect(await kinds()).toContain('store_order_confirm_soon')
+    t += 1000
+    expect((await kinds()).filter((x) => x === 'store_order_confirm_soon')).toHaveLength(1)
+
+    t += 3 * 3_600_000
+    expect(await kinds()).toContain('store_order_expired')
+    expect((await api.getListing(p.id))).toMatchObject({ status: 'paused', stock: 1 })
+    expect((await api.listMerchantOrders()).find((o) => o.id === onTime.id)).toMatchObject({ status: 'paid', confirmPhoto: '/assets/confirm.jpg' })
+    await api.resumeListing(p.id)
+
+    await shopper()
+    expect((await api.listMyOrders()).find((o) => o.id === late.id)).toMatchObject({ status: 'cancelled', cancelReason: 'not_confirmed', deliveryPin: null })
+    // Everything back but the confirmed order's item and the one delivery fee it still needs.
+    expect((await api.getWallet()).balance.cashKobo).toBe(start - k(5_000) - onTime.deliveryFeeKobo)
+  })
+
   it('only marks an order delivered through a delivery account and the buyer’s PIN', async () => {
     let t = Date.now()
     const api = make(() => t)
@@ -554,6 +596,7 @@ describe('mock api', () => {
     const [forStore] = (await api.listMerchantOrders()).filter((o) => o.id === placed.id)
     expect(forStore.deliveryPin).toBeNull()
     expect(JSON.stringify(forStore)).not.toContain(pin)
+    await api.sellerConfirmOrder(placed.id, '/assets/confirm.jpg')
     await api.dispatchOrder(placed.id)
 
     // In the pool: no buyer details until a rider takes it.
@@ -853,6 +896,7 @@ describe('mock api', () => {
       await sign(api, 'store')
       const line = async () => (await api.listPayouts()).find((l) => l.listingId === p.id)!
       expect(await line()).toMatchObject({ kind: 'sale', status: 'waiting', amountKobo: placed.priceKobo - placed.feeKobo, productCode: p.productCode, listingTitle: 'Payout chair' })
+      await api.sellerConfirmOrder(placed.id, '/assets/confirm.jpg')
       await api.dispatchOrder(placed.id)
 
       await sign(api, 'rider')

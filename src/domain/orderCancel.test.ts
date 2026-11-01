@@ -27,6 +27,16 @@ describe('cancelling an order', () => {
     expect(stockAfterCancel('out_of_stock', { stock: 1, status: 'paused' }, 1)).toEqual({ stock: 0, status: 'paused' })
   })
 
+  it('pauses a product when a seller didn’t respond, but only products', () => {
+    expect(stockAfterCancel('not_confirmed', { stock: 0, status: 'sold', kind: 'product' }, 1)).toEqual({ stock: 1, status: 'paused' })
+    expect(stockAfterCancel('not_confirmed', { stock: 2, status: 'for_sale', kind: 'product' }, 1)).toEqual({ stock: 3, status: 'paused' })
+    expect(stockAfterCancel('not_confirmed', { stock: 0, status: 'sold', kind: 'raffle' }, 1)).toEqual({ stock: 1, status: 'for_sale' })
+  })
+
+  it('doesn’t let a seller pick the deadline as their reason', () => {
+    expect(cancelError({ reason: 'not_confirmed', note: '' })).toContain('reason')
+  })
+
   it('flags a seller from 3 cancellations and 1 in 10 orders', () => {
     expect(cancelRateFlagged(10, 2)).toBe(false)
     expect(cancelRateFlagged(100, 3)).toBe(false)

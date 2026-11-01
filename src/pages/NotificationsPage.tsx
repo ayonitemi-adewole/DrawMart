@@ -20,6 +20,10 @@ function describe(n: NotificationView, store: boolean): { icon: IconComponent; t
       return { icon: TruckIcon, title: `New order: ${n.listingTitle}`, body: 'Get it ready, then mark it ready for a rider.', to: `${home}?tab=orders` }
     case 'order_cancelled':
       return { icon: XIcon, title: `Order cancelled: ${n.listingTitle}`, body: 'You’ve been refunded. See why.', to: '/tickets?view=orders' }
+    case 'store_order_confirm_soon':
+      return { icon: ClockIcon, title: `Confirm soon: ${n.listingTitle}`, body: 'Add a photo of the item, or this order will be cancelled.', to: `${home}?tab=orders` }
+    case 'store_order_expired':
+      return { icon: XIcon, title: `Order cancelled: ${n.listingTitle}`, body: 'It wasn’t confirmed in time. The buyer was refunded and the product is paused until you resume it.', to: `${home}?tab=orders` }
     case 'store_price_approved':
       return { icon: CheckIcon, title: `Price approved: ${n.listingTitle}`, body: 'The new price is live.', to: home }
     case 'store_price_rejected':

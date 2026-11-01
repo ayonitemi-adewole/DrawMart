@@ -33,6 +33,7 @@ import {
 import { nairaToKobo } from '@/domain/money'
 import { canChangeInReview, withdrawalFees } from '@/domain/listingActions'
 import { checkoutDeliveryFees, deliveryPriceError, placeholderPricing, sizeExtraError, type DeliveryPricing } from '@/domain/deliveryFees'
+import { confirmDeadline, confirmOverdue, confirmReminderDue, needsConfirming } from '@/domain/orderConfirm'
 import { canCancelOrder, cancelError, stockAfterCancel } from '@/domain/orderCancel'
 import { canControlProduct, repriceNeedsReview, statusAfterStock, stockChangeError } from '@/domain/productControls'
 import { closingReminderSent, pickupReminderDue } from '@/domain/storeNotifications'
@@ -59,7 +60,7 @@ import { MAX_MESSAGES_PER_MINUTE, messageError } from '@/domain/messages'
 import { fillDays, lagosDay } from '@/domain/metrics'
 import { BOOST_DEFAULTS, BOOST_ERROR_TEXT, DEFAULT_BOOST_PACKAGES, boostEndsAt, boostWindow, boostsUnlocked, canBoost } from '@/domain/boosts'
 import { SELLER_APPLICATION_ERROR_TEXT, normalizeNin, validateSellerApplication } from '@/domain/sellers'
-import type { Category, DrawResult, Kobo, NotificationKind, PickupPoint, LedgerEntry, Listing, ListingStatus, Merchant, Order, Ticket, UnsoldPolicy, User } from '@/domain/types'
+import type { CancelReason, Category, DrawResult, Kobo, NotificationKind, PickupPoint, LedgerEntry, Listing, ListingStatus, Merchant, Order, Ticket, UnsoldPolicy, User } from '@/domain/types'
 import {
   ApiError,
   type DrawMartApi,
@@ -88,7 +89,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v37' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v38' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -100,7 +101,7 @@ const TOLU_SHOP = 'm-tolu'
 const DAY = 24 * 60 * 60 * 1000
 
 /** The PIN and who's carrying it stay out of the order everyone else sees. */
-type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState; paidCashKobo: Kobo; paidCreditKobo: Kobo; paidFeeCashKobo: Kobo; paidFeeCreditKobo: Kobo; checkoutId: string }
+type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState; paidCashKobo: Kobo; paidCreditKobo: Kobo; paidFeeCashKobo: Kobo; paidFeeCreditKobo: Kobo; checkoutId: string; confirmRemindedAt: string | null }
 
 interface Db {
   users: User[]
@@ -756,6 +757,31 @@ function refundBuyers(db: Db, l: Listing, at: string) {
  * Deadlines: extend once if the listing allows it; otherwise refund every
  * buyer, then either close the listing or keep it on as a regular product.
  */
+/** Refunds the buyer and puts the stock right, for whoever has been allowed to cancel. */
+function cancelOrderNow(db: Db, o: MockOrder, reason: CancelReason, note: string, nowMs: number) {
+  const l = db.listings.find((x) => x.id === o.listingId)!
+  const at = iso(nowMs)
+  Object.assign(o, { status: 'cancelled', cancelledAt: at, cancelReason: reason, cancelNote: note.trim() || null })
+  db.payouts = db.payouts.filter((p) => !(p.orderId === o.id && p.status === 'waiting'))
+  db.ledger.push({ id: uid('E'), userId: o.buyerId, kind: 'order_refund', cashKobo: o.paidCashKobo, creditKobo: o.paidCreditKobo, memo: `Refund · ${l.title}`, listingId: l.id, createdAt: at })
+  // One fee covers everything from this seller in this checkout: it moves to what's still coming, or comes back with the last.
+  if (o.deliveryFeeKobo > 0) {
+    const other = db.orders.find((x) => x.checkoutId === o.checkoutId && x.merchantId === o.merchantId && x.id !== o.id && x.status !== 'cancelled' && !x.isPrize)
+    if (other) {
+      other.deliveryFeeKobo += o.deliveryFeeKobo
+      other.paidFeeCashKobo += o.paidFeeCashKobo
+      other.paidFeeCreditKobo += o.paidFeeCreditKobo
+      o.deliveryFeeKobo = 0
+    } else {
+      db.ledger.push({ id: uid('E'), userId: o.buyerId, kind: 'order_refund', cashKobo: o.paidFeeCashKobo, creditKobo: o.paidFeeCreditKobo, memo: `Delivery refund · ${l.title}`, listingId: l.id, createdAt: at })
+    }
+  }
+  const was = l.status
+  Object.assign(l, stockAfterCancel(reason, l, o.quantity))
+  if (was === 'sold' && l.status === 'for_sale') for (const userId of saversOf(db, l.id)) alertSaved(db, userId, l.id, l, 'saved_back_on_sale', nowMs)
+  notify(db, o.buyerId, 'order_cancelled', l.id, at)
+}
+
 function processDeadlines(db: Db, now: number): boolean {
   let changed = false
   for (const l of db.listings) {
@@ -785,6 +811,15 @@ function processDeadlines(db: Db, now: number): boolean {
     }
     if (l.status === 'pending_review' && l.handover && pickupReminderDue(l.handover.date, now) && !sentFor(l, 'store_pickup_tomorrow').some((at) => Date.parse(at) > now - DAY)) {
       notifyShop(db, l.merchantId, 'store_pickup_tomorrow', l.id, iso(now))
+    }
+  }
+  for (const o of db.orders) {
+    if (confirmOverdue(o, now)) {
+      cancelOrderNow(db, o, 'not_confirmed', '', now)
+      notifyShop(db, o.merchantId, 'store_order_expired', o.listingId, iso(now))
+    } else if (!o.confirmRemindedAt && confirmReminderDue(o, now)) {
+      o.confirmRemindedAt = iso(now)
+      notifyShop(db, o.merchantId, 'store_order_confirm_soon', o.listingId, iso(now))
     }
   }
   return changed
@@ -887,7 +922,7 @@ function statsBetween(db: Db, l: Listing, from: string, to: string) {
 
 /** `forBuyer`: the buyer's own screens, the only place a PIN may go. */
 function orderView(db: Db, order: MockOrder, forBuyer = false): OrderView {
-  const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, paidFeeCashKobo: _feeCash, paidFeeCreditKobo: _feeCredit, checkoutId: _checkoutId, ...o } = order
+  const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, paidFeeCashKobo: _feeCash, paidFeeCreditKobo: _feeCredit, checkoutId: _checkoutId, confirmRemindedAt: _reminded, ...o } = order
   const l = db.listings.find((x) => x.id === o.listingId)!
   const merchant = db.merchants.find((m) => m.id === o.merchantId)!
   return { ...o, deliveryPin: forBuyer && o.status !== 'delivered' && o.status !== 'cancelled' ? pin : null, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, merchantName: merchant.name }
@@ -1476,7 +1511,8 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           }
           const order: MockOrder = {
             pin: newDeliveryPin(), riderId: null, pinState: { attempts: 0, lockedUntil: null }, paidCashKobo: paid.fromCash, paidCreditKobo: paid.fromCredit, paidFeeCashKobo: paidFee.fromCash, paidFeeCreditKobo: paidFee.fromCredit, checkoutId, deliveryFeeKobo,
-            cancelledAt: null, cancelReason: null, cancelNote: null,
+            cancelledAt: null, cancelReason: null, cancelNote: null, confirmRemindedAt: null,
+            confirmBy: prize ? null : confirmDeadline(now()), confirmedAt: null, confirmPhoto: null,
             id: uid('O'), listingId: l.id, buyerId: buyer(), merchantId: l.merchantId, quantity, priceKobo: price, feeKobo: prize ? 0 : saleEconomics(price, l.feeBps).feeKobo,
             delivery: pickup ? { address: '', location: null, contactPhone: details.delivery.contactPhone.trim() } : { address: details.delivery.address.trim(), location: details.delivery.location, contactPhone: details.delivery.contactPhone.trim() },
             fulfilment: details.fulfilment, pickupPoint, isPrize: prize, handledBy: prize && !isCar(l) ? 'drawmart' : 'store',
@@ -1836,6 +1872,16 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         db.merchants.find((m) => m.id === shopId(db))!.deliveryArea = area
       }),
 
+    sellerConfirmOrder: (orderId, photo) =>
+      tx((db) => {
+        const o = db.orders.find((x) => x.id === orderId && x.handledBy === 'store' && x.merchantId === shopId(db))
+        if (!o) throw new ApiError('not_found', 'That order doesn’t exist.')
+        if (o.status !== 'paid' || !o.confirmBy) throw new ApiError('invalid_input', 'This order doesn’t need confirming.')
+        if (!/^(https:\/\/|\/assets\/|data:image\/)/.test(photo)) throw new ApiError('invalid_input', 'Add a photo of the item.')
+        o.confirmedAt = iso(now())
+        o.confirmPhoto = photo
+      }),
+
     cancelOrder: (orderId, reason, note) =>
       tx((db) => {
         const o = db.orders.find((x) => x.id === orderId && x.handledBy === 'store' && x.merchantId === shopId(db))
@@ -1844,27 +1890,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (problem) throw new ApiError('invalid_input', problem)
         if (o.isPrize) throw new ApiError('invalid_input', 'Won items can’t be cancelled here. Contact DrawMart.')
         if (!canCancelOrder(o)) throw new ApiError('invalid_input', 'Only orders that aren’t ready for a rider yet can be cancelled.')
-        const l = getListingOr404(db, o.listingId)
-        const at = iso(now())
-        Object.assign(o, { status: 'cancelled', cancelledAt: at, cancelReason: reason, cancelNote: note.trim() || null })
-        db.payouts = db.payouts.filter((p) => !(p.orderId === o.id && p.status === 'waiting'))
-        db.ledger.push({ id: uid('E'), userId: o.buyerId, kind: 'order_refund', cashKobo: o.paidCashKobo, creditKobo: o.paidCreditKobo, memo: `Refund · ${l.title}`, listingId: l.id, createdAt: at })
-        // One fee covers everything from this seller in this checkout: it moves to what's still coming, or comes back with the last.
-        if (o.deliveryFeeKobo > 0) {
-          const other = db.orders.find((x) => x.checkoutId === o.checkoutId && x.merchantId === o.merchantId && x.id !== o.id && x.status !== 'cancelled' && !x.isPrize)
-          if (other) {
-            other.deliveryFeeKobo += o.deliveryFeeKobo
-            other.paidFeeCashKobo += o.paidFeeCashKobo
-            other.paidFeeCreditKobo += o.paidFeeCreditKobo
-            o.deliveryFeeKobo = 0
-          } else {
-            db.ledger.push({ id: uid('E'), userId: o.buyerId, kind: 'order_refund', cashKobo: o.paidFeeCashKobo, creditKobo: o.paidFeeCreditKobo, memo: `Delivery refund · ${l.title}`, listingId: l.id, createdAt: at })
-          }
-        }
-        const was = l.status
-        Object.assign(l, stockAfterCancel(reason, l, o.quantity))
-        if (was === 'sold' && l.status === 'for_sale') for (const userId of saversOf(db, l.id)) alertSaved(db, userId, l.id, l, 'saved_back_on_sale', now())
-        notify(db, o.buyerId, 'order_cancelled', l.id, at)
+        cancelOrderNow(db, o, reason, note, now())
       }),
 
     listCancelRates: () =>
@@ -1882,6 +1908,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const admin = readSession()?.role === 'admin'
         const o = db.orders.find((x) => x.id === orderId && x.status === 'paid' && (x.handledBy === 'drawmart' ? admin : !admin && x.merchantId === shopId(db)))
         if (!o) throw new ApiError('invalid_input', 'Only paid orders you send yourself can be marked as sent.')
+        if (needsConfirming(o)) throw new ApiError('invalid_input', 'Confirm it with a photo first.')
         o.status = 'dispatched'
         o.dispatchedAt = iso(now())
       }),

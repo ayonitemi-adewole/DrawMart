@@ -852,6 +852,7 @@ describe('regular products and orders', () => {
     expect((await asUser<{ m: { listings: { listingId: string; units: number }[] } }>(seller, `select public.merchant_metrics(7) m`))[0].m.listings.find((l) => l.listingId === id)?.units).toBe(0)
 
     const second = await buy()
+    await asUser(seller, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [second])
     await asUser(seller, `select public.dispatch_order($1)`, [second])
     await expectFail(asUser(seller, `select public.cancel_order($1, 'damaged')`, [second]), 'invalid_input') // already ready for a rider
     const third = await buy()
@@ -864,6 +865,48 @@ describe('regular products and orders', () => {
     await expectFail(asUser(seller, `select public.merchant_cancel_rates()`), 'forbidden')
     const [{ r }] = await asUser<{ r: { merchantId: string; orders: number; cancelled: number }[] }>(staff, `select public.merchant_cancel_rates() r`)
     expect(r.find((x) => x.merchantId === '11111111-1111-4111-8111-000000000005')?.cancelled).toBeGreaterThanOrEqual(3)
+  })
+
+  it('cancels and pauses if a seller doesn’t confirm in time, with a reminder first', async () => {
+    const seller = await newUser('confirm-store@example.com', { merchantId: '11111111-1111-4111-8111-000000000005' })
+    const rival = await newUser('confirm-rival@example.com', { merchantId: IKEJA })
+    const shopper = await newUser('confirm-shopper@example.com')
+    await asUser(shopper, `select public.top_up(5000000)`)
+    const [{ id }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [{ title: 'Quiet shop lamp', description: '', category: 'Home', priceKobo: 500_000, stock: 2 }])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    const start = await balance(shopper)
+    const buy = async () => (await asUser<{ ids: string[] }>(shopper, `select public.checkout($1) ids`, [{ listingIds: [id], fulfilment: 'delivery', address: delivery[0], phone: delivery[1], lat: delivery[2], lng: delivery[3] }]))[0].ids[0]
+    const late = await buy()
+    const onTime = await buy()
+    const [row] = await admin<{ hours: number }>(`select extract(epoch from confirm_by - created_at) / 3600 hours from public.orders where id = $1`, [late])
+    expect(Math.round(Number(row.hours))).toBe(12)
+
+    await expectFail(asUser(rival, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [late]), 'not_found')
+    await expectFail(asUser(shopper, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [late]), 'not_found')
+    await expectFail(asUser(seller, `select public.seller_confirm_order($1, 'data:image/png;base64,xx')`, [late]), 'invalid_input')
+    await asUser(seller, `select public.seller_confirm_order($1, 'https://example.com/x.jpg')`, [onTime])
+    expect(await asUser(shopper, `select confirm_photo from public.orders where id = $1`, [onTime])).toEqual([{ confirm_photo: 'https://example.com/x.jpg' }])
+
+    const kinds = async () => (await asUser<{ kind: string }>(seller, `select kind from public.notifications where listing_id = $1`, [id])).map((n) => n.kind)
+    const run = () => admin(`select private.process_deadlines()`)
+    await run()
+    expect(await kinds()).not.toContain('store_order_confirm_soon')
+    await admin(`update public.orders set confirm_by = now() + interval '2 hours' where id = $1`, [late])
+    await run()
+    await run()
+    expect((await kinds()).filter((k) => k === 'store_order_confirm_soon')).toHaveLength(1)
+
+    await admin(`update public.orders set confirm_by = now() - interval '1 minute' where id = $1`, [late])
+    await expectFail(asUser(seller, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [late]), 'invalid_input') // too late
+    await run()
+    await run() // only once
+    expect(await kinds()).toContain('store_order_expired')
+    expect(await admin(`select status, cancel_reason from public.orders where id = $1`, [late])).toEqual([{ status: 'cancelled', cancel_reason: 'not_confirmed' }])
+    expect(await admin(`select status, stock from public.listings where id = $1`, [id])).toEqual([{ status: 'paused', stock: 1 }])
+    expect(await admin(`select status from public.orders where id = $1`, [onTime])).toEqual([{ status: 'paid' }]) // confirmed, so it stays
+    const [{ fee }] = await admin<{ fee: string }>(`select delivery_fee_kobo fee from public.orders where id = $1`, [onTime])
+    expect(Number((await balance(shopper)).cash)).toBe(Number(start.cash) - 500_000 - Number(fee))
+    await expectFail(asUser(seller, `select public.cancel_order($1, 'not_confirmed')`, [onTime]), 'invalid_input') // not a seller's to pick
   })
 
   it('sells once, paying with credit first, and records the order', async () => {
@@ -890,6 +933,9 @@ describe('regular products and orders', () => {
   it('is dispatched by its store and delivered with the buyer’s PIN', async () => {
     const [{ id }] = await admin<{ id: string }>(`select id from public.orders where listing_id = $1`, [productId])
     await expectFail(asUser(otherStore, `select public.dispatch_order($1)`, [id]), 'invalid_input')
+    const notYet = await expectFail(asUser(store, `select public.dispatch_order($1)`, [id]), 'invalid_input')
+    expect(notYet.detail).toContain('Confirm it with a photo')
+    await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
     await asUser(store, `select public.dispatch_order($1)`, [id])
     await expectFail(asUser(buyer, `select public.confirm_order($1)`, [id]), 'forbidden')
     await expectFail(asUser(store, `select public.confirm_order($1)`, [id]), 'forbidden')
@@ -1104,6 +1150,7 @@ describe('individual sellers', () => {
     await asUser(shopper, `select public.top_up(1000000)`)
     const [{ order }] = await asUser<{ order: string }>(shopper, `select public.buy_now($1, '4 Admiralty Way, Lekki', '0803 765 4321', 6.44, 3.47) "order"`, [id])
     expect((await asUser(seller, `select id from public.orders`)).map((o) => o.id)).toEqual([order])
+    await asUser(seller, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [order])
     await asUser(seller, `select public.dispatch_order($1)`, [order])
   })
 
@@ -1781,6 +1828,7 @@ describe('cart and checkout', () => {
       const listing = await newProduct(`For ${email}`)
       await add(b, listing)
       const [id] = await checkout(b, details([listing]))
+      await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
       await asUser(store, `select public.dispatch_order($1)`, [id])
       return { b, id }
     }

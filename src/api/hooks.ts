@@ -389,6 +389,11 @@ export function useSetShopDeliveryArea() {
   return useMutation({ mutationFn: (area: string) => api.setShopDeliveryArea(area), onSettled: invalidate })
 }
 
+export function useSellerConfirmOrder() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: ({ id, photo }: { id: string; photo: string }) => api.sellerConfirmOrder(id, photo), onSettled: invalidate })
+}
+
 export function useCancelOrder() {
   const invalidate = useInvalidateAll()
   return useMutation({ mutationFn: ({ id, reason, note }: { id: string; reason: CancelReason; note: string }) => api.cancelOrder(id, reason, note), onSettled: invalidate })

@@ -193,7 +193,7 @@ export interface LedgerEntry {
 export type OrderStatus = 'paid' | 'dispatched' | 'delivered' | 'cancelled'
 
 /** Why a seller cancelled an order (orderCancel.ts). */
-export type CancelReason = 'out_of_stock' | 'damaged' | 'cant_send' | 'other'
+export type CancelReason = 'out_of_stock' | 'damaged' | 'cant_send' | 'other' | 'not_confirmed'
 
 /** Where the buyer wants a fixed-price item sent. Seen only by the buyer, the store and admins. */
 export interface Delivery {
@@ -228,6 +228,11 @@ export interface Order {
   quantity: number
   /** What the buyer paid for delivery. One fee covers everything from a seller in a checkout, so only one of those orders has it. Not part of the seller's payout. */
   deliveryFeeKobo: Kobo
+  /** The seller must confirm by this, or it cancels (orderConfirm.ts). Null for won items and older orders. */
+  confirmBy: ISODate | null
+  confirmedAt: ISODate | null
+  /** The seller's fresh photo of the item. */
+  confirmPhoto: string | null
   cancelledAt: ISODate | null
   cancelReason: CancelReason | null
   cancelNote: string | null
@@ -246,7 +251,7 @@ export interface Order {
 }
 
 export type NotificationKind =
-  | 'order_cancelled' | 'store_price_approved' | 'store_price_rejected' | 'store_new_order' | 'store_listing_approved' | 'store_listing_rejected' | 'store_draw_sold_out'
+  | 'order_cancelled' | 'store_order_confirm_soon' | 'store_order_expired' | 'store_price_approved' | 'store_price_rejected' | 'store_new_order' | 'store_listing_approved' | 'store_listing_rejected' | 'store_draw_sold_out'
   | 'store_winner_picked' | 'store_draw_closing' | 'store_pickup_tomorrow' | 'store_new_message'
   | 'store_payout_sent' | 'store_bank_changed'
   | 'draw_sold_out' | 'draw_won' | 'draw_lost' | 'saved_almost_sold' | 'saved_closing_soon' | 'saved_relisted' | 'saved_back_on_sale' | 'saved_price_drop'
