@@ -1,5 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
+import { useTranslation } from 'react-i18next'
+import { LanguagePicker } from '@/components/LanguagePicker'
 import { api } from '@/api'
 import { useAccess, useAddressActions, useAddresses, useDemoActions, useMe, useSignOut, useUpdateProfile } from '@/api/hooks'
 import { AddressPicker } from '@/components/AddressPicker'
@@ -20,11 +22,12 @@ const STATES = ['Lagos', 'Ogun', 'Oyo', 'FCT', 'Rivers', 'Kano']
 
 /** /account: profile details, saved delivery addresses and settings. */
 export function AccountPage() {
+  const { t } = useTranslation()
   const me = useMe()
   return (
     <div className="flex flex-col gap-6">
-      <PageTitle eyebrow="Account" sub="Your details, delivery addresses and settings, saved so you don’t have to fill them in every time.">
-        {me.data?.displayName ?? 'Your account'}
+      <PageTitle eyebrow={t('account.eyebrow')} sub={t('account.sub')}>
+        {me.data?.displayName ?? t('account.fallbackName')}
       </PageTitle>
       <div className="grid gap-5 lg:grid-cols-[1fr_380px] lg:items-start">
         <div className="flex min-w-0 flex-col gap-5">
@@ -56,6 +59,7 @@ function SectionTitle({ icon: Icon, title, sub }: { icon: IconComponent; title: 
 }
 
 function Profile({ user }: { user: User }) {
+  const { t } = useTranslation()
   const { email } = useAccess()
   const update = useUpdateProfile()
   const toast = useToast()
@@ -73,40 +77,40 @@ function Profile({ user }: { user: User }) {
     // Outside test mode, the state comes from identity verification.
     update.mutate(
       { displayName: name, phone: phone.trim() || null, ...(api.testMode ? { state } : {}) },
-      { onSuccess: () => toast('Saved.'), onError: (err) => toast(errorMessage(err), 'error') },
+      { onSuccess: () => toast(t('account.saved')), onError: (err) => toast(errorMessage(err), 'error') },
     )
   }
 
   return (
     <Card className="flex flex-col gap-4 p-5 sm:p-6">
-      <SectionTitle icon={UserIcon} title="Profile" sub={email ? `Signed in as ${email}` : undefined} />
+      <SectionTitle icon={UserIcon} title={t('account.profile')} sub={email ? t('account.signedInAs', { email }) : undefined} />
       <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
-        <Field label="Your name" htmlFor="profile-name" error={nameBad ? 'Enter your name.' : undefined} hint="Sellers see this when you message them.">
+        <Field label={t('account.yourName')} htmlFor="profile-name" error={nameBad ? t('account.enterName') : undefined} hint={t('account.nameHint')}>
           <input id="profile-name" value={name} maxLength={60} autoComplete="name" onChange={(e) => setName(e.target.value)} className={inputCls} />
         </Field>
         <Field
-          label={<span className="flex items-center gap-1.5"><PhoneIcon size={14} /> Phone number</span>}
+          label={<span className="flex items-center gap-1.5"><PhoneIcon size={14} /> {t('account.phone')}</span>}
           htmlFor="profile-phone"
-          error={phoneBad ? 'Enter a Nigerian mobile number, e.g. 0803 123 4567.' : undefined}
-          hint="Filled in for you at checkout."
+          error={phoneBad ? t('account.phoneError') : undefined}
+          hint={t('account.phoneHint')}
         >
           <input id="profile-phone" type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0803 123 4567" className={inputCls} />
         </Field>
         <Field
-          label={<span className="flex items-center gap-1.5"><MapPinIcon size={14} /> State of residence</span>}
+          label={<span className="flex items-center gap-1.5"><MapPinIcon size={14} /> {t('account.state')}</span>}
           htmlFor="profile-state"
-          hint={`Tickets can only be bought in licensed states (${RULES.licensedStates.join(', ')}).${api.testMode ? ' In production this is checked with KYC, not chosen here.' : ' This comes from your identity check.'}`}
+          hint={`${t('regulated.stateHint', { states: RULES.licensedStates.join(', ') })} ${api.testMode ? t('regulated.stateHintTest') : t('regulated.stateHintLive')}`}
         >
           <select id="profile-state" value={state} disabled={!api.testMode} onChange={(e) => setState(e.target.value)} className={inputCls}>
-            {!state ? <option value="">Not verified yet</option> : null}
+            {!state ? <option value="">{t('account.notVerifiedYet')}</option> : null}
             {STATES.map((s) => (
               <option key={s}>{s}</option>
             ))}
           </select>
         </Field>
-        {state && !licensed ? <Notice tone="hot">DrawMart isn’t available in {state} yet, so ticket purchases are paused.</Notice> : null}
+        {state && !licensed ? <Notice tone="hot">{t('regulated.stateUnavailable', { state })}</Notice> : null}
         <Button type="submit" className="min-h-11 sm:self-start" loading={update.isPending} disabled={!changed || phoneBad || nameBad}>
-          Save changes
+          {t('account.saveChanges')}
         </Button>
       </form>
     </Card>
@@ -278,14 +282,16 @@ function Settings() {
   const navigate = useNavigate()
   const [confirmReset, setConfirmReset] = useState(false)
   const canReset = api.testMode && !!api.demoReset
+  const { t } = useTranslation()
 
   return (
     <Card className="flex flex-col gap-4 p-5">
-      <SectionTitle icon={SettingsIcon} title="Settings" />
+      <SectionTitle icon={SettingsIcon} title={t('account.settings')} />
       <div className="flex flex-col gap-1.5">
-        <span className="text-sm font-bold">Appearance</span>
+        <span className="text-sm font-bold">{t('nav.appearance')}</span>
         <ThemePicker />
       </div>
+      <LanguagePicker />
       <ul className="flex flex-col border-t border-line pt-2">
         {LINKS.map((l) => (
           <li key={l.label}>

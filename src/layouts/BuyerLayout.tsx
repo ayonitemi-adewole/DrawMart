@@ -19,6 +19,8 @@ import {
 import { api } from "@/api";
 import { HeaderSearch } from "@/components/HeaderSearch";
 import { IntroSheet } from "@/components/HowItWorks";
+import { useTranslation } from "react-i18next";
+import { LanguagePicker, LanguageSync } from "@/components/LanguagePicker";
 import { NavMenu, type MenuLink } from "@/components/NavMenu";
 import { SaveAfterSignIn } from "@/components/SaveButton";
 import {
@@ -44,18 +46,18 @@ import { APP_HOME } from "@/lib/apps";
 import { useBalanceHidden, useBalanceText } from "@/lib/balanceVisibility";
 
 const NAV = [
-  { to: "/", label: "Explore", icon: HomeIcon, end: true },
-  { to: "/tickets", label: "Tickets", icon: TicketIcon },
-  { to: "/draws", label: "Results", icon: TrophyIcon },
-  { to: "/sell", label: "Sell", icon: StoreIcon },
+  { to: "/", label: "nav.explore" as const, icon: HomeIcon, end: true },
+  { to: "/tickets", label: "nav.tickets" as const, icon: TicketIcon },
+  { to: "/draws", label: "nav.results" as const, icon: TrophyIcon },
+  { to: "/sell", label: "nav.sell" as const, icon: StoreIcon },
 ];
 
 /** Phones and tablets: Sell is in the menu. */
 const BOTTOM_NAV = [
-  { to: "/", label: "Explore", icon: HomeIcon, end: true },
-  { to: "/tickets", label: "Tickets", icon: TicketIcon },
-  { to: "/draws", label: "Results", icon: TrophyIcon },
-  { to: "/messages", label: "Messages", icon: ChatIcon },
+  { to: "/", label: "nav.explore" as const, icon: HomeIcon, end: true },
+  { to: "/tickets", label: "nav.tickets" as const, icon: TicketIcon },
+  { to: "/draws", label: "nav.results" as const, icon: TrophyIcon },
+  { to: "/messages", label: "nav.messages" as const, icon: ChatIcon },
 ];
 
 export function Logo({
@@ -68,11 +70,12 @@ export function Logo({
   /** On the smallest phones, just the mark, when the bar is short of room. */
   tight?: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <Link
       to={to}
       className="group flex items-center gap-2 text-ink no-underline"
-      aria-label={`DrawMart${suffix ? " " + suffix : ""} home`}
+      aria-label={suffix ? t("nav.homeWithSuffix", { suffix }) : t("nav.home")}
     >
       <span className="flex size-9 -rotate-6 items-center justify-center rounded-xl bg-linear-to-br from-brand to-hero text-ticket shadow-glow transition group-hover:rotate-0">
         <LogoMark size={20} strokeWidth={2.4} />
@@ -95,15 +98,14 @@ export function Logo({
 }
 
 export function TestModeBanner() {
+  const { t } = useTranslation();
   if (!api.testMode) return null;
   return (
     <div className="flex items-center justify-center gap-2 bg-ticket px-4 py-1.5 text-center text-xs font-bold text-on-ticket">
       <span className="rounded-full bg-on-ticket px-1.5 py-px text-[10px] tracking-wider text-ticket">
-        TEST
+        {t("regulated.testBanner")}
       </span>
-      {api.demoReset
-        ? "No real money. Data is stored in this browser only."
-        : "No real money. Test accounts and test money only."}
+      {api.demoReset ? t("regulated.testBannerBrowser") : t("regulated.testBannerAccounts")}
     </div>
   );
 }
@@ -123,13 +125,18 @@ function WalletChip({
 }) {
   const [hidden] = useBalanceHidden();
   const money = useBalanceText();
+  const { t } = useTranslation();
   return (
     <Link
       to="/wallet"
       aria-label={
         hidden
-          ? "Wallet: balance hidden"
-          : `Wallet: ${cash === null ? "loading" : formatNaira(cash)} cash${credit ? `, ${formatNaira(credit)} credit` : ""}`
+          ? t("wallet.hidden")
+          : cash === null
+            ? t("wallet.loading")
+            : credit
+              ? t("wallet.cashAndCredit", { cash: formatNaira(cash), credit: formatNaira(credit) })
+              : t("wallet.cash", { cash: formatNaira(cash) })
       }
       className={cx(
         "items-center gap-2 rounded-2xl bg-ink py-1 pr-3.5 pl-1.5 text-sm font-extrabold text-ground no-underline shadow-card transition hover:opacity-90",
@@ -145,13 +152,13 @@ function WalletChip({
         </span>
         {credit > 0 ? (
           <span className="mt-0.5 text-[10px] font-bold text-ticket">
-            +{money(credit)} credit
+            {t("wallet.plusCredit", { credit: money(credit) })}
           </span>
         ) : null}
       </span>
       {showArrow ? (
         <span className="ml-auto flex items-center gap-1 text-xs font-bold">
-          Wallet <ChevronRightIcon size={16} />
+          {t("wallet.label")} <ChevronRightIcon size={16} />
         </span>
       ) : null}
     </Link>
@@ -175,14 +182,15 @@ export function BuyerLayout() {
   const credit = wallet.data?.balance.creditKobo ?? 0;
   const navigate = useNavigate();
   const signOut = useSignOut();
+  const { t } = useTranslation();
   const menuLinks: MenuLink[] = access.signedIn
     ? [
-        { to: "/account", label: "Account", icon: UserIcon },
-        { to: "/saved", label: "Saved items", icon: HeartIcon },
-        { to: "/notifications", label: "Notifications", icon: BellIcon, count: unreadNotifications },
-        { to: "/sell", label: "Sell", icon: StoreIcon },
+        { to: "/account", label: t("nav.account"), icon: UserIcon },
+        { to: "/saved", label: t("nav.saved"), icon: HeartIcon },
+        { to: "/notifications", label: t("nav.notifications"), icon: BellIcon, count: unreadNotifications },
+        { to: "/sell", label: t("nav.sell"), icon: StoreIcon },
       ]
-    : [{ to: "/sell", label: "Sell", icon: StoreIcon }];
+    : [{ to: "/sell", label: t("nav.sell"), icon: StoreIcon }];
 
   // Store and admin accounts have their own apps and never see this one.
   if (access.role && access.role !== "buyer")
@@ -197,7 +205,7 @@ export function BuyerLayout() {
           <Logo tight={access.ready && !access.signedIn} />
           <nav
             className="hidden items-center gap-1 rounded-2xl bg-sunken/70 p-1 lg:flex"
-            aria-label="Main"
+            aria-label={t("nav.main")}
           >
             {NAV.map((n) => (
               <NavLink
@@ -214,7 +222,7 @@ export function BuyerLayout() {
                 }
               >
                 <n.icon size={17} />
-                {n.label}
+                {t(n.label)}
                 {n.to === "/tickets" && active > 0 ? (
                   <span className="flex size-5 items-center justify-center rounded-full bg-brand text-[10px] text-on-brand">
                     {active}
@@ -228,7 +236,7 @@ export function BuyerLayout() {
             {access.signedIn ? (
               <Link
                 to="/cart"
-                aria-label={cartCount ? `Cart, ${cartCount} ${cartCount === 1 ? "item" : "items"}` : "Cart"}
+                aria-label={cartCount ? t("nav.cartWithItems", { count: cartCount }) : t("nav.cart")}
                 className="relative flex size-11 items-center justify-center rounded-xl text-muted no-underline hover:bg-sunken hover:text-ink"
               >
                 <CartIcon size={20} />
@@ -243,7 +251,7 @@ export function BuyerLayout() {
             {access.signedIn ? (
               <Link
                 to="/notifications"
-                aria-label={unreadNotifications ? `Notifications, ${unreadNotifications} unread` : "Notifications"}
+                aria-label={unreadNotifications ? t("nav.notificationsUnread", { count: unreadNotifications }) : t("nav.notifications")}
                 className="relative hidden size-11 items-center lg:flex justify-center rounded-xl text-muted no-underline hover:bg-sunken hover:text-ink"
               >
                 <BellIcon size={20} />
@@ -257,7 +265,7 @@ export function BuyerLayout() {
             {access.signedIn ? (
               <Link
                 to="/messages"
-                aria-label={unread ? `Messages, ${unread} unread` : "Messages"}
+                aria-label={unread ? t("nav.messagesUnread", { count: unread }) : t("nav.messages")}
                 className="relative hidden size-11 items-center lg:flex justify-center rounded-xl text-muted no-underline hover:bg-sunken hover:text-ink"
               >
                 <ChatIcon size={20} />
@@ -271,7 +279,7 @@ export function BuyerLayout() {
             {access.signedIn ? (
               <Link
                 to="/account"
-                aria-label="Account"
+                aria-label={t("nav.account")}
                 className="hidden size-11 items-center justify-center rounded-xl text-muted no-underline hover:bg-sunken hover:text-ink lg:flex"
               >
                 <UserIcon size={20} />
@@ -285,13 +293,13 @@ export function BuyerLayout() {
                 to={`/login?next=${encodeURIComponent(pathname + search)}`}
                 className={buttonClass("primary")}
               >
-                <span className="whitespace-nowrap text-on-brand">Sign in</span>
+                <span className="whitespace-nowrap text-on-brand">{t("nav.signIn")}</span>
               </Link>
             ) : (
               <WalletChip cash={cash} credit={credit} className="hidden min-h-11 sm:flex" />
             )}
             <NavMenu
-              title="Menu"
+              title={t("nav.menu")}
               className="lg:hidden"
               links={menuLinks}
               top={
@@ -313,14 +321,14 @@ export function BuyerLayout() {
                   : undefined
               }
               bottom={
-                <div className="flex flex-col gap-1 border-t border-line pt-3 text-xs text-subtle">
-                  <Link to="/credits" className="flex min-h-11 w-fit items-center">
-                    Photo credits
-                  </Link>
-                  <span>
-                    Licensed by LSLGA · Licence [NUMBER] · Lagos residents 18+
-                    only · Play responsibly
-                  </span>
+                <div className="flex flex-col gap-3 border-t border-line pt-3">
+                  <LanguagePicker />
+                  <div className="flex flex-col gap-1 text-xs text-subtle">
+                    <Link to="/credits" className="flex min-h-11 w-fit items-center">
+                      {t("nav.photoCredits")}
+                    </Link>
+                    <span>{t("regulated.licence")}</span>
+                  </div>
                 </div>
               }
             />
@@ -338,15 +346,12 @@ export function BuyerLayout() {
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-6 text-xs text-subtle">
           <div className="flex items-center gap-2">
             <ShieldIcon size={16} className="text-brand" />
-            <span>
-              Licensed by LSLGA · Licence [NUMBER] · Lagos residents 18+ only ·
-              Play responsibly
-            </span>
+            <span>{t("regulated.licence")}</span>
           </div>
           <div className="flex gap-4">
-            <Link to="/credits">Photo credits</Link>
+            <Link to="/credits">{t("nav.photoCredits")}</Link>
             {access.signedIn ? null : (
-              <Link to="/login">Store or DrawMart team? Sign in</Link>
+              <Link to="/login">{t("nav.staffSignIn")}</Link>
             )}
           </div>
         </div>
@@ -354,7 +359,7 @@ export function BuyerLayout() {
 
       <nav
         className="fixed inset-x-3 bottom-[max(env(safe-area-inset-bottom),12px)] z-30 grid grid-cols-4 gap-1 rounded-3xl border border-line bg-raised/90 p-1.5 shadow-lift backdrop-blur-xl lg:hidden"
-        aria-label="Main"
+        aria-label={t("nav.main")}
       >
         {BOTTOM_NAV.map((n) => (
           <NavLink
@@ -371,7 +376,7 @@ export function BuyerLayout() {
             }
           >
             <n.icon size={22} />
-            {n.label}
+            {t(n.label)}
             {n.to === "/tickets" && active > 0 ? (
               <span className="absolute top-1 right-[calc(50%-20px)] flex size-4.5 items-center justify-center rounded-full bg-hot text-[9px] font-extrabold text-white">
                 {active}
@@ -388,6 +393,7 @@ export function BuyerLayout() {
       <IntroSheet />
       <WinCelebration />
       <SaveAfterSignIn />
+      <LanguageSync />
       <ScrollRestoration />
     </div>
   );

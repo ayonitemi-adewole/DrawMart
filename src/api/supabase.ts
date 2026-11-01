@@ -13,6 +13,7 @@ import { sortAddresses, type SavedAddress } from '@/domain/addresses'
 import type { PinResult } from '@/domain/delivery'
 import { lineAmountKobo } from '@/domain/cart'
 import { WINNER_CONSENT_VERSION } from '@/domain/winnerStories'
+import type { LanguageCode } from '@/i18n/languages'
 import { DEFAULT_PUSH_PREFERENCES } from '@/domain/push'
 import { ORDER_ERROR_TEXT } from '@/domain/orders'
 import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication } from '@/domain/sellers'
@@ -49,6 +50,7 @@ import {
   type PurchaseReceipt,
   type WalletView,
   type MyWinnerStory,
+  type RegularStatus,
   type PendingWinnerStory,
   type WinnerWallEntry,
 } from './types'
@@ -109,6 +111,7 @@ interface ListingRow {
   commitment: string
   created_at: string
   closes_at: string
+  opens_at: string | null
   pickup_batch_id: string | null
   boosted_until: string | null
   sold_out_at: string | null
@@ -127,6 +130,7 @@ interface ProfileRow {
   role: AccountRole
   merchant_id: string | null
   phone: string | null
+  language: LanguageCode | null
   /** An individual seller's own shop (buyer accounts only). */
   seller_id: string | null
 }
@@ -235,7 +239,7 @@ function toMerchant(m: MerchantRow): Merchant {
 }
 
 function toUser(p: ProfileRow): User {
-  return { id: p.id, displayName: p.display_name, state: p.state ?? '', weeklyLimitKobo: num(p.weekly_limit_kobo), ageVerified: p.age_verified, phone: p.phone }
+  return { id: p.id, displayName: p.display_name, state: p.state ?? '', weeklyLimitKobo: num(p.weekly_limit_kobo), ageVerified: p.age_verified, phone: p.phone, language: p.language }
 }
 
 function toLedgerEntry(e: LedgerRow): LedgerEntry {
@@ -309,6 +313,7 @@ function toListingView(l: ListingRow, me: string | null, mine: Mine): ListingVie
     commitment: l.commitment,
     createdAt: l.created_at,
     closesAt: l.closes_at,
+    opensAt: l.opens_at,
     boostedUntil: l.boosted_until,
     soldOutAt: l.sold_out_at,
     drawAt: l.draw_at,
@@ -641,6 +646,9 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     addToCart: (listingId) => rpc('add_to_cart', { p_listing_id: listingId }),
     removeFromCart: (listingId) => rpc('remove_from_cart', { p_listing_id: listingId }),
 
+    setLanguage: (language) => rpc('set_language', { p_language: language }),
+    getRegularStatus: () => rpc<RegularStatus>('my_regular_status'),
+
     getPushPreferences: async () => {
       const row = unwrap(await client.from('push_preferences').select('wins, draw_results, orders, messages, saved_items, draw_reveal').maybeSingle<{ wins: boolean; draw_results: boolean; orders: boolean; messages: boolean; saved_items: boolean; draw_reveal: boolean }>())
       return row ? { wins: row.wins, drawResults: row.draw_results, orders: row.orders, messages: row.messages, savedItems: row.saved_items, drawReveal: row.draw_reveal } : DEFAULT_PUSH_PREFERENCES
@@ -951,5 +959,6 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     demoRunDraw: (id) => rpc('demo_run_draw', { p_listing_id: id }),
     resetTestData: () => rpc('reset_test_data'),
     demoExpire: (id) => rpc('demo_expire', { p_listing_id: id }),
+    demoOpenNow: (id) => rpc('demo_open_now', { p_listing_id: id }),
   }
 }

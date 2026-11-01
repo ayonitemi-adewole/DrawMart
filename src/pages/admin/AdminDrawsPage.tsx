@@ -1,3 +1,4 @@
+import { inEarlyAccess } from '@/domain/rules'
 import { useState } from 'react'
 import { api } from '@/api'
 import { useDemoActions, useListings } from '@/api/hooks'
@@ -146,6 +147,23 @@ function DrawRow({ listing: l }: { listing: ListingView }) {
         </div>
       ) : api.testMode ? (
         <div className="flex shrink-0 gap-2 sm:flex-col">
+          {inEarlyAccess(l, Date.now()) ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="min-h-11 flex-1"
+              disabled={busy}
+              loading={demo.openNow.isPending && demo.openNow.variables === l.id}
+              onClick={() =>
+                demo.openNow.mutate(l.id, {
+                  onSuccess: () => toast(`${l.title}: open to everyone.`),
+                  onError: (e) => toast(errorMessage(e), 'error'),
+                })
+              }
+            >
+              <TicketIcon size={14} /> Open to everyone
+            </Button>
+          ) : null}
           <Button
             variant="outline"
             size="sm"

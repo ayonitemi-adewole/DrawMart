@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router'
+import { useTranslation } from 'react-i18next'
 import { LogOutIcon, MenuIcon, type IconComponent } from './icons'
 import { Sheet } from './Sheet'
 import { ThemePicker } from './ThemeToggle'
@@ -39,6 +40,7 @@ export function NavMenu({
   signingOut?: boolean
   className?: string
 }) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const close = () => setOpen(false)
   const total = links.reduce((sum, l) => sum + (l.count ?? 0), 0)
@@ -48,7 +50,7 @@ export function NavMenu({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        aria-label={total ? `Menu, ${total} new` : 'Menu'}
+        aria-label={total ? t('nav.menuWithNew', { count: total }) : t('nav.menu')}
         aria-haspopup="dialog"
         aria-expanded={open}
         className={cx('relative flex size-11 shrink-0 items-center justify-center rounded-xl text-ink hover:bg-sunken', className)}
@@ -89,7 +91,7 @@ export function NavMenu({
         ) : null}
 
         <div className="flex flex-col gap-2 border-t border-line pt-4">
-          <span className="text-sm font-bold">Appearance</span>
+          <span className="text-sm font-bold">{t('nav.appearance')}</span>
           <ThemePicker />
         </div>
 
@@ -97,7 +99,7 @@ export function NavMenu({
           <Button variant="outline" loading={signingOut} onClick={() => onSignOut(close)} className="min-h-11">
             <LogOutIcon size={16} />
             <span className="min-w-0 truncate">
-              Sign out{account ? <span className="font-normal"> · {account}</span> : null}
+              {t('nav.signOut')}{account ? <span className="font-normal"> · {account}</span> : null}
             </span>
           </Button>
         ) : null}

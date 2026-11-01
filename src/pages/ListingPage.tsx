@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useBalanceText } from "@/lib/balanceVisibility";
+import { useNow } from "@/lib/useNow";
 import { SaveButton } from "@/components/SaveButton";
 import { ShareButtons } from "@/components/ShareButtons";
 import { PushPrompt } from "@/components/PushSettings";
@@ -11,6 +12,7 @@ import {
   useRecordListingView,
   useAccess,
   useMe,
+  useRegularStatus,
   useWallet,
 } from "@/api/hooks";
 import type { ListingView, PurchaseReceipt } from "@/api/types";
@@ -59,6 +61,7 @@ import {
   PURCHASE_ERROR_TEXT,
   RULES,
   checkPurchase,
+  inEarlyAccess,
   maxPurchasable,
   splitPayment,
   type PurchaseError,
@@ -654,6 +657,9 @@ function BuyPanel({
   const [confirming, setConfirming] = useState(false);
   const [receipt, setReceipt] = useState<PurchaseReceipt | null>(null);
   const balanceText = useBalanceText();
+  const regular = useRegularStatus();
+  // So a draw's hour for regular buyers ends on time without a reload.
+  const now = useNow(30_000);
 
   if (l.status === "drawn" && l.result) {
     const r = l.result;
@@ -736,7 +742,7 @@ function BuyPanel({
   const balance = wallet.data?.balance;
   const pay =balance ? splitPayment(cost, balance) : null;
   const blocker: PurchaseError | null =
-    me.data && wallet.data
+    me.data && wallet.data && regular.data
       ? checkPurchase({
           user: me.data,
           listing: l,
@@ -744,6 +750,8 @@ function BuyPanel({
           ticketsAlreadyHeld: held,
           balance: wallet.data.balance,
           spentThisWeekKobo: wallet.data.spentThisWeekKobo,
+          isRegular: regular.data.isRegular,
+          now,
         })
       : null;
   const presets = [...new Set([1, 5, 10, max])].filter(
@@ -859,6 +867,14 @@ function BuyPanel({
                   ))}
                 </div>
               </>
+            ) : null}
+
+            {inEarlyAccess(l, now) && l.opensAt ? (
+              <Notice tone="violet" title="Early access">
+                {regular.data?.isRegular
+                  ? `You can get tickets now, as a regular buyer. It opens to everyone on ${dateTime(l.opensAt)}.`
+                  : `Open to regular buyers first. It opens to everyone on ${dateTime(l.opensAt)}. A regular has at least ${RULES.regularBuyerPurchases} completed orders or draws in the last ${RULES.regularBuyerWindowDays} days.`}
+              </Notice>
             ) : null}
 
             <div className="flex items-center gap-3 rounded-2xl bg-violet-soft p-3 text-violet">
@@ -1089,6 +1105,8 @@ function BuyPanel({
 
 /** Explains why a purchase would be refused, with the next step to fix it. */
 function BlockerNotice({ error }: { error: PurchaseError }) {
+  // Explained above, with when it opens, and it's not a problem to fix.
+  if (error === "early_access") return null;
   const action =
     error === "insufficient_funds" ? (
       <Link to="/wallet" className="font-bold">

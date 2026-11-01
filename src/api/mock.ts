@@ -8,6 +8,7 @@
  */
 import { catalogDraws, catalogProducts } from './seedCatalog'
 import { canSaveListing } from '@/domain/saved'
+import { isLanguageCode } from '@/i18n/languages'
 import { crossedAlmostSold, isClosingSoon, isRelistOf, relistAlertKind, sameLagosDay, savedAlertAllowed, type SavedAlertKind } from '@/domain/savedAlerts'
 import { DEFAULT_PUSH_PREFERENCES, pushSubscriptionValid, type PushPreferences, type PushSubscriptionKeys } from '@/domain/push'
 import { WINNER_CONSENT_VERSION, WINNER_STORY_ERROR_TEXT, winnerStoryError } from '@/domain/winnerStories'
@@ -37,6 +38,8 @@ import {
   RULES,
   balanceFromLedger,
   checkPurchase,
+  completedPurchases,
+  isRegularBuyer,
   consolationCredit,
   spentInLastWeek,
   splitPayment,
@@ -80,7 +83,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v26' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v28' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -448,7 +451,7 @@ function productListing(input: NewProductInput & { merchantId: string; status: L
     id: uid('L'), productCode: newProductCode(), kind: 'product', merchantId: input.merchantId, title: input.title.trim(), description: input.description.trim(), category: input.category,
     images: input.images ?? [], priceKobo: input.priceKobo, ticketPriceKobo: 0, buyerTicketPriceKobo: 0, ticketCount: 0, ticketsSold: 0,
     feeMode: 'seller', feeBps: platformFeeBps(input.priceKobo), unsoldPolicy: 'refund', fallbackPriceKobo: null, durationDays: 0, extended: false,
-    status: input.status, handover: null, cautionFee: { amountKobo: 0, status: 'none' }, commitment: '', createdAt: iso(at), closesAt: iso(at), boostedUntil: null, soldOutAt: null, drawAt: null, pickupBatchId: null,
+    status: input.status, handover: null, cautionFee: { amountKobo: 0, status: 'none' }, commitment: '', createdAt: iso(at), closesAt: iso(at), boostedUntil: null, soldOutAt: null, drawAt: null, pickupBatchId: null, opensAt: null,
   }
 }
 
@@ -496,7 +499,7 @@ async function makeListing(s: SeedListing, now: number, seeds: Record<string, st
     boostedUntil: null,
     soldOutAt: null,
     drawAt: null,
-    pickupBatchId: null,
+    pickupBatchId: null, opensAt: null,
   }
 }
 
@@ -849,6 +852,8 @@ export interface MockOptions {
   latencyMs?: number
   now?: () => number
   pushPublicKey?: string | null
+  /** Tests that aren't about early access set this to 0, so a new draw opens straight away. */
+  earlyAccessMinutes?: number
 }
 
 export function createMockApi(opts: MockOptions = {}): DrawMartApi {
@@ -945,6 +950,15 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     return s?.role === 'buyer' ? s.userId : ME
   }
   const me = (db: Db) => db.users.find((u) => u.id === buyer())!
+  /** rules.ts completedPurchases: once per order or draw, however many tickets. A won prize counts through its draw. */
+  const completedBy = (db: Db, userId: string) =>
+    completedPurchases(
+      [
+        ...db.orders.flatMap((o) => (o.buyerId === userId && o.status === 'delivered' && !o.isPrize && o.deliveredAt ? [o.deliveredAt] : [])),
+        ...db.results.flatMap((r) => (db.tickets.some((t) => t.listingId === r.listingId && t.userId === userId) ? [r.drawnAt] : [])),
+      ],
+      now(),
+    )
   const addressesOf = (db: Db) => sortAddresses(db.addresses[buyer()] ?? [])
   const makeDefault = (list: SavedAddress[], id: string) => {
     for (const a of list) a.isDefault = a.id === id
@@ -1037,7 +1051,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       handover: { ...input.handover, address: input.handover.address.trim(), method: handoverMethodFor(input.category) },
       // In test mode the fee is recorded, not charged. A real backend takes it before booking the pickup.
       cautionFee: { amountKobo: cautionFeeFor(input.category), status: 'held' },
-      commitment: await commitmentFor(seed), createdAt: iso(at), closesAt: iso(at + input.durationDays * DAY), boostedUntil: null, soldOutAt: null, drawAt: null, pickupBatchId: null,
+      commitment: await commitmentFor(seed), createdAt: iso(at), closesAt: iso(at + input.durationDays * DAY), boostedUntil: null, soldOutAt: null, drawAt: null, pickupBatchId: null, opensAt: null,
     }
     db.listings.push(listing)
     return listing
@@ -1130,7 +1144,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const mine = db.ledger.filter((e) => e.userId === buyer())
         const balance = balanceFromLedger(mine)
         const held = db.tickets.filter((t) => t.listingId === listingId && t.userId === buyer()).length
-        const err = checkPurchase({ user, listing, quantity, ticketsAlreadyHeld: held, balance, spentThisWeekKobo: spentInLastWeek(mine, new Date(now())) })
+        const err = checkPurchase({ user, listing, quantity, ticketsAlreadyHeld: held, balance, spentThisWeekKobo: spentInLastWeek(mine, new Date(now())), isRegular: isRegularBuyer(completedBy(db, buyer())), now: now() })
         if (err) throw new ApiError(err, PURCHASE_ERROR_TEXT[err])
 
         const costKobo = quantity * listing.buyerTicketPriceKobo
@@ -1188,6 +1202,18 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     removeFromCart: (listingId) =>
       tx((db) => {
         db.carts[buyer()] = (db.carts[buyer()] ?? []).filter((id) => id !== listingId)
+      }),
+
+    setLanguage: (language) =>
+      tx((db) => {
+        if (!isLanguageCode(language)) throw new ApiError('invalid_input', 'That language isn’t available.')
+        me(db).language = language
+      }),
+
+    getRegularStatus: () =>
+      tx((db) => {
+        const completed = completedBy(db, buyer())
+        return { completed, isRegular: isRegularBuyer(completed) }
       }),
 
     getPushPreferences: () => tx((db) => ({ ...DEFAULT_PUSH_PREFERENCES, ...db.pushPreferences[buyer()] })),
@@ -1761,6 +1787,8 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         }
         l.status = 'live'
         l.closesAt = iso(now() + l.durationDays * DAY) // the clock starts when it goes live
+        const earlyMinutes = opts.earlyAccessMinutes ?? RULES.earlyAccessMinutes
+        l.opensAt = earlyMinutes > 0 ? iso(now() + earlyMinutes * 60 * 1000) : null
         alertRelists(db, l, now())
       }),
 
@@ -1787,6 +1815,11 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (l.status !== 'sold_out') throw new ApiError('invalid_input', 'Only sold-out draws can be announced.')
         l.drawAt = iso(now())
         await runDueDraws(db, now())
+      }),
+
+    demoOpenNow: (listingId) =>
+      tx((db) => {
+        getListingOr404(db, listingId).opensAt = null
       }),
 
     demoExpire: (listingId) =>

@@ -9,6 +9,7 @@
 import { LISTING_COLUMNS } from '../../api/_lib/preview.mjs'
 import { WINNER_CONSENT_VERSION, winnerStoryError } from '../../src/domain/winnerStories'
 import { pushSubscriptionValid } from '../../src/domain/push'
+import { LANGUAGES } from '../../src/i18n/languages'
 import { isProductCode } from '../../src/domain/productCode'
 import { readFileSync, readdirSync } from 'node:fs'
 import { PGlite } from '@electric-sql/pglite'
@@ -118,6 +119,8 @@ beforeAll(async () => {
   // Every migration, in order, like `supabase db push`.
   for (const f of readdirSync(new URL('../migrations', import.meta.url)).sort()) await db.exec(sql(`migrations/${f}`))
   await db.exec(sql('seed.sql'))
+  // Tests that aren't about early access shouldn't all wait an hour after approving a draw.
+  await db.exec(`update public.app_settings set early_access_minutes = 0 where id`)
 }, 60_000)
 
 describe('schema and seed', () => {
@@ -1557,6 +1560,142 @@ describe('link previews', () => {
   it('shows nothing for a listing buyers can’t see', async () => {
     const [{ id }] = await admin<{ id: string }>(`select id from public.listings where status = 'pending_review' limit 1`)
     expect(await asUser(null, `select ${LISTING_COLUMNS} from public.listings where id = $1`, [id])).toEqual([])
+  })
+})
+
+describe('account language', () => {
+  it('remembers a buyer’s choice, per buyer, among the languages we have', async () => {
+    const [a, b] = [await newUser('lang1@example.com'), await newUser('lang2@example.com')]
+    const mine = async (who: string) => (await asUser<{ language: string | null }>(who, `select language from public.profiles where id = $1`, [who]))[0].language
+    expect(await mine(a)).toBeNull()
+    await asUser(a, `select public.set_language('pcm')`)
+    expect(await mine(a)).toBe('pcm')
+    expect(await mine(b)).toBeNull()
+    for (const bad of ['fr', 'yo', '']) await expectFail(asUser(a, `select public.set_language($1)`, [bad]), 'invalid_input')
+    await expect(asUser(null, `select public.set_language('en')`)).rejects.toThrow(/permission denied/)
+    for (const l of LANGUAGES) await asUser(a, `select public.set_language($1)`, [l.code])
+  })
+})
+
+describe('early access', () => {
+  let store: string, staff: string
+  const newDraw = async (title: string) => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ title, priceKobo: 100_000, ticketPriceKobo: 100_000 })])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    return id
+  }
+  /** A draw this buyer took part in, that's finished. */
+  const finishedDraw = async (who: string, title: string, tickets = 1) => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ title, priceKobo: 100_000 * tickets, ticketPriceKobo: 100_000 })])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    await asUser(who, `select public.buy_tickets($1, $2)`, [id, tickets])
+    await asUser(staff, `select public.demo_run_draw($1)`, [id])
+    return id
+  }
+  const status = async (who: string) => (await asUser<{ s: { completed: number; isRegular: boolean } }>(who, `select public.my_regular_status() s`))[0].s
+  const gate = (minutes: number) => admin(`update public.app_settings set early_access_minutes = ${minutes} where id`)
+
+  beforeAll(async () => {
+    store = await newUser('earlystore@example.com', { merchantId: IKEJA })
+    staff = await newUser('earlystaff@example.com', { role: 'admin' })
+    await asUser(staff, `select public.set_boost_settings(1000, false, 12)`)
+  })
+
+  it('sets a public opening time an hour after approval, readable by anyone', async () => {
+    await gate(60)
+    const id = await newDraw('Early opening')
+    await gate(0)
+    const [row] = await asUser<{ opens_at: string; closes_at: string }>(null, `select opens_at, closes_at from public.listings where id = $1`, [id])
+    const inMinutes = (Date.parse(row.opens_at) - Date.now()) / 60_000
+    expect(inMinutes).toBeGreaterThan(59)
+    expect(inMinutes).toBeLessThan(61)
+  })
+
+  it('makes a buyer wait until it opens', async () => {
+    const newcomer = await newUser('early1@example.com')
+    await gate(60)
+    const id = await newDraw('Early wait')
+    await gate(0)
+    await expectFail(asUser(newcomer, `select public.buy_tickets($1, 1)`, [id]), 'early_access')
+    await admin(`update public.listings set opens_at = now() - interval '1 second' where id = $1`, [id])
+    await asUser(newcomer, `select public.buy_tickets($1, 1)`, [id])
+  })
+
+  it('lets a buyer with three finished draws in early, under every other limit', async () => {
+    const regular = await newUser('early2@example.com')
+    for (const n of [1, 2]) await finishedDraw(regular, `Early past ${n}`)
+    expect(await status(regular)).toEqual({ completed: 2, isRegular: false })
+    await gate(60)
+    const id = await newDraw('Early regular')
+    await gate(0)
+    await expectFail(asUser(regular, `select public.buy_tickets($1, 1)`, [id]), 'early_access')
+    await finishedDraw(regular, 'Early past 3')
+    expect(await status(regular)).toEqual({ completed: 3, isRegular: true })
+    await admin(`update public.profiles set weekly_limit_kobo = 1000 where id = $1`, [regular])
+    await expectFail(asUser(regular, `select public.buy_tickets($1, 1)`, [id]), 'weekly_limit')
+    await admin(`update public.profiles set weekly_limit_kobo = 5000000 where id = $1`, [regular])
+    await asUser(regular, `select public.buy_tickets($1, 1)`, [id])
+  })
+
+  it('counts a draw once however many tickets were bought, so heavy play earns nothing', async () => {
+    const big = await newUser('early3@example.com')
+    await finishedDraw(big, 'Early big spend', 5)
+    expect((await status(big)).completed).toBe(1)
+  })
+
+  it('only counts the last 90 days, delivered orders, and not a prize twice', async () => {
+    const buyer = await newUser('early4@example.com')
+    const old = await finishedDraw(buyer, 'Early old')
+    await finishedDraw(buyer, 'Early recent')
+    expect((await status(buyer)).completed).toBe(2)
+    await admin(`update public.draw_results set drawn_at = now() - interval '91 days' where listing_id = $1`, [old])
+    expect((await status(buyer)).completed).toBe(1)
+
+    const [{ id: item }] = await admin<{ id: string }>(`select id from public.listings where status = 'for_sale' and kind = 'product' and category <> 'Cars' limit 1`)
+    await admin(`insert into public.ledger_entries (user_id, kind, cash_kobo, memo) values ($1, 'topup', 10000000000, 'test')`, [buyer])
+    const [{ ids: [order] }] = await asUser<{ ids: string[] }>(buyer, `select public.checkout($1) ids`, [{ listingIds: [item], fulfilment: 'delivery', address: '15 Awolowo Road, Ikoyi', phone: '0803 123 4567', lat: 6.45, lng: 3.43, pickupPointId: null }])
+    expect((await status(buyer)).completed).toBe(1) // paid isn't completed
+    await admin(`update public.orders set status = 'delivered', delivered_at = now() where id = $1`, [order])
+    expect((await status(buyer)).completed).toBe(2)
+    await admin(`update public.orders set is_prize = true where id = $1`, [order])
+    expect((await status(buyer)).completed).toBe(1)
+  })
+
+  it('ignores draws that were refunded', async () => {
+    const buyer = await newUser('early5@example.com')
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ title: 'Early refunded', priceKobo: 200_000, ticketPriceKobo: 100_000 })])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    await asUser(buyer, `select public.buy_tickets($1, 1)`, [id])
+    await asUser(staff, `select public.demo_expire($1)`, [id])
+    const [{ status: listingStatus }] = await admin<{ status: string }>(`select status from public.listings where id = $1`, [id])
+    expect(listingStatus).toBe('refunded')
+    expect((await status(buyer)).completed).toBe(0)
+  })
+
+  it('leaves products and listings already live alone', async () => {
+    await gate(60)
+    const [{ id }] = await admin<{ id: string }>(`insert into public.listings (kind, merchant_id, title, description, category, images, price_kobo, ticket_price_kobo, buyer_ticket_price_kobo, ticket_count, fee_mode, fee_bps, unsold_policy, duration_days, status, caution_fee_kobo, caution_fee_status, commitment, closes_at)
+      values ('product', $1, 'Early product', '', 'Home', '{}', 100000, 0, 0, 0, 'seller', 500, 'refund', 0, 'pending_review', 0, 'none', '', now()) returning id`, [IKEJA])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    const [row] = await admin<{ status: string; opens_at: string | null }>(`select status, opens_at from public.listings where id = $1`, [id])
+    expect(row).toEqual({ status: 'for_sale', opens_at: null })
+    await gate(0)
+    expect(await admin(`select 1 from public.listings where status = 'live' and title = 'Toyota Camry 2025' and opens_at is not null`)).toEqual([])
+  })
+
+  it('has a test-mode control that only admins can use', async () => {
+    await gate(60)
+    const id = await newDraw('Early demo')
+    await gate(0)
+    const buyer = await newUser('early6@example.com')
+    await expectFail(asUser(buyer, `select public.demo_open_now($1)`, [id]), 'forbidden')
+    await asUser(staff, `select public.demo_open_now($1)`, [id])
+    await asUser(buyer, `select public.buy_tickets($1, 1)`, [id])
+  })
+
+  it('only tells you your own status', async () => {
+    await expect(asUser(null, `select public.my_regular_status()`)).rejects.toThrow(/permission denied/)
+    await expect(asUser(staff, `select private.completed_purchases($1)`, [staff])).rejects.toThrow(/permission denied/)
   })
 })
 

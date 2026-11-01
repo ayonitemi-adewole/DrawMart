@@ -1,8 +1,10 @@
 import { Link } from "react-router";
+import { useTranslation } from "react-i18next";
 import type { ListingView } from "@/api/types";
 import { chanceText, percentSold } from "@/domain/chance";
 import { formatNaira } from "@/domain/money";
 import { salePriceKobo } from "@/domain/orders";
+import { inEarlyAccess } from "@/domain/rules";
 import { isBoosted } from "@/domain/boosts";
 import { Countdown } from "./Countdown";
 import { SaveButton } from "./SaveButton";
@@ -67,6 +69,7 @@ export function ListingCard({
   style?: React.CSSProperties;
   compact?: boolean;
 }) {
+  const { t } = useTranslation();
   const hot = isAlmostGone(l);
   const pct = percentSold(l.ticketsSold, l.ticketCount);
   const mine = l.myNumbers.length;
@@ -118,34 +121,38 @@ export function ListingCard({
               </Badge> */}
               {isBoosted(l, Date.now()) ? (
                 <Badge tone="ticket" className="shadow-card">
-                  <HandshakeIcon size={12} /> Sponsored
+                  <HandshakeIcon size={12} /> {t("card.sponsored")}
                 </Badge>
               ) : null}
             </span>
             <div className="flex flex-wrap justify-start gap-1.5 sm:justify-end">
               {hot ? (
                 <Badge tone="hot" className="whitespace-nowrap shadow-card">
-                  <FlameIcon size={12} className="max-[360px]:hidden" /> ALMOST
-                  GONE
+                  <FlameIcon size={12} className="max-[360px]:hidden" /> {t("card.almostGone")}
                 </Badge>
               ) : null}
-              {mine > 0 && l.status === "live" ? (
+              {inEarlyAccess(l, Date.now()) ? (
+              <Badge tone="violet" className="shadow-card">
+                {t("card.earlyAccess")}
+              </Badge>
+            ) : null}
+            {mine > 0 && l.status === "live" ? (
                 <Badge tone="ticket" className="shadow-card">
-                  <TicketIcon size={12} /> {mine} YOURS
+                  <TicketIcon size={12} /> {t("card.yours", { count: mine })}
                 </Badge>
               ) : null}
-              {l.status === "drawn" ? <Badge tone="neutral">DRAWN</Badge> : null}
-              {l.status === "sold_out" ? <Badge tone="ticket">SOLD OUT</Badge> : null}
+              {l.status === "drawn" ? <Badge tone="neutral">{t("card.drawn")}</Badge> : null}
+              {l.status === "sold_out" ? <Badge tone="ticket">{t("card.soldOut")}</Badge> : null}
               {l.status === "sold" ? (
-                <Badge tone="hot">SOLD</Badge>
+                <Badge tone="hot">{t("card.sold")}</Badge>
               ) : forSale ? (
-                <Badge tone="sky">BUY NOW</Badge>
+                <Badge tone="sky">{t("card.buyNow")}</Badge>
               ) : null}
             </div>
           </div>
           {forSale ? null : (
             <span className="absolute right-4 bottom-2 rounded-full bg-ink px-2.5 py-1 text-[11px] font-extrabold text-ground shadow-card">
-              {valueMultiple(l)}× cheaper
+              {t("card.cheaper", { multiple: valueMultiple(l) })}
             </span>
           )}
         </div>
@@ -182,12 +189,10 @@ export function ListingCard({
               {l.status === "live" ? null : (
                 <div className="flex justify-between text-xs font-semibold">
                   <span className={hot ? "text-hot-ink" : "text-muted"}>
-                    {pct}% sold
+                    {t("card.percentSold", { percent: pct })}
                   </span>
                   <span className="text-subtle">
-                    {l.status === "sold_out"
-                      ? "Winner coming soon"
-                      : "Draw complete"}
+                    {l.status === "sold_out" ? t("card.winnerSoon") : t("card.drawComplete")}
                   </span>
                 </div>
               )}
@@ -195,7 +200,7 @@ export function ListingCard({
                 value={l.ticketsSold}
                 max={l.ticketCount}
                 hot={hot}
-                label={`${l.ticketsSold} of ${l.ticketCount} tickets sold`}
+                label={t("card.ticketsSoldLabel", { sold: l.ticketsSold, total: l.ticketCount })}
               />
             </div>
           )}
@@ -203,19 +208,19 @@ export function ListingCard({
           {!forSale && l.status === "live" ? (
             <div className="mt-auto flex flex-col gap-1.5 border-t border-dashed border-line pt-3">
               <span className="text-[11px] text-subtle line-through decoration-subtle/50">
-                Worth {formatNaira(l.priceKobo)}
+                {t("card.worth", { price: formatNaira(l.priceKobo) })}
               </span>
               <dl className="grid grid-cols-[auto_auto] justify-between gap-x-2 gap-y-1.5">
-                <PlainNumber label="per ticket">
+                <PlainNumber label={t("card.perTicket")}>
                   {formatNaira(l.buyerTicketPriceKobo)}
                 </PlainNumber>
-                <PlainNumber label="chance">
+                <PlainNumber label={t("card.chance")}>
                   {chanceText(1, l.ticketCount)}
                 </PlainNumber>
-                <PlainNumber label="sold" className={hot ? "text-hot-ink" : undefined}>
+                <PlainNumber label={t("card.soldLabel")} className={hot ? "text-hot-ink" : undefined}>
                   {pct}%
                 </PlainNumber>
-                <PlainNumber label="left">
+                <PlainNumber label={t("card.left")}>
                   <Countdown
                     closesAt={l.closesAt}
                     icon={false}
@@ -229,7 +234,7 @@ export function ListingCard({
               {forSale ? (
                 <div className="flex flex-col">
                   <span className="text-[11px] text-subtle">
-                    {l.status === "sold" ? "Sold for" : "Buy now"}
+                    {l.status === "sold" ? t("card.soldFor") : t("card.buyNowPrice")}
                   </span>
                   <span className="text-lg leading-tight font-extrabold">
                     {formatNaira(price ?? l.fallbackPriceKobo ?? l.priceKobo)}
@@ -238,13 +243,13 @@ export function ListingCard({
               ) : (
                 <div className="flex flex-col">
                   <span className="text-[11px] text-subtle line-through decoration-subtle/50">
-                    Worth {formatNaira(l.priceKobo)}
+                    {t("card.worth", { price: formatNaira(l.priceKobo) })}
                   </span>
                   <span className="text-lg leading-tight font-extrabold">
                     {formatNaira(l.buyerTicketPriceKobo)}
                     <span className="text-xs font-semibold text-subtle">
                       {" "}
-                      / ticket
+                      {t("card.slashTicket")}
                     </span>
                   </span>
                 </div>

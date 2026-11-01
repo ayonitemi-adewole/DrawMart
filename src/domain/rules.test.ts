@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { nairaToKobo as k } from './money'
-import { balanceFromLedger, checkPurchase, consolationCredit, maxPurchasable, spentInLastWeek, splitPayment, topUpError } from './rules'
+import { balanceFromLedger, checkPurchase, completedPurchases, inEarlyAccess, isRegularBuyer, consolationCredit, maxPurchasable, spentInLastWeek, splitPayment, topUpError } from './rules'
 import type { LedgerEntry, Listing, User } from './types'
 
 const user: User = { id: 'u1', displayName: 'Test', state: 'Lagos', weeklyLimitKobo: k(50_000), ageVerified: true, phone: null }
 const listing: Listing = {
+  opensAt: null,
   id: 'l1', productCode: 'PRD-222222', kind: 'raffle', merchantId: 'm1', title: 'Phone', description: '', category: 'Phones', images: [],
   priceKobo: k(1_000_000), ticketPriceKobo: k(5_000), buyerTicketPriceKobo: k(5_000),
   ticketCount: 200, ticketsSold: 190, feeMode: 'seller', feeBps: 1000, unsoldPolicy: 'refund', fallbackPriceKobo: null, durationDays: 7, extended: false,
@@ -16,6 +17,32 @@ const base = { user, listing, quantity: 1, ticketsAlreadyHeld: 0, balance: { cas
 
 describe('checkPurchase', () => {
   it('allows a normal purchase', () => expect(checkPurchase(base)).toBeNull())
+  describe('early access', () => {
+    const now = Date.parse('2026-11-05T11:00:00Z')
+    const gated = { ...base, now, listing: { ...listing, opensAt: new Date(now + 60_000).toISOString() } }
+    it('keeps a draw for regulars until it opens', () => expect(checkPurchase(gated)).toBe('early_access'))
+    it('lets regulars in', () => expect(checkPurchase({ ...gated, isRegular: true })).toBeNull())
+    it('opens to everyone on time', () => expect(checkPurchase({ ...gated, now: now + 60_000 })).toBeNull())
+    it('leaves a draw with no opening time alone', () => expect(checkPurchase({ ...base, now, listing: { ...listing, opensAt: null } })).toBeNull())
+    it('still applies every other limit to regulars', () => expect(checkPurchase({ ...gated, isRegular: true, spentThisWeekKobo: user.weeklyLimitKobo })).toBe('weekly_limit'))
+    it('says when a draw is in its hour', () => {
+      expect(inEarlyAccess(gated.listing, now)).toBe(true)
+      expect(inEarlyAccess(gated.listing, now + 60_000)).toBe(false)
+      expect(inEarlyAccess({ ...gated.listing, status: 'sold_out' }, now)).toBe(false)
+      expect(inEarlyAccess({ status: 'live', opensAt: null }, now)).toBe(false)
+    })
+  })
+  describe('regular buyers', () => {
+    const now = Date.parse('2026-11-05T11:00:00Z')
+    const daysAgo = (d: number) => new Date(now - d * 86_400_000).toISOString()
+    it('takes three completed purchases', () => {
+      expect(isRegularBuyer(2)).toBe(false)
+      expect(isRegularBuyer(3)).toBe(true)
+    })
+    it('only counts the last 90 days', () => {
+      expect(completedPurchases([daysAgo(1), daysAgo(89), daysAgo(90), daysAgo(91), daysAgo(400)], now)).toBe(3)
+    })
+  })
   it('blocks unlicensed states', () => expect(checkPurchase({ ...base, user: { ...user, state: 'Kano' } })).toBe('state_not_licensed'))
   it('blocks unverified age', () => expect(checkPurchase({ ...base, user: { ...user, ageVerified: false } })).toBe('age_not_verified'))
   it('blocks closed listings', () => expect(checkPurchase({ ...base, listing: { ...listing, status: 'drawn' } })).toBe('not_live'))

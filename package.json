@@ -18,9 +18,11 @@
     "@supabase/supabase-js": "^2.118.0",
     "@tanstack/react-query": "^5.105.0",
     "@types/leaflet": "1.9.12",
+    "i18next": "^26.6.0",
     "leaflet": "1.9.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "react-i18next": "^17.1.10",
     "react-router": "^8.5.1",
     "satori": "^0.63.2",
     "sharp": "^0.35.5"

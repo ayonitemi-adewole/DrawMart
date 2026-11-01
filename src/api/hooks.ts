@@ -7,6 +7,7 @@ import type { SellerApplicationInput } from '@/domain/sellers'
 import { visitorId } from '@/lib/visitor'
 import { pushDeviceState, subscribeThisDevice, unsubscribeThisDevice } from '@/lib/push'
 import type { NotificationPreference } from '@/domain/push'
+import type { LanguageCode } from '@/i18n/languages'
 import type { SavedAddressInput } from '@/domain/addresses'
 import type { AccountRole, BoostSettings, CheckoutInput, ListingFilter, NewListingInput, NewPickupInput, NewProductInput, PickupItemInput } from './types'
 
@@ -28,6 +29,7 @@ export const keys = {
   addresses: ['addresses'] as const,
   deliveryJobs: ['delivery-jobs'] as const,
   cart: ['cart'] as const,
+  regularStatus: ['regular-status'] as const,
   pushPreferences: ['push-preferences'] as const,
   pushDevice: ['push-device'] as const,
   winnersWall: ['winners-wall'] as const,
@@ -138,6 +140,9 @@ export function useAddressActions() {
 
 // Cart and checkout
 export const useCart = () => useQuery({ queryKey: keys.cart, queryFn: () => api.listCart(), enabled: useIs('buyer') })
+
+// Early access
+export const useRegularStatus = () => useQuery({ queryKey: keys.regularStatus, queryFn: () => api.getRegularStatus(), enabled: useIs('buyer') })
 
 // Push notifications
 export const usePushPreferences = () => useQuery({ queryKey: keys.pushPreferences, queryFn: () => api.getPushPreferences(), enabled: useIs('buyer') })
@@ -263,6 +268,11 @@ export function useAddToCart() {
 export function useRemoveFromCart() {
   const qc = useQueryClient()
   return useMutation({ mutationFn: (listingId: string) => api.removeFromCart(listingId), onSettled: () => qc.invalidateQueries({ queryKey: keys.cart }) })
+}
+
+export function useSetLanguage() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (language: LanguageCode) => api.setLanguage(language), onSettled: () => qc.invalidateQueries({ queryKey: keys.me }) })
 }
 
 export function useSetPushPreference() {
@@ -428,6 +438,7 @@ export function useDemoActions() {
     sellOut: useMutation({ mutationFn: (id: string) => api.demoSellOut(id), onSettled: invalidate }),
     runDraw: useMutation({ mutationFn: (id: string) => api.demoRunDraw(id), onSettled: invalidate }),
     expire: useMutation({ mutationFn: (id: string) => api.demoExpire(id), onSettled: invalidate }),
+    openNow: useMutation({ mutationFn: (id: string) => api.demoOpenNow(id), onSettled: invalidate }),
     reset: useMutation({
       mutationFn: () => api.demoReset?.() ?? Promise.resolve(),
       onSuccess: () => window.location.assign('/'),

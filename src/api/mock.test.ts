@@ -7,7 +7,7 @@ import type { Delivery } from '@/domain/types'
 import { createMockApi, memoryStore } from './mock'
 import { ApiError, type NewListingInput } from './types'
 
-const make = (now = () => Date.now()) => createMockApi({ store: memoryStore(), latencyMs: 0, now })
+const make = (now = () => Date.now()) => createMockApi({ store: memoryStore(), latencyMs: 0, now, earlyAccessMinutes: 0 })
 
 const buyNow = async (api: ReturnType<typeof make>, listingId: string, delivery: Delivery) =>
   (await api.checkout({ listingIds: [listingId], fulfilment: 'delivery', delivery, pickupPointId: null }))[0]
@@ -42,13 +42,13 @@ describe('mock api', () => {
 
   it('signs demo accounts into their own app and remembers them', async () => {
     const store = memoryStore()
-    const api = createMockApi({ store, latencyMs: 0 })
+    const api = createMockApi({ store, latencyMs: 0, earlyAccessMinutes: 0 })
     const seen: (string | null)[] = []
     const stop = api.auth.onChange((s) => seen.push(s?.role ?? null))
     expect(await api.auth.getSession()).toBeNull()
     await expect(api.auth.signInWithPassword('store@drawmart.test', 'nope')).rejects.toThrow(ApiError)
     await api.auth.signInWithPassword(' Store@drawmart.test ', 'drawmart-demo')
-    expect(await createMockApi({ store, latencyMs: 0 }).auth.getSession()).toMatchObject({ role: 'store', email: 'store@drawmart.test' })
+    expect(await createMockApi({ store, latencyMs: 0, earlyAccessMinutes: 0 }).auth.getSession()).toMatchObject({ role: 'store', email: 'store@drawmart.test' })
     await api.auth.signOut()
     stop()
     expect(seen).toEqual(['store', null])
@@ -316,7 +316,7 @@ describe('mock api', () => {
 
   it('lets buyers and sellers chat about products, with unread counts and opt-in calls', async () => {
     const store = memoryStore()
-    const api = createMockApi({ store, latencyMs: 0 })
+    const api = createMockApi({ store, latencyMs: 0, earlyAccessMinutes: 0 })
     await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
     const seeded = await api.listConversations()
     expect(seeded).toHaveLength(1) // the demo buyer's TV chat; the store's chat with Ada isn't theirs
@@ -351,7 +351,7 @@ describe('mock api', () => {
 
   it('counts listing views for seller insights, but not the seller’s own', async () => {
     const store = memoryStore()
-    const api = createMockApi({ store, latencyMs: 0 })
+    const api = createMockApi({ store, latencyMs: 0, earlyAccessMinutes: 0 })
     await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
     const before = await api.getMerchantMetrics(7)
     expect(before.daily).toHaveLength(7)
@@ -592,7 +592,7 @@ describe('mock api', () => {
 
   it('keeps each buyer’s saved items through signing out, and from everyone else', async () => {
     const store = memoryStore()
-    const api = createMockApi({ store, latencyMs: 0 })
+    const api = createMockApi({ store, latencyMs: 0, earlyAccessMinutes: 0 })
     await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
     const [draw, other] = await api.listListings()
     const [product] = await api.listListings({ status: ['for_sale'] })
@@ -644,6 +644,98 @@ describe('mock api', () => {
       expect(await unseen()).toEqual([])
     }
     expect(results.sort()).toEqual(['draw_lost', 'draw_won'])
+  })
+
+  it('remembers each buyer’s language on their account', async () => {
+    const api = make()
+    await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    expect((await api.getCurrentUser()).language).toBeUndefined()
+    await api.setLanguage('pcm')
+    expect((await api.getCurrentUser()).language).toBe('pcm')
+    await api.auth.signOut()
+    await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
+    expect((await api.getCurrentUser()).language).toBeUndefined()
+    await expect(api.setLanguage('fr' as 'en')).rejects.toMatchObject({ code: 'invalid_input' })
+  })
+
+  describe('early access', () => {
+    const setup = () => {
+      const store = memoryStore()
+      let t = Date.now()
+      const open = createMockApi({ store, latencyMs: 0, now: () => t, earlyAccessMinutes: 0 })
+      const gated = createMockApi({ store, latencyMs: 0, now: () => t, earlyAccessMinutes: 60 })
+      const as = async (who: string) => {
+        await open.auth.signOut()
+        await open.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+      }
+      const newDraw = async (api: typeof open, title: string) => {
+        await as('store')
+        const d = await open.createListing(newListing({ title, priceKobo: k(2_000), ticketPriceKobo: k(500) }))
+        await as('admin')
+        await api.approveListing(d.id)
+        return d.id
+      }
+      return { open, gated, as, newDraw, advance: (ms: number) => (t += ms) }
+    }
+
+    it('makes everyone but regulars wait an hour for a new draw', async () => {
+      const { open, gated, as, newDraw, advance } = setup()
+      const id = await newDraw(gated, 'Gated')
+      const opensAt = (await open.getListing(id)).opensAt!
+      expect(Date.parse(opensAt) - Date.now()).toBeGreaterThan(59 * 60_000)
+      await as('funke')
+      await expect(gated.buyTickets(id, 1)).rejects.toMatchObject({ code: 'early_access' })
+      advance(61 * 60_000)
+      await expect(gated.buyTickets(id, 1)).resolves.toBeDefined()
+    })
+
+    it('lets a regular in early: 3 finished draws, however few tickets', async () => {
+      const { open, gated, as, newDraw } = setup()
+      for (const n of [1, 2]) {
+        const d = await newDraw(open, `Past ${n}`)
+        await as('funke')
+        await open.buyTickets(d, 1)
+        await open.demoSellOut(d)
+        await open.demoRunDraw(d)
+      }
+      expect(await open.getRegularStatus()).toEqual({ completed: 2, isRegular: false })
+      const early = await newDraw(gated, 'Early')
+      await as('funke')
+      await expect(gated.buyTickets(early, 1)).rejects.toMatchObject({ code: 'early_access' })
+
+      const third = await newDraw(open, 'Past 3')
+      await as('funke')
+      await open.buyTickets(third, 1)
+      await open.demoSellOut(third)
+      await open.demoRunDraw(third)
+      expect(await open.getRegularStatus()).toEqual({ completed: 3, isRegular: true })
+      await expect(gated.buyTickets(early, 1)).resolves.toBeDefined()
+    })
+
+    it('counts a draw once however many tickets were bought, so heavy play earns nothing', async () => {
+      const { open, as, newDraw } = setup()
+      const d = await newDraw(open, 'Big spend')
+      await as('funke')
+      await open.buyTickets(d, 4)
+      await open.demoRunDraw(d)
+      expect((await open.getRegularStatus()).completed).toBe(1)
+    })
+
+    it('leaves draws that were already live, and products, open to everyone', async () => {
+      const { gated, as } = setup()
+      await as('funke')
+      const [l] = await gated.listListings()
+      expect(l.opensAt).toBeNull()
+    })
+
+    it('can be opened early in test mode', async () => {
+      const { open, gated, as, newDraw } = setup()
+      const id = await newDraw(gated, 'Open me')
+      await gated.demoOpenNow(id)
+      expect((await open.getListing(id)).opensAt).toBeNull()
+      await as('funke')
+      await expect(gated.buyTickets(id, 1)).resolves.toBeDefined()
+    })
   })
 
   describe('saved-item alerts', () => {
@@ -777,7 +869,7 @@ describe('mock api', () => {
     /** Funke wins the 2-ticket test draw. */
     async function funkeWins() {
       const store = memoryStore()
-      const api = createMockApi({ store, latencyMs: 0 })
+      const api = createMockApi({ store, latencyMs: 0, earlyAccessMinutes: 0 })
       await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
       const draw = (await api.listListings()).find((l) => l.title.startsWith('JBL Go'))!
       await api.buyTickets(draw.id, 2)

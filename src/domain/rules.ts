@@ -28,6 +28,11 @@ export const RULES = {
   /** Size of one wallet top-up. */
   minTopUpKobo: 100_00,
   maxTopUpKobo: 500_000_00,
+  /** A new draw opens to regular buyers this long before everyone else. */
+  earlyAccessMinutes: 60,
+  /** Completed purchases, not tickets, so this doesn't reward heavy play. */
+  regularBuyerPurchases: 3,
+  regularBuyerWindowDays: 90,
 }
 
 export function balanceFromLedger(entries: LedgerEntry[]): WalletBalance {
@@ -69,9 +74,10 @@ export type PurchaseError =
   | 'insufficient_funds'
   | 'state_not_licensed'
   | 'age_not_verified'
+  | 'early_access'
 
 /** The listing fields purchase rules depend on. */
-export type PurchasableListing = Pick<Listing, 'status' | 'ticketCount' | 'ticketsSold' | 'buyerTicketPriceKobo'>
+export type PurchasableListing = Pick<Listing, 'status' | 'ticketCount' | 'ticketsSold' | 'buyerTicketPriceKobo'> & Partial<Pick<Listing, 'opensAt'>>
 
 export interface PurchaseCheckInput {
   user: User
@@ -80,13 +86,34 @@ export interface PurchaseCheckInput {
   ticketsAlreadyHeld: number
   balance: WalletBalance
   spentThisWeekKobo: Kobo
+  /** Regular buyers can buy before a draw opens to everyone. */
+  isRegular?: boolean
+  now?: number
 }
+
+/** Whether a draw is still in its hour for regular buyers. */
+export function inEarlyAccess(l: { status: Listing['status']; opensAt?: Listing['opensAt'] }, now: number): boolean {
+  return l.status === 'live' && !!l.opensAt && Date.parse(l.opensAt) > now
+}
+
+/**
+ * How many purchases count towards being a regular: pass the dates of delivered
+ * orders (not won prizes, which their draw already counts for) and finished draws
+ * the buyer was in, once each however many tickets they held.
+ */
+export function completedPurchases(completedAt: readonly string[], now: number): number {
+  const since = now - RULES.regularBuyerWindowDays * 24 * 60 * 60 * 1000
+  return completedAt.filter((at) => Date.parse(at) >= since).length
+}
+
+export const isRegularBuyer = (completed: number) => completed >= RULES.regularBuyerPurchases
 
 /** Returns the first rule a purchase breaks, or null if it's allowed. */
 export function checkPurchase(i: PurchaseCheckInput): PurchaseError | null {
   if (!RULES.licensedStates.includes(i.user.state)) return 'state_not_licensed'
   if (!i.user.ageVerified) return 'age_not_verified'
   if (i.listing.status !== 'live') return 'not_live'
+  if (inEarlyAccess(i.listing, i.now ?? Date.now()) && !i.isRegular) return 'early_access'
   if (!Number.isInteger(i.quantity) || i.quantity < 1) return 'invalid_quantity'
   const left = i.listing.ticketCount - i.listing.ticketsSold
   if (left <= 0) return 'sold_out'
@@ -108,6 +135,7 @@ export const PURCHASE_ERROR_TEXT: Record<PurchaseError, string> = {
   insufficient_funds: 'Not enough in your wallet. Top up to continue.',
   state_not_licensed: 'DrawMart is only available to Lagos residents for now.',
   age_not_verified: 'Verify your age (18+) before buying tickets.',
+  early_access: 'This draw is open to regular buyers for now, and opens to everyone soon.',
 }
 
 /** Largest quantity a user could buy right now, ignoring wallet balance. */

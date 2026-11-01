@@ -1,3 +1,4 @@
+import type { LanguageCode } from '@/i18n/languages'
 /**
  * Core domain types. All money is integer kobo (₦1 = 100 kobo) so we never
  * hit floating-point errors, and so amounts map 1:1 onto payment gateways.
@@ -113,6 +114,8 @@ export interface Listing {
   commitment: string
   createdAt: ISODate
   closesAt: ISODate
+  /** When a new draw opens to everyone, after its hour for regular buyers. Null once that's not relevant. */
+  opensAt: ISODate | null
   /** Shown first, marked Sponsored, until then (a paid boost). */
   boostedUntil: ISODate | null
   /** When the last ticket sold. */
@@ -216,6 +219,8 @@ export interface User {
   ageVerified: boolean
   /** Contact phone on their account, suggested at checkout. */
   phone: string | null
+  /** The language they chose. Null until they do. */
+  language?: LanguageCode | null
 }
 
 export interface WalletBalance {

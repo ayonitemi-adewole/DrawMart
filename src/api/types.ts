@@ -9,6 +9,7 @@ import type { HandoverDetails } from '@/domain/listing'
 import type { PinResult } from '@/domain/delivery'
 import type { SavedAddress, SavedAddressInput } from '@/domain/addresses'
 import type { CheckoutDetails } from '@/domain/cart'
+import type { LanguageCode } from '@/i18n/languages'
 import type { NotificationPreference, PushPreferences, PushSubscriptionKeys } from '@/domain/push'
 import type { OrderError } from '@/domain/orders'
 import type { PurchaseError } from '@/domain/rules'
@@ -290,6 +291,11 @@ export interface NotificationView {
   celebrated: boolean
 }
 
+export interface RegularStatus {
+  completed: number
+  isRegular: boolean
+}
+
 /** Never carries a user id: it's public, and wins aren't otherwise tied to accounts. */
 export interface WinnerWallEntry {
   id: string
@@ -430,6 +436,10 @@ export interface DrawMartApi {
   /** Regular products and draws the buyer has won. Never cars. */
   addToCart(listingId: string): Promise<void>
   removeFromCart(listingId: string): Promise<void>
+  /** Remembered on the account, so it follows them to a new device. */
+  setLanguage(language: LanguageCode): Promise<void>
+  /** Whether this buyer gets early access to new draws, and how many completed purchases that's from. */
+  getRegularStatus(): Promise<RegularStatus>
   /** Which kinds of push notification this buyer wants. Everything's on until they say otherwise. */
   getPushPreferences(): Promise<PushPreferences>
   setPushPreference(category: NotificationPreference, enabled: boolean): Promise<void>
@@ -553,6 +563,8 @@ export interface DrawMartApi {
   /** Announces a sold-out draw's winner now instead of waiting. */
   demoRunDraw(listingId: string): Promise<void>
   demoExpire(listingId: string): Promise<void>
+  /** Ends a draw's hour for regular buyers, so testers needn't wait. */
+  demoOpenNow(listingId: string): Promise<void>
   /** Wipes all data. Only the in-browser mock can do this. */
   demoReset?(): Promise<void>
   /**
