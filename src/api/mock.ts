@@ -8,6 +8,7 @@
  */
 import { catalogDraws, catalogProducts } from './seedCatalog'
 import { canSaveListing } from '@/domain/saved'
+import { crossedAlmostSold, isClosingSoon, isRelistOf, relistAlertKind, sameLagosDay, savedAlertAllowed, type SavedAlertKind } from '@/domain/savedAlerts'
 import { DEFAULT_PUSH_PREFERENCES, pushSubscriptionValid, type PushPreferences, type PushSubscriptionKeys } from '@/domain/push'
 import { WINNER_CONSENT_VERSION, WINNER_STORY_ERROR_TEXT, winnerStoryError } from '@/domain/winnerStories'
 import { commitmentFor, createSeed, randomHex, winningTicketNumber, announcementDate } from '@/domain/draw'
@@ -79,7 +80,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v24' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v25' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -112,6 +113,7 @@ interface Db {
   /** Listing ids in each buyer's cart, oldest first. */
   carts: Record<string, string[]>
   pushPreferences: Record<string, Partial<PushPreferences>>
+  savedAlertsSent: { userId: string; savedListingId: string; kind: SavedAlertKind; at: string }[]
   pushSubscriptions: (PushSubscriptionKeys & { userId: string })[]
   winnerStories: { id: string; userId: string; listingId: string; firstName: string | null; status: 'pending' | 'approved' | 'rejected' | 'withdrawn'; consentVersion: number; consentAt: string; withdrawnAt: string | null }[]
   winnerConsentLog: { userId: string; listingId: string; event: 'given' | 'withdrawn'; consentVersion: number; at: string }[]
@@ -542,6 +544,7 @@ async function freshDb(): Promise<Db> {
     carts: {},
     saved: {},
     pushPreferences: {},
+    savedAlertsSent: [],
     pushSubscriptions: [],
     winnerStories: [],
     winnerConsentLog: [],
@@ -666,6 +669,33 @@ function notify(db: Db, userId: string, kind: NotificationKind, listingId: strin
   db.notifications.push({ id: uid('N'), userId, kind, listingId, createdAt: at, read: false, celebrated: false })
 }
 
+/** savedAlerts.ts savedAlertAllowed decides; this sends it, pointing at `target` (a relist's new listing). */
+function alertSaved(db: Db, userId: string, savedListingId: string, target: Listing, kind: SavedAlertKind, now: number) {
+  const user = db.users.find((u) => u.id === userId)
+  if (!user || target.merchantId === db.sellerShops[userId]) return
+  const allowed = savedAlertAllowed({
+    kind,
+    enabled: db.pushPreferences[userId]?.savedItems !== false,
+    alreadySent: db.savedAlertsSent.some((a) => a.userId === userId && a.savedListingId === savedListingId && a.kind === kind),
+    sentToday: db.savedAlertsSent.filter((a) => a.userId === userId && sameLagosDay(Date.parse(a.at), now)).length,
+    weeklyRoomKobo: user.weeklyLimitKobo - spentInLastWeek(db.ledger.filter((e) => e.userId === userId), new Date(now)),
+    ticketPriceKobo: target.buyerTicketPriceKobo,
+  })
+  if (!allowed) return
+  db.savedAlertsSent.push({ userId, savedListingId, kind, at: iso(now) })
+  notify(db, userId, kind, target.id, iso(now))
+}
+
+const saversOf = (db: Db, listingId: string) => Object.entries(db.saved).filter(([, ids]) => ids.includes(listingId)).map(([userId]) => userId)
+
+/** A listing has just become visible: does it bring back something a buyer saved? */
+function alertRelists(db: Db, fresh: Listing, now: number) {
+  for (const saved of db.listings) {
+    if (!isRelistOf(fresh, saved)) continue
+    for (const userId of saversOf(db, saved.id)) alertSaved(db, userId, saved.id, fresh, relistAlertKind(fresh.status), now)
+  }
+}
+
 /** The last ticket has sold: sales stop and everyone hears when the winner comes. */
 function closeTicketSales(db: Db, listing: Listing, closingRef: string, now: number) {
   listing.status = 'sold_out'
@@ -711,6 +741,13 @@ function processDeadlines(db: Db, now: number): boolean {
     refundBuyers(db, l, iso(now))
     l.status = l.unsoldPolicy === 'convert_to_sale' && l.fallbackPriceKobo ? 'for_sale' : 'refunded'
     l.cautionFee = settleCautionFee(l.cautionFee, l.status)
+    if (l.status === 'for_sale') for (const userId of saversOf(db, l.id)) alertSaved(db, userId, l.id, l, 'saved_back_on_sale', now)
+  }
+  for (const [userId, ids] of Object.entries(db.saved)) {
+    for (const id of ids) {
+      const l = db.listings.find((x) => x.id === id)
+      if (l?.status === 'live' && isClosingSoon(l.closesAt, now)) alertSaved(db, userId, l.id, l, 'saved_closing_soon', now)
+    }
   }
   return changed
 }
@@ -1101,6 +1138,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const purchaseId = `P-${randomHex(3).toUpperCase()}`
         const at = iso(now())
         const numbers: number[] = []
+        const soldBefore = listing.ticketsSold
         for (let i = 0; i < quantity; i++) {
           listing.ticketsSold += 1
           numbers.push(listing.ticketsSold)
@@ -1112,6 +1150,9 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         })
         const soldOut = listing.ticketsSold === listing.ticketCount
         if (soldOut) closeTicketSales(db, listing, purchaseId, now())
+        if (crossedAlmostSold(soldBefore, listing.ticketsSold, listing.ticketCount)) {
+          for (const userId of saversOf(db, listing.id)) alertSaved(db, userId, listing.id, listing, 'saved_almost_sold', now())
+        }
         return { purchaseId, numbers, costKobo, soldOut, drawAt: listing.drawAt }
       }),
 
@@ -1715,10 +1756,12 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (l.status !== 'pending_review') throw new ApiError('invalid_input', 'Only listings in review can be approved.')
         if (l.kind === 'product') {
           l.status = 'for_sale' // products skip the draw
+          alertRelists(db, l, now())
           return
         }
         l.status = 'live'
         l.closesAt = iso(now() + l.durationDays * DAY) // the clock starts when it goes live
+        alertRelists(db, l, now())
       }),
 
     rejectListing: (id) =>

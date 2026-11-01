@@ -206,7 +206,7 @@ export interface Order {
   deliveredAt: ISODate | null
 }
 
-export type NotificationKind = 'draw_sold_out' | 'draw_won' | 'draw_lost'
+export type NotificationKind = 'draw_sold_out' | 'draw_won' | 'draw_lost' | 'saved_almost_sold' | 'saved_closing_soon' | 'saved_relisted' | 'saved_back_on_sale' | 'saved_price_drop'
 
 export interface User {
   id: string

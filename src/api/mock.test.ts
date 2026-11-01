@@ -619,15 +619,108 @@ describe('mock api', () => {
     await expect(api.saveListing(draw.id)).rejects.toMatchObject({ code: 'forbidden' })
   })
 
+  describe('saved-item alerts', () => {
+    const kinds = async (api: ReturnType<typeof make>) => (await api.listNotifications()).map((n) => n.kind).filter((k) => k.startsWith('saved_'))
+    const signIn = async (api: ReturnType<typeof make>, who: string) => {
+      await api.auth.signOut()
+      await api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+    }
+    /** A new 10-ticket draw, where buying 9 carries it to 90% without selling out. Leaves buyer@ signed in. */
+    const nearlyThere = async (api: ReturnType<typeof make>) => {
+      await signIn(api, 'store')
+      const near = await api.createListing(newListing({ title: 'Alert draw', priceKobo: k(10_000), ticketPriceKobo: k(1_000) }))
+      await signIn(api, 'admin')
+      await api.approveListing(near.id)
+      await signIn(api, 'buyer')
+      return { near: await api.getListing(near.id), need: 9 }
+    }
+
+    it('tells savers once when a draw passes 90%, and nobody else', async () => {
+      const api = make()
+      await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
+      const { near, need } = await nearlyThere(api)
+      await api.saveListing(near.id)
+      await signIn(api, 'funke')
+      await api.buyTickets(near.id, need)
+      expect(await kinds(api)).toEqual([])
+      await signIn(api, 'buyer')
+      expect(await kinds(api)).toEqual(['saved_almost_sold'])
+      expect((await api.listNotifications())[0].listingId).toBe(near.id)
+    })
+
+    it('says nothing to someone with no weekly limit left for a ticket, or who’s turned it off', async () => {
+      for (const quieten of [(api: ReturnType<typeof make>, near: { buyerTicketPriceKobo: number }) => api.setWeeklyLimit(near.buyerTicketPriceKobo - 100), (api: ReturnType<typeof make>) => api.setPushPreference('savedItems', false)]) {
+        const api = make()
+        await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
+        const { near, need } = await nearlyThere(api)
+        await api.saveListing(near.id)
+        await quieten(api, near)
+        await signIn(api, 'funke')
+        await api.buyTickets(near.id, need)
+        await signIn(api, 'buyer')
+        expect(await kinds(api)).toEqual([])
+      }
+    })
+
+    it('warns once when a saved draw is within 24 hours of closing, and never more than three a day', async () => {
+      let t = Date.now()
+      const api = make(() => t)
+      await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
+      const later = (await api.listListings()).filter((l) => Date.parse(l.closesAt) - t > 72 * 3600_000 && Date.parse(l.closesAt) - t < 96 * 3600_000).slice(0, 5)
+      expect(later.length).toBe(5)
+      for (const l of later) await api.saveListing(l.id)
+      expect(await kinds(api)).toEqual([])
+      t = Math.max(...later.map((l) => Date.parse(l.closesAt))) - 3600_000
+      const notified = (await api.listNotifications()).filter((n) => n.kind === 'saved_closing_soon')
+      expect(notified.length).toBeGreaterThan(0)
+      expect(notified.length).toBeLessThanOrEqual(3)
+      await api.listNotifications()
+      expect(new Set((await api.listNotifications()).filter((n) => n.kind === 'saved_closing_soon').map((n) => n.listingId)).size).toBe(notified.length)
+    })
+
+    it('says when a draw that ended unsold goes on sale', async () => {
+      let t = Date.now()
+      const api = make(() => t)
+      await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
+      const l = (await api.listListings()).find((x) => x.unsoldPolicy === 'convert_to_sale' && x.fallbackPriceKobo)!
+      await api.saveListing(l.id)
+      t = Date.parse(l.closesAt) + 1000
+      expect(await kinds(api)).toContain('saved_back_on_sale')
+    })
+
+    it('tells savers when the same store lists an ended item again, and not for a different one', async () => {
+      const api = make()
+      await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+      const input = newListing({ title: 'Relisted blender' })
+      const first = await api.createListing(input)
+      await signIn(api, 'admin')
+      await api.approveListing(first.id)
+      await signIn(api, 'buyer')
+      await api.saveListing(first.id)
+      await signIn(api, 'admin')
+      await api.demoExpire(first.id)
+      expect((await api.getListing(first.id)).status).toBe('refunded')
+      await signIn(api, 'store')
+      const second = await api.createListing(input)
+      const other = await api.createListing(newListing({ title: 'Something else' }))
+      await signIn(api, 'admin')
+      await api.approveListing(other.id)
+      await api.approveListing(second.id)
+      await signIn(api, 'buyer')
+      const alerts = (await api.listNotifications()).filter((n) => n.kind === 'saved_relisted')
+      expect(alerts.map((n) => n.listingId)).toEqual([second.id])
+    })
+  })
+
   describe('push notifications', () => {
     const device = { endpoint: 'https://fcm.googleapis.com/fcm/send/abc', p256dh: 'B'.repeat(87), auth: 'a'.repeat(22) }
 
     it('has everything on until a buyer turns something off, per buyer', async () => {
       const api = make()
       await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
-      expect(await api.getPushPreferences()).toEqual({ wins: true, drawResults: true, orders: true, messages: true })
+      expect(await api.getPushPreferences()).toEqual({ wins: true, drawResults: true, orders: true, messages: true, savedItems: true })
       await api.setPushPreference('orders', false)
-      expect(await api.getPushPreferences()).toEqual({ wins: true, drawResults: true, orders: false, messages: true })
+      expect(await api.getPushPreferences()).toEqual({ wins: true, drawResults: true, orders: false, messages: true, savedItems: true })
       await api.auth.signOut()
       await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
       expect((await api.getPushPreferences()).orders).toBe(true)

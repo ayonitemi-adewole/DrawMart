@@ -1,6 +1,6 @@
 /** Push notifications. Mirrored in public.save_push_subscription and public.set_push_preference. */
 
-export type PushCategory = 'wins' | 'drawResults' | 'orders' | 'messages'
+export type PushCategory = 'wins' | 'drawResults' | 'orders' | 'messages' | 'savedItems'
 export type PushPreferences = Record<PushCategory, boolean>
 
 /** What a buyer can switch on and off. Everything starts on, once they've turned notifications on at all. */
@@ -9,9 +9,10 @@ export const PUSH_CATEGORIES: { value: PushCategory; label: string; sub: string 
   { value: 'drawResults', label: 'Draw results', sub: 'When a draw you’re in sells out or has a result' },
   { value: 'orders', label: 'Orders', sub: 'When your order is sent and delivered' },
   { value: 'messages', label: 'Messages', sub: 'When a seller or buyer writes to you' },
+  { value: 'savedItems', label: 'Saved items', sub: 'News about things you’ve saved. Also turns these off in the app' },
 ]
 
-export const DEFAULT_PUSH_PREFERENCES: PushPreferences = { wins: true, drawResults: true, orders: true, messages: true }
+export const DEFAULT_PUSH_PREFERENCES: PushPreferences = { wins: true, drawResults: true, orders: true, messages: true, savedItems: true }
 
 export interface PushSubscriptionKeys {
   endpoint: string

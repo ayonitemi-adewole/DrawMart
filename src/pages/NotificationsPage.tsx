@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Link } from 'react-router'
 import { useMarkNotificationsRead, useNotifications } from '@/api/hooks'
 import type { NotificationView } from '@/api/types'
-import { BellIcon, ClockIcon, TicketIcon, TrophyIcon, type IconComponent } from '@/components/icons'
+import { BellIcon, ClockIcon, HeartIcon, TicketIcon, TrophyIcon, type IconComponent } from '@/components/icons'
 import { PushToggle } from '@/components/PushSettings'
 import { Card, EmptyState, ErrorState, PageTitle, Skeleton, cx } from '@/components/ui'
 import { dateTime, ticketNo } from '@/lib/time'
@@ -30,6 +30,16 @@ function describe(n: NotificationView): { icon: IconComponent; title: string; bo
         body: `${n.winningNumber ? `Ticket ${ticketNo(n.winningNumber)} won. ` : ''}Not this time, but your store credit is in your wallet.`,
         to: `/draws/${n.listingId}`,
       }
+    case 'saved_almost_sold':
+      return { icon: HeartIcon, title: `A draw you saved: ${n.listingTitle}`, body: '90% of the tickets have sold.', to: `/listings/${n.listingId}` }
+    case 'saved_closing_soon':
+      return { icon: HeartIcon, title: `A draw you saved: ${n.listingTitle}`, body: 'It closes within 24 hours.', to: `/listings/${n.listingId}` }
+    case 'saved_relisted':
+      return { icon: HeartIcon, title: `An item you saved: ${n.listingTitle}`, body: 'The store has listed it again as a new draw.', to: `/listings/${n.listingId}` }
+    case 'saved_back_on_sale':
+      return { icon: HeartIcon, title: `An item you saved: ${n.listingTitle}`, body: 'It’s on sale.', to: `/listings/${n.listingId}` }
+    case 'saved_price_drop':
+      return { icon: HeartIcon, title: `An item you saved: ${n.listingTitle}`, body: 'It now costs less.', to: `/listings/${n.listingId}` }
   }
 }
 
@@ -48,7 +58,7 @@ export function NotificationsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <PageTitle eyebrow="Notifications" sub="Updates on the draws you’re in.">
+      <PageTitle eyebrow="Notifications" sub="Updates on the draws you’re in and the items you’ve saved.">
         What’s new
       </PageTitle>
       <PushToggle />

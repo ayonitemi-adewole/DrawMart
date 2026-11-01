@@ -1560,6 +1560,183 @@ describe('link previews', () => {
   })
 })
 
+describe('saved-item alerts', () => {
+  let saver: string, other: string, store: string, staff: string
+  const alerts = async (who: string) => (await asUser<{ kind: string; listing_id: string }>(who, `select kind, listing_id from public.notifications where kind like 'saved_%' order by created_at`))
+  const save = (who: string, id: string) => asUser(who, `select public.save_listing($1)`, [id])
+  const clear = () => admin(`delete from public.notifications where kind like 'saved_%'`).then(() => admin(`truncate private.saved_alerts_sent`))
+  const draw = async (title: string, tickets = 10) => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ title, priceKobo: 100_000 * tickets, ticketPriceKobo: 100_000 })])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    return id
+  }
+  const fill = (id: string, count: number) => admin(`update public.listings set tickets_sold = $2 where id = $1`, [id, count])
+
+  beforeAll(async () => {
+    saver = await newUser('saver1@example.com')
+    other = await newUser('saver2@example.com')
+    store = await newUser('alertstore@example.com', { merchantId: IKEJA })
+    staff = await newUser('alertstaff@example.com', { role: 'admin' })
+    await asUser(staff, `select public.set_boost_settings(1000, false, 12)`)
+  })
+  beforeEach(clear)
+
+  it('tells savers once when a draw passes 90%, however it gets there', async () => {
+    const id = await draw('Alert crossing')
+    await save(saver, id)
+    await fill(id, 8)
+    expect(await alerts(saver)).toEqual([])
+    await asUser(other, `select public.buy_tickets($1, 1)`, [id]) // 9 of 10
+    expect(await alerts(saver)).toEqual([{ kind: 'saved_almost_sold', listing_id: id }])
+    expect(await alerts(other)).toEqual([])
+    await fill(id, 8)
+    await fill(id, 9)
+    expect(await alerts(saver)).toHaveLength(1) // one per item per kind
+  })
+
+  it('says nothing when the last ticket sells', async () => {
+    const id = await draw('Alert jump')
+    await save(saver, id)
+    await fill(id, 8)
+    await fill(id, 10)
+    expect(await alerts(saver)).toEqual([])
+  })
+
+  it('leaves out anyone whose weekly limit has no room for a ticket', async () => {
+    const id = await draw('Alert limit')
+    const limited = await newUser('saver3@example.com')
+    await save(limited, id)
+    await save(saver, id)
+    await admin(`update public.profiles set weekly_limit_kobo = 99999 where id = $1`, [limited])
+    await fill(id, 9)
+    expect(await alerts(limited)).toEqual([])
+    expect(await alerts(saver)).toHaveLength(1)
+  })
+
+  it('counts what they’ve actually spent against the limit', async () => {
+    const id = await draw('Alert spent')
+    const spender = await newUser('saver4@example.com')
+    const spent = await draw('Alert spent elsewhere')
+    await asUser(spender, `select public.buy_tickets($1, 1)`, [spent]) // ₦1,000
+    await admin(`update public.profiles set weekly_limit_kobo = 150000 where id = $1`, [spender]) // ₦500 left, tickets cost ₦1,000
+    await save(spender, id)
+    await fill(id, 9)
+    expect(await alerts(spender)).toEqual([])
+  })
+
+  it('warns once within 24 hours of closing, from the scheduled job', async () => {
+    const soon = await draw('Alert soon')
+    const far = await draw('Alert far')
+    await save(saver, soon)
+    await save(saver, far)
+    await admin(`update public.listings set closes_at = now() + interval '23 hours' where id = $1`, [soon])
+    await admin(`update public.listings set closes_at = now() + interval '25 hours' where id = $1`, [far])
+    await admin(`select private.process_deadlines()`)
+    await admin(`select private.process_deadlines()`)
+    expect(await alerts(saver)).toEqual([{ kind: 'saved_closing_soon', listing_id: soon }])
+    await admin(`update public.listings set status = 'refunded' where id in ($1, $2)`, [soon, far])
+  })
+
+  it('never sends more than three a day to one buyer', async () => {
+    const ids = [await draw('Alert cap 1'), await draw('Alert cap 2'), await draw('Alert cap 3'), await draw('Alert cap 4')]
+    for (const id of ids) await save(saver, id)
+    for (const id of ids) await fill(id, 9)
+    expect(await alerts(saver)).toHaveLength(3)
+    // Yesterday's don't count against today.
+    await admin(`update private.saved_alerts_sent set sent_at = now() - interval '2 days' where user_id = $1`, [saver])
+    await fill(ids[3], 8)
+    await fill(ids[3], 9)
+    expect(await alerts(saver)).toHaveLength(4)
+    for (const id of ids) await admin(`update public.listings set status = 'refunded' where id = $1`, [id])
+  })
+
+  it('tells savers when the same store lists an ended item again', async () => {
+    const first = await draw('Alert Relist Fan')
+    await save(saver, first)
+    await admin(`update public.listings set status = 'refunded' where id = $1`, [first])
+    expect(await alerts(saver)).toEqual([])
+    const second = await draw('  alert relist   fan ')
+    expect(await alerts(saver)).toEqual([{ kind: 'saved_relisted', listing_id: second }])
+    await draw('Alert Relist Fan') // a third time is still one per saved item
+    expect(await alerts(saver)).toHaveLength(1)
+  })
+
+  it('ignores the same title from another store, and listings still running', async () => {
+    const first = await draw('Alert Other Store')
+    await save(saver, first)
+    await draw('Alert Other Store') // the first hasn't ended
+    await admin(`update public.listings set status = 'refunded' where id = $1`, [first])
+    const otherStore = await newUser('alertstore2@example.com', { merchantId: '11111111-1111-4111-8111-000000000002' })
+    const [{ id }] = await asUser<{ id: string }>(otherStore, `select public.create_listing($1) id`, [listingInput({ title: 'Alert Other Store' })])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    expect(await alerts(saver)).toEqual([])
+  })
+
+  it('says when a saved draw goes on sale, or a sold item returns, whatever the weekly limit', async () => {
+    const id = await draw('Alert convert')
+    await save(saver, id)
+    await admin(`update public.profiles set weekly_limit_kobo = 1 where id = $1`, [saver])
+    await admin(`update public.listings set fallback_price_kobo = 90000, status = 'for_sale' where id = $1`, [id])
+    expect(await alerts(saver)).toEqual([{ kind: 'saved_back_on_sale', listing_id: id }])
+    await admin(`update public.profiles set weekly_limit_kobo = 5000000 where id = $1`, [saver])
+  })
+
+  it('says when an item on sale gets cheaper, and not when it gets dearer', async () => {
+    const [{ id }] = await admin<{ id: string }>(`select id from public.listings where status = 'for_sale' and kind = 'product' and merchant_id = $1 limit 1`, [IKEJA])
+    await save(saver, id)
+    await admin(`update public.listings set price_kobo = price_kobo + 100 where id = $1`, [id])
+    expect(await alerts(saver)).toEqual([])
+    await admin(`update public.listings set price_kobo = price_kobo - 200 where id = $1`, [id])
+    expect(await alerts(saver)).toEqual([{ kind: 'saved_price_drop', listing_id: id }])
+    await admin(`update public.listings set price_kobo = price_kobo + 100 where id = $1`, [id])
+  })
+
+  it('stops everything with one switch, in the app and on devices', async () => {
+    const device = { endpoint: 'https://fcm.googleapis.com/fcm/send/saved-alerts', p256dh: 'B'.repeat(87), auth: 'a'.repeat(22) }
+    await asUser(saver, `select public.save_push_subscription($1, $2, $3)`, [device.endpoint, device.p256dh, device.auth])
+    const pushes = async () => admin<{ title: string; body: string; url: string }>(`select title, body, url from private.push_outbox where user_id = $1 and tag like 'saved-%'`, [saver])
+
+    const on = await draw('Alert switch on')
+    await save(saver, on)
+    await fill(on, 9)
+    expect(await pushes()).toEqual([{ title: 'A draw you saved', body: '90% of the tickets for Alert switch on have sold.', url: `/listings/${on}` }])
+
+    await clear()
+    await admin(`delete from private.push_outbox where id is not null`)
+    await asUser(saver, `select public.set_push_preference('savedItems', false)`)
+    const off = await draw('Alert switch off')
+    await save(saver, off)
+    await fill(off, 9)
+    expect(await alerts(saver)).toEqual([])
+    expect(await pushes()).toEqual([])
+
+    await asUser(saver, `select public.set_push_preference('savedItems', true)`)
+    await asUser(saver, `select public.delete_push_subscription($1)`, [device.endpoint])
+  })
+
+  it('keeps push wording to plain facts', async () => {
+    const source = readFileSync(new URL('../migrations/20261101280000_saved_item_alerts.sql', import.meta.url), 'utf8')
+    const pushes = source.slice(source.indexOf('private.push_for_notification()'), source.indexOf('revoke execute on function private.alert_saved'))
+    expect(pushes).not.toMatch(/hurry|last chance|don’t miss|running out|quick|so close/i)
+  })
+
+  it('doesn’t tell a seller about their own listing', async () => {
+    const [{ id: shop }] = await admin<{ id: string }>(`insert into public.merchants (kind, name, area, cac_number, verified) values ('individual', 'Alert shop', 'Yaba', '', true) returning id`)
+    const seller = await newUser('alertseller@example.com')
+    await admin(`update public.profiles set seller_id = $1 where id = $2`, [shop, seller])
+    const id = await draw('Alert own')
+    await admin(`update public.listings set merchant_id = $1 where id = $2`, [shop, id])
+    await save(seller, id)
+    await fill(id, 9)
+    expect(await alerts(seller)).toEqual([])
+  })
+
+  it('keeps the sent list from every client', async () => {
+    await expect(asUser(saver, `select * from private.saved_alerts_sent`)).rejects.toThrow(/permission denied/)
+    await expect(asUser(saver, `select private.alert_saved($1, $1, $1, 'saved_price_drop')`, [saver])).rejects.toThrow(/permission denied/)
+  })
+})
+
 describe('push notifications', () => {
   let buyer: string, other: string, store: string, staff: string
   const device = (name: string) => ({ endpoint: `https://fcm.googleapis.com/fcm/send/${name}`, p256dh: 'B'.repeat(87), auth: 'a'.repeat(22) })

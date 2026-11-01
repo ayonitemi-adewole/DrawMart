@@ -3,6 +3,7 @@ import { useSavedListings } from '@/api/hooks'
 import { BackIcon, HeartIcon } from '@/components/icons'
 import { ListingGrid } from '@/components/ListingGrid'
 import { NoProductMatch, ProductSearch } from '@/components/ProductId'
+import { SavedAlertsToggle } from '@/components/PushSettings'
 import { EmptyState, ErrorState, PageTitle, Skeleton, buttonClass } from '@/components/ui'
 import { listingMatchesSearch } from '@/domain/productCode'
 import { useSearchParam } from '@/lib/useSearchParam'
@@ -21,6 +22,7 @@ export function SavedPage() {
       <PageTitle eyebrow="Account" sub={q.data?.length ? `${q.data.length.toLocaleString('en-NG')} ${q.data.length === 1 ? 'item' : 'items'}` : undefined}>
         Saved items
       </PageTitle>
+      <SavedAlertsToggle />
       {q.isPending ? (
         <Skeleton className="h-80" />
       ) : q.isError ? (

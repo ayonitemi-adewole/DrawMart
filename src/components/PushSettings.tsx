@@ -3,10 +3,11 @@ import { Link } from 'react-router'
 import { api } from '@/api'
 import { useDisablePush, useEnablePush, usePushDeviceState, usePushPreferences, useSetPushPreference } from '@/api/hooks'
 import { PUSH_CATEGORIES } from '@/domain/push'
+import { MAX_SAVED_ALERTS_PER_DAY } from '@/domain/savedAlerts'
 import { dismissPushPrompt, pushPromptDismissed } from '@/lib/push'
 import { BellIcon } from './icons'
 import { useToast } from './toast'
-import { Button, Card, cx, errorMessage } from './ui'
+import { Button, Card, Switch, cx, errorMessage } from './ui'
 
 function useTurnOn() {
   const enable = useEnablePush()
@@ -64,6 +65,33 @@ const STATE_TEXT = {
   blocked: 'Notifications are blocked for DrawMart. You can allow them in your browser or device settings.',
 }
 
+/** On the Saved page: every saved-item alert on or off, in the app as well as on devices. */
+export function SavedAlertsToggle() {
+  const prefs = usePushPreferences()
+  const set = useSetPushPreference()
+  const toast = useToast()
+  const on = prefs.data?.savedItems ?? true
+  return (
+    <Card className="flex items-center gap-3 p-4">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-sunken text-muted">
+        <BellIcon size={18} />
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col text-sm">
+        <span id="saved-alerts-label" className="font-bold">
+          Alerts for saved items
+        </span>
+        <span className="text-xs text-subtle">When a saved draw is nearly sold or closing, or an item is back or cheaper. At most {MAX_SAVED_ALERTS_PER_DAY} a day.</span>
+      </div>
+      <Switch
+        checked={on}
+        labelledBy="saved-alerts-label"
+        disabled={!prefs.data}
+        onChange={() => set.mutate({ category: 'savedItems', enabled: !on }, { onError: (e) => toast(errorMessage(e), 'error') })}
+      />
+    </Card>
+  )
+}
+
 /** On the notifications page: one switch for this device. Which kinds to get stays in Account. */
 export function PushToggle() {
   const state = usePushDeviceState()
@@ -101,19 +129,12 @@ export function PushToggle() {
         )}
       </div>
       {canSwitch ? (
-        <button
-          type="button"
-          role="switch"
-          aria-checked={on}
-          aria-labelledby="push-toggle-label"
+        <Switch
+          checked={on}
+          labelledBy="push-toggle-label"
           disabled={pending || disable.isPending}
-          onClick={() => (on ? disable.mutate(undefined, { onError: (e) => toast(errorMessage(e), 'error') }) : turnOn())}
-          className="flex size-11 w-14 shrink-0 cursor-pointer items-center justify-center disabled:opacity-60"
-        >
-          <span className={cx('flex h-7 w-12 items-center rounded-full p-0.5 transition', on ? 'justify-end bg-brand' : 'justify-start bg-line-strong')}>
-            <span className="size-6 rounded-full bg-surface shadow-card" />
-          </span>
-        </button>
+          onChange={() => (on ? disable.mutate(undefined, { onError: (e) => toast(errorMessage(e), 'error') }) : turnOn())}
+        />
       ) : null}
     </Card>
   )

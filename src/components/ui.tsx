@@ -396,6 +396,26 @@ export function ProductImage({
 }
 
 /** Accessible segmented control (a row of toggle buttons). */
+/** An on/off switch. Label it with `labelledBy` or `label`. */
+export function Switch({ checked, onChange, disabled, label, labelledBy }: { checked: boolean; onChange: () => void; disabled?: boolean; label?: string; labelledBy?: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      aria-labelledby={labelledBy}
+      disabled={disabled}
+      onClick={onChange}
+      className="flex size-11 w-14 shrink-0 cursor-pointer items-center justify-center disabled:opacity-60"
+    >
+      <span className={cx("flex h-7 w-12 items-center rounded-full p-0.5 transition", checked ? "justify-end bg-brand" : "justify-start bg-line-strong")}>
+        <span className="size-6 rounded-full bg-surface shadow-card" />
+      </span>
+    </button>
+  );
+}
+
 /** A filter chip: a pressed-looking pill when active. */
 export const chipClass = (active: boolean) =>
   cx(
