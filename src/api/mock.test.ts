@@ -570,6 +570,57 @@ describe('mock api', () => {
     expect((await api.getListing(d.id)).cautionFee.status).toBe('held')
   })
 
+  const signInAs = async (api: ReturnType<typeof make>, who: string) => {
+    await api.auth.signOut()
+    await api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+  }
+
+  it('tells a store about its reviews, orders and messages, and only that store', async () => {
+    const api = make()
+    await signInAs(api, 'store')
+    const a = await api.createListing(newListing())
+    const b = await api.createListing(newListing())
+    const product = await api.createProduct({ title: 'Office chair', description: '', category: 'Home', priceKobo: 5_000_000 })
+        await signInAs(api, 'admin')
+    await api.approveListing(a.id)
+    await api.rejectListing(b.id, 'price_wrong', '')
+    await api.approveListing(product.id)
+    
+    await signInAs(api, 'store')
+    const kinds = (await api.listNotifications()).map((n) => n.kind)
+    expect(kinds).toContain('store_listing_approved')
+    expect(kinds).toContain('store_listing_rejected')
+    expect((await api.listNotifications()).every((n) => !n.read)).toBe(true)
+    await api.markNotificationsRead()
+    expect((await api.listNotifications()).every((n) => n.read)).toBe(true)
+    await api.setPushPreference('storeOrders', false)
+    expect((await api.getPushPreferences()).storeOrders).toBe(false)
+    
+    await signInAs(api, 'lekki')
+    expect((await api.listNotifications()).filter((n) => [a.id, b.id, product.id].includes(n.listingId))).toEqual([])
+    
+    await signInAs(api, 'buyer')
+    expect((await api.listNotifications()).some((n) => n.kind.startsWith('store_'))).toBe(false)
+    await api.sendFirstMessage(product.id, 'Is it still available?')
+    await api.sendFirstMessage(product.id, 'And in black?')
+    
+    await signInAs(api, 'store')
+    expect((await api.listNotifications()).filter((n) => n.kind === 'store_new_message')).toHaveLength(1)
+  })
+
+  it('reminds a store the morning before a pickup, and about a draw closing unsold', async () => {
+    let t = Date.parse('2026-11-02T05:00:00Z') // 06:00 in Lagos
+    const api = make(() => t)
+    await signInAs(api, 'store')
+    const pending = await api.createListing({ ...newListing(), handover: { ...newListing().handover, date: '2026-11-03' } })
+    const reminders = async () => (await api.listNotifications()).filter((n) => n.kind === 'store_pickup_tomorrow' && n.listingId === pending.id)
+    expect(await reminders()).toHaveLength(0)
+    t = Date.parse('2026-11-02T08:00:00Z') // 09:00 in Lagos
+    expect(await reminders()).toHaveLength(1)
+    t += 3_600_000
+    expect(await reminders()).toHaveLength(1)
+  })
+
   it('keeps saved pickup items for a limited time, per store', async () => {
     let t = Date.parse('2026-10-30T12:00:00Z')
     const api = make(() => t)
@@ -836,15 +887,15 @@ describe('mock api', () => {
     it('has everything on until a buyer turns something off, per buyer', async () => {
       const api = make()
       await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
-      expect(await api.getPushPreferences()).toEqual({ wins: true, drawResults: true, orders: true, messages: true, savedItems: true, drawReveal: true })
+      expect(await api.getPushPreferences()).toMatchObject({ wins: true, drawResults: true, orders: true, messages: true, savedItems: true, drawReveal: true })
       await api.setPushPreference('orders', false)
-      expect(await api.getPushPreferences()).toEqual({ wins: true, drawResults: true, orders: false, messages: true, savedItems: true, drawReveal: true })
+      expect(await api.getPushPreferences()).toMatchObject({ wins: true, drawResults: true, orders: false, messages: true, savedItems: true, drawReveal: true })
       await api.auth.signOut()
       await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
       expect((await api.getPushPreferences()).orders).toBe(true)
     })
 
-    it('only takes real push services, and only from buyers', async () => {
+    it('only takes real push services, and not from riders', async () => {
       const api = make()
       await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
       await api.savePushSubscription(device)
@@ -854,7 +905,7 @@ describe('mock api', () => {
       await expect(api.savePushSubscription({ ...device, endpoint: 'https://evil.example/abc' })).rejects.toMatchObject({ code: 'invalid_input' })
       await expect(api.setPushPreference('nonsense' as 'wins', false)).rejects.toMatchObject({ code: 'invalid_input' })
       await api.auth.signOut()
-      await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+      await api.auth.signInWithPassword('rider@drawmart.test', 'drawmart-demo')
       await expect(api.savePushSubscription(device)).rejects.toMatchObject({ code: 'forbidden' })
     })
 

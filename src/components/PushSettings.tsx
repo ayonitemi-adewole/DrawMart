@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { api } from '@/api'
-import { useDisablePush, useEnablePush, usePushDeviceState, usePushPreferences, useSetPushPreference } from '@/api/hooks'
-import { PUSH_CATEGORIES } from '@/domain/push'
+import { useDisablePush, useEnablePush, useHasShop, usePushDeviceState, usePushPreferences, useSetPushPreference } from '@/api/hooks'
+import { PUSH_CATEGORIES, SELLER_PUSH_CATEGORIES, STORE_PUSH_CATEGORIES } from '@/domain/push'
 import { MAX_SAVED_ALERTS_PER_DAY } from '@/domain/savedAlerts'
 import { dismissPushPrompt, pushPromptDismissed } from '@/lib/push'
 import { BellIcon, TrophyIcon } from './icons'
@@ -30,7 +30,7 @@ function useTurnOn() {
  * visit. Permission is only asked for when they tap, because a browser only lets
  * you ask once.
  */
-export function PushPrompt({ className }: { className?: string }) {
+export function PushPrompt({ className, seller }: { className?: string; seller?: boolean }) {
   const state = usePushDeviceState()
   const { turnOn, pending } = useTurnOn()
   const [dismissed, setDismissed] = useState(pushPromptDismissed)
@@ -44,7 +44,7 @@ export function PushPrompt({ className }: { className?: string }) {
       <div className="flex items-start gap-2">
         <BellIcon size={18} className="mt-0.5 shrink-0 text-brand" />
         <span className="min-w-0">
-          <strong>Get results on this device?</strong> We’ll tell you when a draw you’re in has a result and when your order moves, even with the app closed. Choose what you get in Account.
+          {seller ? <><strong>Get new orders on this device?</strong> We’ll tell you when someone buys from you, even with the app closed.</> : <><strong>Get results on this device?</strong> We’ll tell you when a draw you’re in has a result and when your order moves, even with the app closed. Choose what you get in Account.</>}
         </span>
       </div>
       <div className="flex gap-2">
@@ -167,8 +167,15 @@ export function PushToggle() {
   )
 }
 
+/** On a store's notifications page, since stores have no Account page. */
+export function StorePushSettings() {
+  return api.pushPublicKey ? <PushSettings categories={STORE_PUSH_CATEGORIES} /> : <PushToggle />
+}
+
 /** In Account: this device on or off, and which kinds to get on every device. */
-export function PushSettings() {
+export function PushSettings({ categories }: { categories?: typeof PUSH_CATEGORIES }) {
+  const hasShop = useHasShop()
+  const shown = categories ?? (hasShop ? [...PUSH_CATEGORIES, ...SELLER_PUSH_CATEGORIES] : PUSH_CATEGORIES)
   const state = usePushDeviceState()
   const prefs = usePushPreferences()
   const setPreference = useSetPushPreference()
@@ -196,7 +203,7 @@ export function PushSettings() {
       {state.data === 'unsupported' || state.data === 'needs_home_screen' || state.data === 'blocked' ? <p className="text-sm text-muted">{STATE_TEXT[state.data]}</p> : null}
       {state.data === 'on' ? (
         <ul className="flex flex-col border-t border-line pt-1">
-          {PUSH_CATEGORIES.map((c) => (
+          {shown.map((c) => (
             <li key={c.value}>
               <label className="flex min-h-14 cursor-pointer items-center gap-3">
                 <span className="flex min-w-0 flex-1 flex-col text-sm">

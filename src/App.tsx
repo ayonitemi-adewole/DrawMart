@@ -162,6 +162,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <MerchantPage /> },
       { path: 'listings/:id', element: <ListingPage /> },
+      { path: 'notifications', element: <NotificationsPage /> },
       { path: 'insights', element: <InsightsPage /> },
       { path: 'messages', element: <MessagesPage basePath="/store/messages" /> },
       { path: 'messages/:id', element: <ConversationPage basePath="/store/messages" /> },

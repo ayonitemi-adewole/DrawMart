@@ -1,14 +1,38 @@
 import { useEffect, useRef } from 'react'
 import { Link } from 'react-router'
-import { useMarkNotificationsRead, useNotifications } from '@/api/hooks'
+import { useAccess, useMarkNotificationsRead, useNotifications } from '@/api/hooks'
 import type { NotificationView } from '@/api/types'
-import { BellIcon, ClockIcon, HeartIcon, TicketIcon, TrophyIcon, type IconComponent } from '@/components/icons'
-import { DrawRevealToggle, PushToggle } from '@/components/PushSettings'
+import { BellIcon, CalendarIcon, ChatIcon, CheckIcon, ClockIcon, HeartIcon, TicketIcon, TrophyIcon, TruckIcon, XIcon, type IconComponent } from '@/components/icons'
+import { DrawRevealToggle, PushToggle, StorePushSettings } from '@/components/PushSettings'
 import { Card, EmptyState, ErrorState, PageTitle, Skeleton, cx } from '@/components/ui'
+import { handoverMethodFor } from '@/domain/listing'
 import { dateTime, ticketNo } from '@/lib/time'
 
-function describe(n: NotificationView): { icon: IconComponent; title: string; body: string; to: string } {
+/** `store` says which app a seller works from: the store app, or /sell in the buyer app. */
+function describe(n: NotificationView, store: boolean): { icon: IconComponent; title: string; body: string; to: string } {
+  const home = store ? '/store' : '/sell'
   switch (n.kind) {
+    case 'store_new_order':
+      return { icon: TruckIcon, title: `New order: ${n.listingTitle}`, body: 'Get it ready, then mark it ready for a rider.', to: `${home}?tab=orders` }
+    case 'store_listing_approved':
+      return { icon: CheckIcon, title: `Approved: ${n.listingTitle}`, body: 'It’s now live for buyers.', to: home }
+    case 'store_listing_rejected':
+      return { icon: XIcon, title: `Not approved: ${n.listingTitle}`, body: 'See why, and fix it to send it again.', to: `${home}?fix=${n.listingId}` }
+    case 'store_draw_sold_out':
+      return {
+        icon: ClockIcon,
+        title: `All tickets sold: ${n.listingTitle}`,
+        body: n.drawAt ? `The winner will be announced on ${dateTime(n.drawAt)}.` : 'The winner will be announced soon.',
+        to: home,
+      }
+    case 'store_winner_picked':
+      return { icon: TrophyIcon, title: `Winner announced: ${n.listingTitle}`, body: 'You’re paid once it’s delivered to the winner.', to: home }
+    case 'store_draw_closing':
+      return { icon: ClockIcon, title: `Closing soon: ${n.listingTitle}`, body: 'It closes within 24 hours and hasn’t sold out.', to: home }
+    case 'store_pickup_tomorrow':
+      return { icon: CalendarIcon, title: `${handoverMethodFor(n.listingCategory) === 'inspection' ? 'Inspection' : 'Pickup'} tomorrow: ${n.listingTitle}`, body: 'Have it ready for the time you booked.', to: home }
+    case 'store_new_message':
+      return { icon: ChatIcon, title: `New message: ${n.listingTitle}`, body: 'A buyer wrote to you.', to: store ? '/store/messages' : '/messages' }
     case 'draw_sold_out':
       return {
         icon: ClockIcon,
@@ -45,6 +69,7 @@ function describe(n: NotificationView): { icon: IconComponent; title: string; bo
 
 /** /notifications: updates on the draws a buyer is in. Opening it marks them read. */
 export function NotificationsPage() {
+  const store = useAccess().role === 'store'
   const q = useNotifications()
   const markRead = useMarkNotificationsRead()
   const unread = q.data?.some((n) => !n.read) ?? false
@@ -58,21 +83,27 @@ export function NotificationsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <PageTitle eyebrow="Notifications" sub="Updates on the draws you’re in and the items you’ve saved.">
+      <PageTitle eyebrow="Notifications" sub={store ? 'New orders, listing reviews, draws, pickups and messages.' : 'Updates on the draws you’re in and the items you’ve saved.'}>
         What’s new
       </PageTitle>
-      <PushToggle />
-      <DrawRevealToggle />
+      {store ? (
+        <StorePushSettings />
+      ) : (
+        <>
+          <PushToggle />
+          <DrawRevealToggle />
+        </>
+      )}
       {q.isPending ? (
         <Skeleton className="h-60" />
       ) : q.isError ? (
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
       ) : q.data.length === 0 ? (
-        <EmptyState icon={BellIcon} title="Nothing yet" body="We’ll let you know here when a draw you’re in sells out, and when its winner is announced." />
+        <EmptyState icon={BellIcon} title="Nothing yet" body={store ? 'We’ll let you know here when someone buys from you, and how your listings and draws are doing.' : 'We’ll let you know here when a draw you’re in sells out, and when its winner is announced.'} />
       ) : (
         <Card className="divide-y divide-line overflow-hidden">
           {q.data.map((n) => {
-            const d = describe(n)
+            const d = describe(n, store)
             return (
               <Link key={n.id} to={d.to} className={cx('flex items-start gap-3 p-4 text-ink no-underline transition hover:bg-sunken/60', !n.read && 'bg-brand-soft/50')}>
                 <span className={cx('flex size-10 shrink-0 items-center justify-center rounded-xl', n.kind === 'draw_won' ? 'bg-ticket text-on-ticket' : 'bg-sunken text-muted')}>

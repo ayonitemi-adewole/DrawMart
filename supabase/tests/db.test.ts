@@ -409,7 +409,7 @@ describe('store → admin → draw', () => {
     for (const who of [alice, bob]) {
       expect(await asUser(who, `select kind from public.notifications where listing_id = $1`, [listingId])).toEqual([{ kind: 'draw_sold_out' }])
     }
-    expect(await asUser(store, `select * from public.notifications`)).toEqual([])
+    expect(await asUser(store, `select * from public.notifications where kind not like 'store_%'`)).toEqual([])
 
     // Nothing happens before the date; on the date, the job runs the draw.
     await admin(`select private.process_deadlines()`)
@@ -1910,6 +1910,101 @@ describe('saved-item alerts', () => {
   })
 })
 
+describe('store notifications', () => {
+  let store: string, other: string, staff: string, buyer: string
+  const device = (name: string) => ({ endpoint: `https://fcm.googleapis.com/fcm/send/${name}`, p256dh: 'B'.repeat(87), auth: 'a'.repeat(22) })
+  const subscribe = (who: string, d: ReturnType<typeof device>) => asUser(who, `select public.save_push_subscription($1, $2, $3)`, [d.endpoint, d.p256dh, d.auth])
+  const kinds = async (who: string, listing: string) =>
+    (await admin<{ kind: string }>(`select kind from public.notifications where user_id = $1 and listing_id = $2 order by created_at`, [who, listing])).map((n) => n.kind)
+  const queued = (who: string) => admin<{ title: string; body: string; url: string }>(`select title, body, url from private.push_outbox where user_id = $1 order by created_at`, [who])
+  const clearQueue = () => admin(`delete from private.push_outbox where id is not null`)
+
+  beforeAll(async () => {
+    store = await newUser('noticestore@example.com', { merchantId: IKEJA })
+    other = await newUser('noticeother@example.com', { merchantId: '11111111-1111-4111-8111-000000000002' })
+    staff = await newUser('noticestaff@example.com', { role: 'admin' })
+    buyer = await newUser('noticebuyer@example.com')
+    await subscribe(store, device('noticestore'))
+  })
+  beforeEach(clearQueue)
+
+  it('tells the store about a review, and sends it to the store app', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ title: 'Noticed draw' })])
+    await asUser(staff, `select public.reject_listing($1, 'photos_unclear')`, [id])
+    expect(await kinds(store, id)).toEqual(['store_listing_rejected'])
+    expect(await queued(store)).toEqual([{ title: 'Listing not approved', body: 'See why Noticed draw wasn’t approved, and fix it.', url: `/store?fix=${id}` }])
+    await asUser(store, `select public.resubmit_listing($1, $2)`, [id, listingInput({ title: 'Noticed draw' })])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    expect(await kinds(store, id)).toEqual(['store_listing_rejected', 'store_listing_approved'])
+    expect(await kinds(other, id)).toEqual([])
+    expect(await asUser(other, `select 1 from public.notifications where listing_id = $1`, [id])).toEqual([])
+  })
+
+  it('tells the store a draw sold out and has a winner, without saying who', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ title: 'Noticed sell-out', priceKobo: 100_000, ticketPriceKobo: 50_000 })])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    await asUser(staff, `select public.demo_sell_out($1)`, [id])
+    await asUser(staff, `select public.demo_run_draw($1)`, [id])
+    expect(await kinds(store, id)).toEqual(['store_listing_approved', 'store_draw_sold_out', 'store_winner_picked'])
+    const texts = (await queued(store)).map((q) => q.body).join(' ')
+    expect(texts).toContain('has sold out')
+    expect(texts).not.toMatch(/ticket|@|won/i)
+  })
+
+  it('respects the store’s own switches, and is closed to riders', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
+    await asUser(store, `select public.set_push_preference('storeListings', false)`)
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    expect(await kinds(store, id)).toEqual(['store_listing_approved']) // still in the app
+    expect(await queued(store)).toEqual([])
+    await asUser(store, `select public.set_push_preference('storeListings', true)`)
+    const rider = await newUser('noticerider@example.com', { role: 'delivery' })
+    await expectFail(subscribe(rider, device('noticerider')), 'forbidden')
+    await expectFail(asUser(rider, `select public.set_push_preference('messages', false)`), 'forbidden')
+  })
+
+  it('tells the store once about a chat, and never quotes it on a lock screen', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_product($1) id`, [{ title: 'Noticed chair', description: '', category: 'Home', priceKobo: 5_000_000 }])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    await clearQueue()
+    const [{ c }] = await asUser<{ c: string }>(buyer, `select public.send_first_message($1, 'My secret question') c`, [id])
+    await asUser(buyer, `select public.send_message($1, 'Another one')`, [c])
+    expect((await kinds(store, id)).filter((k) => k === 'store_new_message')).toHaveLength(1)
+    const pushes = await queued(store)
+    expect(pushes).toHaveLength(2)
+    expect(pushes[0]).toEqual({ title: 'New message', body: 'About Noticed chair', url: `/store/messages/${c}` })
+    expect(JSON.stringify(pushes)).not.toContain('secret')
+  })
+
+  it('tells a seller about an order, but not about a prize DrawMart delivers', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ title: 'Noticed prize', priceKobo: 100_000, ticketPriceKobo: 50_000 })])
+    const [{ o }] = await admin<{ o: string }>(`insert into public.orders (listing_id, user_id, merchant_id, price_kobo, fee_kobo, delivery_address, delivery_phone, handled_by, is_prize) values ($1, $2, $3, 0, 0, 'x', 'x', 'drawmart', true) returning id o`, [id, buyer, IKEJA])
+    expect(o).toBeTruthy()
+    expect(await kinds(store, id)).toEqual([])
+    const [{ id: sold }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ title: 'Noticed order' })])
+    await admin(`insert into public.orders (listing_id, user_id, merchant_id, price_kobo, fee_kobo, delivery_address, delivery_phone, handled_by) values ($1, $2, $3, 100000, 0, 'x', 'x', 'store')`, [sold, buyer, IKEJA])
+    expect(await kinds(store, sold)).toEqual(['store_new_order'])
+    expect((await queued(store))[0]).toMatchObject({ title: 'New order', url: '/store?tab=orders' })
+  })
+
+  it('reminds the morning before a pickup and about a draw closing unsold, once each', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
+    await admin(`update public.listing_handovers set date = (now() at time zone 'Africa/Lagos')::date + 1 where listing_id = $1`, [id])
+    const hour = Number((await admin<{ h: string }>(`select extract(hour from now() at time zone 'Africa/Lagos') h`))[0].h)
+    await admin(`select private.store_reminders()`)
+    await admin(`select private.store_reminders()`)
+    expect(await kinds(store, id)).toEqual(hour >= 8 ? ['store_pickup_tomorrow'] : [])
+    await asUser(staff, `select public.reject_listing($1, 'photos_unclear')`, [id])
+
+    const [{ id: live }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
+    await asUser(staff, `select public.approve_listing($1)`, [live])
+    await admin(`update public.listings set closes_at = now() + interval '5 hours' where id = $1`, [live])
+    await admin(`select private.store_reminders()`)
+    await admin(`select private.store_reminders()`)
+    expect((await kinds(store, live)).filter((k) => k === 'store_draw_closing')).toHaveLength(1)
+  })
+})
+
 describe('push notifications', () => {
   let buyer: string, other: string, store: string, staff: string
   const device = (name: string) => ({ endpoint: `https://fcm.googleapis.com/fcm/send/${name}`, p256dh: 'B'.repeat(87), auth: 'a'.repeat(22) })
@@ -2017,7 +2112,7 @@ describe('push notifications', () => {
     expect(await queued(quiet)).toEqual([])
   })
 
-  it('only signs up real push services, for buyers', async () => {
+  it('only signs up real push services, not for riders', async () => {
     for (const endpoint of ['https://evil.example/abc', 'http://fcm.googleapis.com/abc', 'https://fcm.googleapis.com.evil.example/abc', 'https://169.254.169.254/x', '']) {
       expect(pushSubscriptionValid({ ...device('x'), endpoint })).toBe(false)
       await expectFail(subscribe(other, { ...device('x'), endpoint }), 'invalid_input')
@@ -2027,7 +2122,7 @@ describe('push notifications', () => {
       await subscribe(other, { ...device('x'), endpoint })
       await asUser(other, `select public.delete_push_subscription($1)`, [endpoint])
     }
-    await expectFail(subscribe(store, device('s')), 'forbidden')
+    await expectFail(subscribe(await newUser('pushrider@example.com', { role: 'delivery' }), device('s')), 'forbidden')
     await expectFail(subscribe(staff, device('a')), 'forbidden')
     await expect(asUser(null, `select public.save_push_subscription('a', 'b', 'c')`)).rejects.toThrow(/permission denied/)
   })

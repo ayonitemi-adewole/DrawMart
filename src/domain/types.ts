@@ -221,7 +221,10 @@ export interface Order {
   deliveredAt: ISODate | null
 }
 
-export type NotificationKind = 'draw_sold_out' | 'draw_won' | 'draw_lost' | 'saved_almost_sold' | 'saved_closing_soon' | 'saved_relisted' | 'saved_back_on_sale' | 'saved_price_drop'
+export type NotificationKind =
+  | 'store_new_order' | 'store_listing_approved' | 'store_listing_rejected' | 'store_draw_sold_out'
+  | 'store_winner_picked' | 'store_draw_closing' | 'store_pickup_tomorrow' | 'store_new_message'
+  | 'draw_sold_out' | 'draw_won' | 'draw_lost' | 'saved_almost_sold' | 'saved_closing_soon' | 'saved_relisted' | 'saved_back_on_sale' | 'saved_price_drop'
 
 export interface User {
   id: string

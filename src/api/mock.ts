@@ -32,6 +32,7 @@ import {
 } from '@/domain/listing'
 import { nairaToKobo } from '@/domain/money'
 import { canChangeInReview, withdrawalFees } from '@/domain/listingActions'
+import { closingReminderSent, pickupReminderDue } from '@/domain/storeNotifications'
 import { newRejection, REJECTION_ERROR_TEXT, rejectionError, resentCautionFee } from '@/domain/rejection'
 import { DEMO_ACCOUNTS } from './demoAccounts'
 import {
@@ -82,7 +83,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v30' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v31' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -660,6 +661,7 @@ async function runDraw(db: Db, listing: Listing, closingRef: string, at: string)
     if (credit > 0) db.ledger.push({ id: uid('E'), userId, kind: 'store_credit', cashKobo: 0, creditKobo: credit, memo: `Store credit · ${listing.title}`, listingId: listing.id, createdAt: at })
   }
   for (const userId of participants(db, listing)) notify(db, userId, userId === winner.userId ? 'draw_won' : 'draw_lost', listing.id, at)
+  notifyShop(db, listing.merchantId, 'store_winner_picked', listing.id, at)
 }
 
 /** Everyone holding a ticket, leaving out the demo's stand-in for other buyers. */
@@ -669,6 +671,12 @@ function participants(db: Db, listing: Listing): Set<string> {
 
 function notify(db: Db, userId: string, kind: NotificationKind, listingId: string, at: string) {
   db.notifications.push({ id: uid('N'), userId, kind, listingId, createdAt: at, read: false, celebrated: false })
+}
+
+/** Everyone running this shop: its store account (whose id is the shop's), or an individual seller. */
+function notifyShop(db: Db, merchantId: string, kind: NotificationKind, listingId: string, at: string) {
+  notify(db, merchantId, kind, listingId, at)
+  for (const [userId, shop] of Object.entries(db.sellerShops)) if (shop === merchantId) notify(db, userId, kind, listingId, at)
 }
 
 /** savedAlerts.ts savedAlertAllowed decides; this sends it, pointing at `target` (a relist's new listing). */
@@ -705,6 +713,7 @@ function closeTicketSales(db: Db, listing: Listing, closingRef: string, now: num
   listing.drawAt = announcementDate(now, listing.closesAt)
   db.closingRefs[listing.id] = closingRef
   for (const userId of participants(db, listing)) notify(db, userId, 'draw_sold_out', listing.id, iso(now))
+  notifyShop(db, listing.merchantId, 'store_draw_sold_out', listing.id, iso(now))
 }
 
 async function runDueDraws(db: Db, now: number) {
@@ -749,6 +758,16 @@ function processDeadlines(db: Db, now: number): boolean {
     for (const id of ids) {
       const l = db.listings.find((x) => x.id === id)
       if (l?.status === 'live' && isClosingSoon(l.closesAt, now)) alertSaved(db, userId, l.id, l, 'saved_closing_soon', now)
+    }
+  }
+  // Store reminders (storeNotifications.ts).
+  const sentFor = (l: Listing, kind: NotificationKind) => db.notifications.filter((n) => n.listingId === l.id && n.kind === kind).map((n) => n.createdAt)
+  for (const l of db.listings) {
+    if (l.status === 'live' && l.kind === 'raffle' && isClosingSoon(l.closesAt, now) && !closingReminderSent(l.closesAt, sentFor(l, 'store_draw_closing'))) {
+      notifyShop(db, l.merchantId, 'store_draw_closing', l.id, iso(now))
+    }
+    if (l.status === 'pending_review' && l.handover && pickupReminderDue(l.handover.date, now) && !sentFor(l, 'store_pickup_tomorrow').some((at) => Date.parse(at) > now - DAY)) {
+      notifyShop(db, l.merchantId, 'store_pickup_tomorrow', l.id, iso(now))
     }
   }
   return changed
@@ -947,6 +966,9 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     return s?.role === 'buyer' ? s.userId : ME
   }
   const me = (db: Db) => db.users.find((u) => u.id === buyer())!
+  /** Whose notifications and devices these are: a store's own, or a buyer's. */
+  const inbox = () => (readSession()?.role === 'store' ? readSession()!.userId : buyer())
+  const hasInbox = () => { const role = readSession()?.role; return !role || role === 'buyer' || role === 'store' }
   const addressesOf = (db: Db) => sortAddresses(db.addresses[buyer()] ?? [])
   const makeDefault = (list: SavedAddress[], id: string) => {
     for (const a of list) a.isDefault = a.id === id
@@ -985,6 +1007,9 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     const at = iso(now())
     const msg: ChatMessage = { id: uid('X'), conversationId: c.id, sender: side, body: body.trim(), createdAt: at }
     db.messages.push(msg)
+    if (side === 'buyer' && !db.notifications.some((n) => n.kind === 'store_new_message' && n.listingId === c.listingId && !n.read)) {
+      notifyShop(db, getListingOr404(db, c.listingId).merchantId, 'store_new_message', c.listingId, at)
+    }
     c.lastMessageAt = at
     if (side === 'buyer') c.buyerReadAt = at
     else c.sellerReadAt = at
@@ -1227,21 +1252,21 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         db.carts[buyer()] = (db.carts[buyer()] ?? []).filter((id) => id !== listingId)
       }),
 
-    getPushPreferences: () => tx((db) => ({ ...DEFAULT_PUSH_PREFERENCES, ...db.pushPreferences[buyer()] })),
+    getPushPreferences: () => tx((db) => ({ ...DEFAULT_PUSH_PREFERENCES, ...db.pushPreferences[inbox()] })),
 
     setPushPreference: (category, enabled) =>
       tx((db) => {
-        if (readSession() && readSession()!.role !== 'buyer') throw new ApiError('forbidden', 'Only buyer accounts have this setting.')
+        if (!hasInbox()) throw new ApiError('forbidden', 'Only buyer and store accounts have this setting.')
         if (!Object.keys(DEFAULT_PUSH_PREFERENCES).includes(category)) throw new ApiError('invalid_input', 'That isn’t a kind of notification.')
-        db.pushPreferences[buyer()] = { ...DEFAULT_PUSH_PREFERENCES, ...db.pushPreferences[buyer()], [category]: enabled }
+        db.pushPreferences[inbox()] = { ...DEFAULT_PUSH_PREFERENCES, ...db.pushPreferences[inbox()], [category]: enabled }
       }),
 
     savePushSubscription: (subscription) =>
       tx((db) => {
-        if (readSession() && readSession()!.role !== 'buyer') throw new ApiError('forbidden', 'Only buyer accounts have this setting.')
+        if (!hasInbox()) throw new ApiError('forbidden', 'Only buyer and store accounts have this setting.')
         if (!pushSubscriptionValid(subscription)) throw new ApiError('invalid_input', 'This device’s notification details don’t look right.')
         db.pushSubscriptions = db.pushSubscriptions.filter((s) => s.endpoint !== subscription.endpoint)
-        db.pushSubscriptions.push({ ...subscription, userId: buyer() })
+        db.pushSubscriptions.push({ ...subscription, userId: inbox() })
       }),
 
     deletePushSubscription: (endpoint) =>
@@ -1377,6 +1402,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
             status: 'paid', createdAt: at, dispatchedAt: null, deliveredAt: null,
           }
           db.orders.push(order)
+          if (order.handledBy === 'store') notifyShop(db, order.merchantId, 'store_new_order', order.listingId, at)
           return orderView(db, order, true)
         })
         db.carts[buyer()] = (db.carts[buyer()] ?? []).filter((id) => !listingIds.includes(id))
@@ -1441,7 +1467,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     listNotifications: () =>
       tx((db): NotificationView[] =>
         db.notifications
-          .filter((n) => n.userId === buyer())
+          .filter((n) => n.userId === inbox())
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
           .map((n) => {
             const l = getListingOr404(db, n.listingId)
@@ -1454,7 +1480,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     markNotificationsRead: () =>
       tx((db) => {
-        for (const n of db.notifications) if (n.userId === buyer()) n.read = true
+        for (const n of db.notifications) if (n.userId === inbox()) n.read = true
       }),
 
     markWinCelebrated: (listingId) =>
@@ -1826,6 +1852,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (l.status !== 'pending_review') throw new ApiError('invalid_input', 'Only listings in review can be approved.')
         if (revision !== undefined && revision !== (l.revision ?? 0)) throw new ApiError('invalid_input', 'The store just changed this listing. Check it again.')
         l.wasRejected = false
+        notifyShop(db, l.merchantId, 'store_listing_approved', l.id, iso(now()))
         if (l.kind === 'product') {
           l.status = 'for_sale' // products skip the draw
           alertRelists(db, l, now())
@@ -1843,6 +1870,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const problem = rejectionError(l.kind, { reason, note })
         if (problem) throw new ApiError('invalid_input', REJECTION_ERROR_TEXT[problem])
         l.status = 'rejected'
+        notifyShop(db, l.merchantId, 'store_listing_rejected', l.id, iso(now()))
         l.rejection = newRejection(reason, note)
         l.wasRejected = true
         l.cautionFee = settleCautionFee(l.cautionFee, 'rejected')

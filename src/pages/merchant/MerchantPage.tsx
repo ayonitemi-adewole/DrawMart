@@ -53,6 +53,7 @@ import { calendarDay, dateTime } from '@/lib/time'
 import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
 import { listingMatchesSearch } from '@/domain/productCode'
 import { ListingKindChooser, MerchantOrders, NewProduct } from './NewProduct'
+import { PushPrompt } from '@/components/PushSettings'
 import { FormStartNotice, ListingActions, RejectionNotice, listingFormFrom, type ListingForm, type ListingFormMode } from './parts'
 import { resentCautionFee } from '@/domain/rejection'
 import { CategoryPicker, PhotoPicker, Section } from './parts'
@@ -128,6 +129,8 @@ export function MerchantPage() {
           </Button>
         ) : null}
       </div>
+
+      <PushPrompt seller />
 
       {!form && !(tab === 'new' && kind === 'raffle') ? <SavedPickupReminder onContinue={() => setTab('new', 'raffle')} /> : null}
 

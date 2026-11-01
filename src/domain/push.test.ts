@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_PUSH_PREFERENCES, PUSH_CATEGORIES, pushSubscriptionValid } from './push'
+import { DEFAULT_PUSH_PREFERENCES, PUSH_CATEGORIES, STORE_PUSH_CATEGORIES, pushSubscriptionValid } from './push'
 
 const keys = { p256dh: 'B'.repeat(87), auth: 'a'.repeat(22) }
 const at = (endpoint: string) => pushSubscriptionValid({ endpoint, ...keys })
@@ -34,6 +34,6 @@ describe('pushSubscriptionValid', () => {
 
 describe('push preferences', () => {
   it('has a label and a default for every category', () => {
-    expect(PUSH_CATEGORIES.map((c) => c.value).sort()).toEqual(Object.keys(DEFAULT_PUSH_PREFERENCES).filter((k) => k !== 'drawReveal').sort())
+    expect([...new Set([...PUSH_CATEGORIES, ...STORE_PUSH_CATEGORIES].map((c) => c.value))].sort()).toEqual(Object.keys(DEFAULT_PUSH_PREFERENCES).filter((k) => k !== 'drawReveal').sort())
   })
 })

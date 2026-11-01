@@ -63,6 +63,11 @@ export const useResults = () => useQuery({ queryKey: keys.results, queryFn: () =
 
 // Private data waits until the right kind of account is signed in.
 const useIs = (role: AccountRole) => useAccess().role === role
+/** Buyers and stores get notifications. Riders and admins don't. */
+const useHasInbox = () => {
+  const role = useAccess().role
+  return role === 'buyer' || role === 'store'
+}
 export const useMe = () => useQuery({ queryKey: keys.me, queryFn: () => api.getCurrentUser(), enabled: useIs('buyer') })
 export const useMyListings = () => useQuery({ queryKey: keys.myListings, queryFn: () => api.listMyListings(), enabled: useIs('buyer') })
 export const useWallet = () => useQuery({ queryKey: keys.wallet, queryFn: () => api.getWallet(), enabled: useIs('buyer') })
@@ -140,9 +145,9 @@ export function useAddressActions() {
 export const useCart = () => useQuery({ queryKey: keys.cart, queryFn: () => api.listCart(), enabled: useIs('buyer') })
 
 // Push notifications
-export const usePushPreferences = () => useQuery({ queryKey: keys.pushPreferences, queryFn: () => api.getPushPreferences(), enabled: useIs('buyer') })
+export const usePushPreferences = () => useQuery({ queryKey: keys.pushPreferences, queryFn: () => api.getPushPreferences(), enabled: useHasInbox() })
 /** This device's own state, so it's only ever asked of the browser, not the server. */
-export const usePushDeviceState = () => useQuery({ queryKey: keys.pushDevice, queryFn: () => pushDeviceState(), enabled: useIs('buyer') })
+export const usePushDeviceState = () => useQuery({ queryKey: keys.pushDevice, queryFn: () => pushDeviceState(), enabled: useHasInbox() })
 
 // Winners wall
 export const useWinnersWall = () => useQuery({ queryKey: keys.winnersWall, queryFn: () => api.listWinnersWall() })
@@ -157,7 +162,7 @@ export const usePrizeOrders = () => useQuery({ queryKey: keys.prizeOrders, query
 
 // Notifications. No push channel yet, so these poll like messages.
 export const useNotifications = () =>
-  useQuery({ queryKey: keys.notifications, queryFn: () => api.listNotifications(), enabled: useIs('buyer'), refetchInterval: 30_000 })
+  useQuery({ queryKey: keys.notifications, queryFn: () => api.listNotifications(), enabled: useHasInbox(), refetchInterval: 30_000 })
 export const useUnreadNotifications = () => useNotifications().data?.filter((n) => !n.read).length ?? 0
 /** Results of draws the buyer was in that they haven't seen yet, oldest first. */
 export const useUncelebratedResults = () => (useNotifications().data ?? []).filter((n) => (n.kind === 'draw_won' || n.kind === 'draw_lost') && !n.celebrated).reverse()

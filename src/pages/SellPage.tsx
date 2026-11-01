@@ -8,6 +8,7 @@ import { Badge, Button, Card, ErrorState, Field, Notice, PageTitle, Segmented, S
 import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication, type SellerApplicationError, type SellerApplicationInput } from '@/domain/sellers'
 import { SellerInsights } from '@/components/SellerInsights'
 import { photoToDataUrl } from '@/lib/image'
+import { PushPrompt } from '@/components/PushSettings'
 import { MerchantListings } from './merchant/MerchantPage'
 import { listingFormFrom } from './merchant/parts'
 import { localDate } from '@/domain/listing'
@@ -310,6 +311,7 @@ function SellerDashboard() {
           </Badge>
         </span>
       </PageTitle>
+      <PushPrompt seller />
       <Segmented<SellTab>
         label="Section"
         value={tab}
