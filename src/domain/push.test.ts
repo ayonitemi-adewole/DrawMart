@@ -34,6 +34,6 @@ describe('pushSubscriptionValid', () => {
 
 describe('push preferences', () => {
   it('has a label and a default for every category', () => {
-    expect(PUSH_CATEGORIES.map((c) => c.value).sort()).toEqual(Object.keys(DEFAULT_PUSH_PREFERENCES).sort())
+    expect(PUSH_CATEGORIES.map((c) => c.value).sort()).toEqual(Object.keys(DEFAULT_PUSH_PREFERENCES).filter((k) => k !== 'drawReveal').sort())
   })
 })

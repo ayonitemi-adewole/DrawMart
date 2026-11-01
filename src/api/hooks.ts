@@ -6,7 +6,7 @@ import type { MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput } from '@/domain/sellers'
 import { visitorId } from '@/lib/visitor'
 import { pushDeviceState, subscribeThisDevice, unsubscribeThisDevice } from '@/lib/push'
-import type { PushCategory } from '@/domain/push'
+import type { NotificationPreference } from '@/domain/push'
 import type { SavedAddressInput } from '@/domain/addresses'
 import type { AccountRole, BoostSettings, CheckoutInput, ListingFilter, NewListingInput, NewPickupInput, NewProductInput, PickupItemInput } from './types'
 
@@ -159,8 +159,8 @@ export const usePrizeOrders = () => useQuery({ queryKey: keys.prizeOrders, query
 export const useNotifications = () =>
   useQuery({ queryKey: keys.notifications, queryFn: () => api.listNotifications(), enabled: useIs('buyer'), refetchInterval: 30_000 })
 export const useUnreadNotifications = () => useNotifications().data?.filter((n) => !n.read).length ?? 0
-/** Wins the buyer hasn't been greeted with yet, oldest first. */
-export const useUncelebratedWins = () => (useNotifications().data ?? []).filter((n) => n.kind === 'draw_won' && !n.celebrated).reverse()
+/** Results of draws the buyer was in that they haven't seen yet, oldest first. */
+export const useUncelebratedResults = () => (useNotifications().data ?? []).filter((n) => (n.kind === 'draw_won' || n.kind === 'draw_lost') && !n.celebrated).reverse()
 
 export function useMarkWinCelebrated() {
   const qc = useQueryClient()
@@ -268,7 +268,7 @@ export function useRemoveFromCart() {
 export function useSetPushPreference() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ category, enabled }: { category: PushCategory; enabled: boolean }) => api.setPushPreference(category, enabled),
+    mutationFn: ({ category, enabled }: { category: NotificationPreference; enabled: boolean }) => api.setPushPreference(category, enabled),
     onSettled: () => qc.invalidateQueries({ queryKey: keys.pushPreferences }),
   })
 }

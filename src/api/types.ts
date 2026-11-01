@@ -9,7 +9,7 @@ import type { HandoverDetails } from '@/domain/listing'
 import type { PinResult } from '@/domain/delivery'
 import type { SavedAddress, SavedAddressInput } from '@/domain/addresses'
 import type { CheckoutDetails } from '@/domain/cart'
-import type { PushCategory, PushPreferences, PushSubscriptionKeys } from '@/domain/push'
+import type { NotificationPreference, PushPreferences, PushSubscriptionKeys } from '@/domain/push'
 import type { OrderError } from '@/domain/orders'
 import type { PurchaseError } from '@/domain/rules'
 import type { BoostPackage, BoostWindow } from '@/domain/boosts'
@@ -432,7 +432,7 @@ export interface DrawMartApi {
   removeFromCart(listingId: string): Promise<void>
   /** Which kinds of push notification this buyer wants. Everything's on until they say otherwise. */
   getPushPreferences(): Promise<PushPreferences>
-  setPushPreference(category: PushCategory, enabled: boolean): Promise<void>
+  setPushPreference(category: NotificationPreference, enabled: boolean): Promise<void>
   /** Only the browsers' own push services. Sending is Supabase only: the mock just keeps the record. */
   savePushSubscription(subscription: PushSubscriptionKeys): Promise<void>
   /** Your own device only. Fine if it's already gone. */
@@ -499,6 +499,7 @@ export interface DrawMartApi {
   listNotifications(): Promise<NotificationView[]>
   markNotificationsRead(): Promise<void>
   /** The pop-up for this win has been shown, so it won't show again on any device. */
+  /** The buyer has seen how this draw turned out, won or lost. Once across devices. */
   markWinCelebrated(listingId: string): Promise<void>
 
   // Wallet

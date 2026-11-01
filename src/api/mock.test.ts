@@ -619,6 +619,33 @@ describe('mock api', () => {
     await expect(api.saveListing(draw.id)).rejects.toMatchObject({ code: 'forbidden' })
   })
 
+  it('shows everyone who took part how a draw went, once each', async () => {
+    const api = make()
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const draw = await api.createListing(newListing({ title: 'Reveal draw', priceKobo: k(2_000), ticketPriceKobo: k(1_000) }))
+    await api.auth.signOut()
+    await api.auth.signInWithPassword('admin@drawmart.test', 'drawmart-demo')
+    await api.approveListing(draw.id)
+    for (const who of ['funke', 'ngozi']) {
+      await api.auth.signOut()
+      await api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+      await api.buyTickets(draw.id, 1)
+    }
+    await api.demoRunDraw(draw.id)
+    const results: string[] = []
+    for (const who of ['funke', 'ngozi']) {
+      await api.auth.signOut()
+      await api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+      const unseen = async () => (await api.listNotifications()).filter((n) => (n.kind === 'draw_won' || n.kind === 'draw_lost') && !n.celebrated)
+      const [n] = await unseen()
+      results.push(n.kind)
+      expect(n.winningNumber).toBe((await api.getListing(draw.id)).result?.winningNumber)
+      await api.markWinCelebrated(draw.id)
+      expect(await unseen()).toEqual([])
+    }
+    expect(results.sort()).toEqual(['draw_lost', 'draw_won'])
+  })
+
   describe('saved-item alerts', () => {
     const kinds = async (api: ReturnType<typeof make>) => (await api.listNotifications()).map((n) => n.kind).filter((k) => k.startsWith('saved_'))
     const signIn = async (api: ReturnType<typeof make>, who: string) => {
@@ -718,9 +745,9 @@ describe('mock api', () => {
     it('has everything on until a buyer turns something off, per buyer', async () => {
       const api = make()
       await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
-      expect(await api.getPushPreferences()).toEqual({ wins: true, drawResults: true, orders: true, messages: true, savedItems: true })
+      expect(await api.getPushPreferences()).toEqual({ wins: true, drawResults: true, orders: true, messages: true, savedItems: true, drawReveal: true })
       await api.setPushPreference('orders', false)
-      expect(await api.getPushPreferences()).toEqual({ wins: true, drawResults: true, orders: false, messages: true, savedItems: true })
+      expect(await api.getPushPreferences()).toEqual({ wins: true, drawResults: true, orders: false, messages: true, savedItems: true, drawReveal: true })
       await api.auth.signOut()
       await api.auth.signInWithPassword('buyer@drawmart.test', 'drawmart-demo')
       expect((await api.getPushPreferences()).orders).toBe(true)

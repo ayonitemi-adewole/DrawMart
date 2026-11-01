@@ -5,7 +5,7 @@ import { useDisablePush, useEnablePush, usePushDeviceState, usePushPreferences, 
 import { PUSH_CATEGORIES } from '@/domain/push'
 import { MAX_SAVED_ALERTS_PER_DAY } from '@/domain/savedAlerts'
 import { dismissPushPrompt, pushPromptDismissed } from '@/lib/push'
-import { BellIcon } from './icons'
+import { BellIcon, TrophyIcon } from './icons'
 import { useToast } from './toast'
 import { Button, Card, Switch, cx, errorMessage } from './ui'
 
@@ -87,6 +87,33 @@ export function SavedAlertsToggle() {
         labelledBy="saved-alerts-label"
         disabled={!prefs.data}
         onChange={() => set.mutate({ category: 'savedItems', enabled: !on }, { onError: (e) => toast(errorMessage(e), 'error') })}
+      />
+    </Card>
+  )
+}
+
+/** On the notifications page: the short reveal when a draw you're in has a result. */
+export function DrawRevealToggle() {
+  const prefs = usePushPreferences()
+  const set = useSetPushPreference()
+  const toast = useToast()
+  const on = prefs.data?.drawReveal ?? true
+  return (
+    <Card className="flex items-center gap-3 p-4">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-sunken text-muted">
+        <TrophyIcon size={18} />
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col text-sm">
+        <span id="draw-reveal-label" className="font-bold">
+          Draw results when I open the app
+        </span>
+        <span className="text-xs text-subtle">A short reveal of the winning ticket. Results still appear here either way.</span>
+      </div>
+      <Switch
+        checked={on}
+        labelledBy="draw-reveal-label"
+        disabled={!prefs.data}
+        onChange={() => set.mutate({ category: 'drawReveal', enabled: !on }, { onError: (e) => toast(errorMessage(e), 'error') })}
       />
     </Card>
   )

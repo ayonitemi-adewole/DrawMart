@@ -1,9 +1,10 @@
 import { PrizeActions } from "@/components/PrizeActions";
 import { WinnerStoryCard } from "@/components/WinnerStory";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useParams } from "react-router";
 import { api } from "@/api";
-import { useListing, useMarkWinCelebrated, useUncelebratedWins } from "@/api/hooks";
+import { useListing, useMarkWinCelebrated, useUncelebratedResults } from "@/api/hooks";
+import { prefersReducedMotion, useTicketReveal } from "@/lib/useTicketReveal";
 import type { DrawResultView } from "@/api/types";
 import { WinSheet } from "@/components/WinCelebration";
 import { Confetti } from "@/components/Confetti";
@@ -79,55 +80,21 @@ export function ResultPage() {
 }
 
 const revealKey = (id: string) => `drawmart:revealed:${id}`;
-const prefersReducedMotion = () =>
-  typeof window !== "undefined" &&
-  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 function alreadyRevealed(id: string) {
   try {
-    return (
-      sessionStorage.getItem(revealKey(id)) === "1" || prefersReducedMotion()
-    );
+    return sessionStorage.getItem(revealKey(id)) === "1";
   } catch {
     return true;
   }
 }
 
-/** Rolls random ticket numbers, slowing down, then lands on the winner. */
-function useReveal(id: string, ticketCount: number, winner: number, announced: boolean) {
-  const [rolling, setRolling] = useState(() => !announced && !alreadyRevealed(id));
-  const [shown, setShown] = useState(winner);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-
-  useEffect(() => {
-    if (!rolling) return;
-    let delay = 45;
-    const tick = () => {
-      setShown(1 + Math.floor(Math.random() * ticketCount));
-      delay *= 1.13;
-      if (delay > 380) {
-        setShown(winner);
-        setRolling(false);
-        try {
-          sessionStorage.setItem(revealKey(id), "1");
-        } catch {
-          /* ignore */
-        }
-        return;
-      }
-      timer.current = setTimeout(tick, delay);
-    };
-    timer.current = setTimeout(tick, 400);
-    return () => clearTimeout(timer.current);
-  }, [rolling, id, ticketCount, winner]);
-
-  function skip() {
-    clearTimeout(timer.current);
-    setShown(winner);
-    setRolling(false);
+function rememberRevealed(id: string) {
+  try {
+    sessionStorage.setItem(revealKey(id), "1");
+  } catch {
+    /* ignore */
   }
-
-  return { rolling, shown, replay: () => setRolling(true), skip };
 }
 
 function Result({
@@ -149,21 +116,22 @@ function Result({
 }) {
   // Coming from the win pop-up, so there's no suspense left to build.
   const announced = !!(useLocation().state as { announced?: boolean } | null)?.announced;
-  const { rolling, shown, replay, skip } = useReveal(
-    listingId,
-    r.ticketCount,
-    r.winningNumber,
-    announced,
-  );
+  const { rolling, shown, replay, skip, canAnimate } = useTicketReveal({
+    ticketCount: r.ticketCount,
+    winningNumber: r.winningNumber,
+    myNumbers: r.myNumbers,
+    autoplay: !announced && !alreadyRevealed(listingId),
+    onFinished: () => rememberRevealed(listingId),
+  });
   const played = r.myNumbers.length > 0;
   const celebrate = !rolling && r.iWon;
 
-  // Seeing the win here counts: the pop-up shouldn't announce it afterwards.
-  const unannounced = useUncelebratedWins().some((n) => n.listingId === listingId);
+  // Seeing the result here counts: the pop-up shouldn't announce it afterwards.
+  const unannounced = useUncelebratedResults().some((n) => n.listingId === listingId);
   const { mutate: markCelebrated } = useMarkWinCelebrated();
   useEffect(() => {
-    if (celebrate && unannounced) markCelebrated(listingId);
-  }, [celebrate, unannounced, listingId, markCelebrated]);
+    if (!rolling && unannounced) markCelebrated(listingId);
+  }, [rolling, unannounced, listingId, markCelebrated]);
 
   // Test mode only. Just plays it again: nothing is saved.
   const [replayingWin, setReplayingWin] = useState(false);
@@ -208,7 +176,7 @@ function Result({
               !rolling && "animate-pop",
             )}
           >
-            {rolling ? ticketNo(shown) : ticketNo(r.winningNumber)}
+            {ticketNo(shown)}
           </span>
           <span className="text-xs opacity-70">
             of {r.ticketCount.toLocaleString("en-NG")} tickets
@@ -255,14 +223,14 @@ function Result({
             >
               Skip animation
             </button>
-          ) : (
+          ) : canAnimate ? (
             <button
               onClick={replay}
               className="flex min-h-11 items-center gap-1.5 rounded-xl bg-white/15 px-4 text-sm font-bold ring-1 ring-white/20 hover:bg-white/25"
             >
               <PlayIcon size={14} /> Replay draw
             </button>
-          )}
+          ) : null}
         </div>
       </section>
 

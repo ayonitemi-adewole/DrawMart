@@ -642,8 +642,8 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     removeFromCart: (listingId) => rpc('remove_from_cart', { p_listing_id: listingId }),
 
     getPushPreferences: async () => {
-      const row = unwrap(await client.from('push_preferences').select('wins, draw_results, orders, messages, saved_items').maybeSingle<{ wins: boolean; draw_results: boolean; orders: boolean; messages: boolean; saved_items: boolean }>())
-      return row ? { wins: row.wins, drawResults: row.draw_results, orders: row.orders, messages: row.messages, savedItems: row.saved_items } : DEFAULT_PUSH_PREFERENCES
+      const row = unwrap(await client.from('push_preferences').select('wins, draw_results, orders, messages, saved_items, draw_reveal').maybeSingle<{ wins: boolean; draw_results: boolean; orders: boolean; messages: boolean; saved_items: boolean; draw_reveal: boolean }>())
+      return row ? { wins: row.wins, drawResults: row.draw_results, orders: row.orders, messages: row.messages, savedItems: row.saved_items, drawReveal: row.draw_reveal } : DEFAULT_PUSH_PREFERENCES
     },
     setPushPreference: (category, enabled) => rpc('set_push_preference', { p_category: category, p_enabled: enabled }),
     savePushSubscription: ({ endpoint, p256dh, auth }) => rpc('save_push_subscription', { p_endpoint: endpoint, p_p256dh: p256dh, p_auth: auth }),

@@ -3,7 +3,7 @@ import { Link } from 'react-router'
 import { useMarkNotificationsRead, useNotifications } from '@/api/hooks'
 import type { NotificationView } from '@/api/types'
 import { BellIcon, ClockIcon, HeartIcon, TicketIcon, TrophyIcon, type IconComponent } from '@/components/icons'
-import { PushToggle } from '@/components/PushSettings'
+import { DrawRevealToggle, PushToggle } from '@/components/PushSettings'
 import { Card, EmptyState, ErrorState, PageTitle, Skeleton, cx } from '@/components/ui'
 import { dateTime, ticketNo } from '@/lib/time'
 
@@ -62,6 +62,7 @@ export function NotificationsPage() {
         What’s new
       </PageTitle>
       <PushToggle />
+      <DrawRevealToggle />
       {q.isPending ? (
         <Skeleton className="h-60" />
       ) : q.isError ? (

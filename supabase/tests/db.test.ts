@@ -444,14 +444,14 @@ describe('store → admin → draw', () => {
     expect(await asUser(alice, `select id from public.notifications where read_at is null`)).toEqual([])
     expect((await asUser(bob, `select id from public.notifications where read_at is null`)).length).toBe(2)
 
-    // Reading isn't the pop-up. Only the winner has one to mark, and only for themselves.
+    // Reading isn't the pop-up. Marking it only clears your own result, for winner or loser.
     const toCelebrate = async (u: string) => asUser(u, `select id from public.notifications where kind = 'draw_won' and celebrated_at is null`)
     expect((await toCelebrate(winner_user_id)).length).toBe(1)
     await asUser(loser, `select public.mark_win_celebrated($1)`, [listingId])
     expect((await toCelebrate(winner_user_id)).length).toBe(1)
     await asUser(winner_user_id, `select public.mark_win_celebrated($1)`, [listingId])
     expect(await toCelebrate(winner_user_id)).toEqual([])
-    expect(await asUser(loser, `select id from public.notifications where celebrated_at is not null`)).toEqual([])
+    expect(await asUser(loser, `select kind from public.notifications where celebrated_at is not null`)).toEqual([{ kind: 'draw_lost' }])
   })
 })
 
@@ -1558,6 +1558,50 @@ describe('link previews', () => {
     const [{ id }] = await admin<{ id: string }>(`select id from public.listings where status = 'pending_review' limit 1`)
     expect(await asUser(null, `select ${LISTING_COLUMNS} from public.listings where id = $1`, [id])).toEqual([])
   })
+})
+
+describe('draw result pop-up', () => {
+  it('shows once for winners and everyone else, and only to them', async () => {
+    const [a, b, store, staff, other] = [await newUser('reveal1@example.com'), await newUser('reveal2@example.com'), await newUser('revealstore@example.com', { merchantId: IKEJA }), await newUser('revealstaff@example.com', { role: 'admin' }), await newUser('reveal3@example.com')]
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ title: 'Reveal', priceKobo: 200_000, ticketPriceKobo: 100_000 })])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    await asUser(a, `select public.buy_tickets($1, 1)`, [id])
+    await asUser(b, `select public.buy_tickets($1, 1)`, [id])
+    const unseen = async (who: string) => (await asUser<{ kind: string }>(who, `select kind from public.notifications where kind in ('draw_won', 'draw_lost') and celebrated_at is null`)).map((r) => r.kind)
+    expect(await unseen(a)).toEqual([]) // nothing before the result
+    await asUser(staff, `select public.demo_run_draw($1)`, [id])
+    expect([...(await unseen(a)), ...(await unseen(b))].sort()).toEqual(['draw_lost', 'draw_won'])
+
+    await asUser(other, `select public.mark_win_celebrated($1)`, [id])
+    expect((await unseen(a)).length).toBe(1) // someone else can't clear it
+    await asUser(a, `select public.mark_win_celebrated($1)`, [id])
+    await asUser(b, `select public.mark_win_celebrated($1)`, [id])
+    expect([...(await unseen(a)), ...(await unseen(b))]).toEqual([])
+  })
+
+  it('can be turned off', async () => {
+    const u = await newUser('reveal4@example.com')
+    await asUser(u, `select public.set_push_preference('drawReveal', false)`)
+    const [row] = await asUser<{ draw_reveal: boolean; wins: boolean }>(u, `select draw_reveal, wins from public.push_preferences`)
+    expect(row).toEqual({ draw_reveal: false, wins: true })
+  })
+
+  it('doesn’t show people their old losses when this arrives', async () => {
+    const d = new PGlite({ extensions: { pgcrypto } })
+    await d.exec(SUPABASE_STUBS)
+    const files = readdirSync(new URL('../migrations', import.meta.url)).sort()
+    const last = files.indexOf('20261101290000_draw_reveal.sql')
+    for (const f of files.slice(0, last)) await d.exec(sql(`migrations/${f}`))
+    await d.exec(sql('seed.sql'))
+    const { rows: [{ id: user }] } = await d.query<{ id: string }>(`insert into auth.users (email) values ('old@example.com') returning id`)
+    const { rows: [{ id: listing }] } = await d.query<{ id: string }>(`select id from public.listings limit 1`)
+    await d.query(`insert into public.notifications (user_id, kind, listing_id) values ($1, 'draw_lost', $2), ($1, 'draw_won', $2)`, [user, listing])
+    for (const f of files.slice(last)) await d.exec(sql(`migrations/${f}`))
+    const { rows } = await d.query<{ kind: string; seen: boolean }>(`select kind, celebrated_at is not null seen from public.notifications where user_id = $1 order by kind`, [user])
+    // A win nobody's greeted yet still gets its moment.
+    expect(rows).toEqual([{ kind: 'draw_lost', seen: true }, { kind: 'draw_won', seen: false }])
+    await d.close()
+  }, 60_000)
 })
 
 describe('saved-item alerts', () => {

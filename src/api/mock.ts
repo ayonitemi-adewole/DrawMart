@@ -80,7 +80,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v25' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v26' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -1422,7 +1422,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     markWinCelebrated: (listingId) =>
       tx((db) => {
-        for (const n of db.notifications) if (n.userId === buyer() && n.listingId === listingId && n.kind === 'draw_won') n.celebrated = true
+        for (const n of db.notifications) if (n.userId === buyer() && n.listingId === listingId && (n.kind === 'draw_won' || n.kind === 'draw_lost')) n.celebrated = true
       }),
 
     getWallet: () =>
