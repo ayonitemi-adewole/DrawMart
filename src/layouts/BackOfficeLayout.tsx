@@ -1,7 +1,7 @@
 import { NavLink, Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router'
 import { api } from '@/api'
-import { useAccess, useMerchant, usePendingListings, usePendingWinnerStories, usePrizeOrders, useSellerApplications, useSignOut, useUnreadMessages, useUnreadNotifications } from '@/api/hooks'
-import { BellIcon, HeartIcon, ChartIcon, ChatIcon, TrendingUpIcon, TrophyIcon, TruckIcon, CheckIcon, ClipboardIcon, DiceIcon, HashIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
+import { useAccess, useDuePayouts, useMerchant, usePendingListings, usePendingWinnerStories, usePrizeOrders, useSellerApplications, useSignOut, useUnreadMessages, useUnreadNotifications } from '@/api/hooks'
+import { BellIcon, NairaIcon, HeartIcon, ChartIcon, ChatIcon, TrendingUpIcon, TrophyIcon, TruckIcon, CheckIcon, ClipboardIcon, DiceIcon, HashIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
 import { NavMenu } from '@/components/NavMenu'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { cx } from '@/components/ui'
@@ -35,6 +35,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
   const stories = usePendingWinnerStories()
   const access = useAccess()
   const unreadNotifications = useUnreadNotifications()
+  const duePayouts = useDuePayouts()
   const signOut = useSignOut()
 
   const nav: NavItem[] =
@@ -43,6 +44,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
       : app === 'store'
       ? [
           { to: '/store', label: 'Dashboard', icon: LayoutIcon },
+          { to: '/store/payouts', label: 'Payouts', icon: NairaIcon },
           { to: '/store/insights', label: 'Insights', icon: ChartIcon },
           { to: '/store/messages', label: 'Messages', icon: ChatIcon, count: unread },
           { to: '/store/notifications', label: 'Notifications', icon: BellIcon, count: unreadNotifications },
@@ -53,6 +55,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
           { to: '/admin/sellers', label: 'Seller ID checks', icon: IdCardIcon, count: sellers.data?.length ?? 0 },
           { to: '/admin/prizes', label: 'Won items', icon: TrophyIcon, count: prizes.data?.filter((o) => o.status === 'paid').length ?? 0 },
           { to: '/admin/stories', label: 'Winner stories', icon: HeartIcon, count: stories.data?.length ?? 0 },
+          { to: '/admin/payouts', label: 'Payouts', icon: NairaIcon, count: duePayouts.data?.length ?? 0 },
           { to: '/admin/boosts', label: 'Boosts', icon: TrendingUpIcon },
           { to: '/admin/draws', label: api.testMode ? 'Live draws & demo' : 'Live draws', icon: DiceIcon },
         ]

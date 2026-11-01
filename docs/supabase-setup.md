@@ -143,6 +143,7 @@ Without this, the wallet's top-up buttons add test money instantly. With it, the
    npx supabase secrets set FLW_SECRET_KEY=FLWSECK_TEST-… FLW_WEBHOOK_HASH=your-random-string
    npx supabase functions deploy confirm-deposit
    npx supabase functions deploy flutterwave-webhook
+   npx supabase functions deploy bank-account
    ```
 
 4. In Flutterwave, **Settings → Webhooks**: set the URL to `https://<project-ref>.supabase.co/functions/v1/flutterwave-webhook`, paste the same secret hash, and tick the charge-completed events.

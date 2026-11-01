@@ -9,6 +9,8 @@ import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication, type SellerAp
 import { SellerInsights } from '@/components/SellerInsights'
 import { photoToDataUrl } from '@/lib/image'
 import { PushPrompt } from '@/components/PushSettings'
+import { NairaIcon } from '@/components/icons'
+import { Payouts } from './merchant/Payouts'
 import { MerchantListings } from './merchant/MerchantPage'
 import { listingFormFrom } from './merchant/parts'
 import { localDate } from '@/domain/listing'
@@ -278,8 +280,8 @@ function IdPhoto({
   )
 }
 
-type SellTab = 'items' | 'orders' | 'insights' | 'new'
-const SELL_TABS: SellTab[] = ['items', 'orders', 'insights', 'new']
+type SellTab = 'items' | 'orders' | 'payouts' | 'insights' | 'new'
+const SELL_TABS: SellTab[] = ['items', 'orders', 'payouts', 'insights', 'new']
 
 /** Once approved: the seller's own items, orders to send, and a regular-product form. */
 function SellerDashboard() {
@@ -320,6 +322,7 @@ function SellerDashboard() {
         options={[
           { value: 'items', label: <><LayoutIcon size={16} /> Your items</> },
           { value: 'orders', label: <><TruckIcon size={16} /> Orders</> },
+          { value: 'payouts', label: <><NairaIcon size={16} /> Payouts</> },
           { value: 'insights', label: <><ChartIcon size={16} /> Insights</> },
           { value: 'new', label: <><PlusIcon size={16} /> New item</> },
         ]}
@@ -329,6 +332,8 @@ function SellerDashboard() {
           <NewProduct form={form} onBack={() => setTab('items')} onDone={() => setTab('items')} />
         ) : tab === 'orders' ? (
           <MerchantOrders />
+        ) : tab === 'payouts' ? (
+          <Payouts />
         ) : tab === 'insights' ? (
           <SellerInsights />
         ) : tab === 'new' ? (

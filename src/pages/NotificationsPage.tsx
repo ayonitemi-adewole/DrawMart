@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Link } from 'react-router'
 import { useAccess, useMarkNotificationsRead, useNotifications } from '@/api/hooks'
 import type { NotificationView } from '@/api/types'
-import { BellIcon, CalendarIcon, ChatIcon, CheckIcon, ClockIcon, HeartIcon, TicketIcon, TrophyIcon, TruckIcon, XIcon, type IconComponent } from '@/components/icons'
+import { BellIcon, CalendarIcon, ChatIcon, CheckIcon, ClockIcon, HeartIcon, LockIcon, NairaIcon, TicketIcon, TrophyIcon, TruckIcon, XIcon, type IconComponent } from '@/components/icons'
 import { DrawRevealToggle, PushToggle, StorePushSettings } from '@/components/PushSettings'
 import { Card, EmptyState, ErrorState, PageTitle, Skeleton, cx } from '@/components/ui'
 import { handoverMethodFor } from '@/domain/listing'
@@ -12,6 +12,10 @@ import { dateTime, ticketNo } from '@/lib/time'
 function describe(n: NotificationView, store: boolean): { icon: IconComponent; title: string; body: string; to: string } {
   const home = store ? '/store' : '/sell'
   switch (n.kind) {
+    case 'store_payout_sent':
+      return { icon: NairaIcon, title: 'Payout sent', body: 'We’ve sent money to your bank account. See what it covered.', to: store ? '/store/payouts' : '/sell?tab=payouts' }
+    case 'store_bank_changed':
+      return { icon: LockIcon, title: 'Bank account changed', body: 'If this wasn’t you, contact DrawMart now. Payouts are on hold for now.', to: store ? '/store/payouts' : '/sell?tab=payouts' }
     case 'store_new_order':
       return { icon: TruckIcon, title: `New order: ${n.listingTitle}`, body: 'Get it ready, then mark it ready for a rider.', to: `${home}?tab=orders` }
     case 'store_listing_approved':

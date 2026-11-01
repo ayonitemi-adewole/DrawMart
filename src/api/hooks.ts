@@ -29,6 +29,10 @@ export const keys = {
   deliveryJobs: ['delivery-jobs'] as const,
   cart: ['cart'] as const,
   pushPreferences: ['push-preferences'] as const,
+  payouts: ['payouts'] as const,
+  payoutAccount: ['payoutAccount'] as const,
+  banks: ['banks'] as const,
+  duePayouts: ['duePayouts'] as const,
   pushDevice: ['push-device'] as const,
   winnersWall: ['winners-wall'] as const,
   myWinnerStories: ['my-winner-stories'] as const,
@@ -378,6 +382,25 @@ export function useUpdateListing() {
 export function useWithdrawListing() {
   const invalidate = useInvalidateAll()
   return useMutation({ mutationFn: (id: string) => api.withdrawListing(id), onSettled: invalidate })
+}
+
+export const usePayouts = () => useQuery({ queryKey: keys.payouts, queryFn: () => api.listPayouts(), enabled: useHasShop() })
+export const usePayoutAccount = () => useQuery({ queryKey: keys.payoutAccount, queryFn: () => api.getPayoutAccount(), enabled: useHasShop() })
+export const useBanks = () => useQuery({ queryKey: keys.banks, queryFn: () => api.listBanks(), staleTime: 60 * 60_000 })
+export const useDuePayouts = () => useQuery({ queryKey: keys.duePayouts, queryFn: () => api.listDuePayouts(), enabled: useIs('admin') })
+
+export function useLookupBankAccount() {
+  return useMutation({ mutationFn: ({ bankCode, accountNumber }: { bankCode: string; accountNumber: string }) => api.lookupBankAccount(bankCode, accountNumber) })
+}
+
+export function useSavePayoutAccount() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: ({ bankCode, accountNumber }: { bankCode: string; accountNumber: string }) => api.savePayoutAccount(bankCode, accountNumber), onSettled: invalidate })
+}
+
+export function useMarkPayoutsPaid() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: ({ ids, reference }: { ids: string[]; reference: string }) => api.markPayoutsPaid(ids, reference), onSettled: invalidate })
 }
 
 export function useResubmitListing() {

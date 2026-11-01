@@ -9,6 +9,7 @@
 import { LISTING_COLUMNS } from '../../api/_lib/preview.mjs'
 import { WINNER_CONSENT_VERSION, winnerStoryError } from '../../src/domain/winnerStories'
 import { pushSubscriptionValid } from '../../src/domain/push'
+import { PAYOUT_ACCOUNT_HOLD_HOURS } from '../../src/domain/payouts'
 import { isProductCode } from '../../src/domain/productCode'
 import { readFileSync, readdirSync } from 'node:fs'
 import { PGlite } from '@electric-sql/pglite'
@@ -1907,6 +1908,168 @@ describe('saved-item alerts', () => {
   it('keeps the sent list from every client', async () => {
     await expect(asUser(saver, `select * from private.saved_alerts_sent`)).rejects.toThrow(/permission denied/)
     await expect(asUser(saver, `select private.alert_saved($1, $1, $1, 'saved_price_drop')`, [saver])).rejects.toThrow(/permission denied/)
+  })
+})
+
+describe('payouts', () => {
+  let store: string, other: string, staff: string, buyer: string
+  const OTHER_SHOP = '11111111-1111-4111-8111-000000000002'
+  const lines = (listing: string) => admin<{ kind: string; status: string; amount_kobo: string }>(`select kind, status, amount_kobo from public.payouts where listing_id = $1 order by kind`, [listing])
+  const save = (who: string, code: string, number: string, name = 'ADA OKAFOR') =>
+    asService(`select public.save_payout_account($1, $2, 'Test Bank', $3, $4)`, [who, code, number, name])
+  const order = (listing: string, over: { prize?: boolean; price?: number; fee?: number; handled?: string } = {}) =>
+    admin<{ id: string }>(`insert into public.orders (listing_id, user_id, merchant_id, price_kobo, fee_kobo, delivery_address, delivery_phone, handled_by, is_prize) values ($1, $2, $3, $4, $5, 'x', 'x', $6, $7) returning id`,
+      [listing, buyer, IKEJA, over.price ?? 0, over.fee ?? 0, over.handled ?? 'drawmart', over.prize ?? true])
+  const deliver = (id: string) => admin(`update public.orders set status = 'delivered', delivered_at = now() where id = $1`, [id])
+  const soldDraw = async (input = {}) => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ priceKobo: 1_000_000, ticketPriceKobo: 500_000, ...input })])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    await asUser(staff, `select public.demo_sell_out($1)`, [id])
+    return id
+  }
+
+  beforeAll(async () => {
+    store = await newUser('payoutstore@example.com', { merchantId: IKEJA })
+    other = await newUser('payoutother@example.com', { merchantId: OTHER_SHOP })
+    staff = await newUser('payoutstaff@example.com', { role: 'admin' })
+    buyer = await newUser('payoutbuyer@example.com')
+  })
+
+  it('takes a draw from sold out to due, with the fee as its own line, matching the app’s sums', async () => {
+    const id = await soldDraw({ feeMode: 'split' })
+    const [row] = await admin<{ fee_bps: number; caution_fee_kobo: string }>(`select fee_bps, caution_fee_kobo from public.listings where id = $1`, [id])
+    const expected = computeListingEconomics({ priceKobo: 1_000_000, ticketPriceKobo: 500_000, feeBps: row.fee_bps, feeMode: 'split' }).sellerPayoutKobo
+    expect((await lines(id)).map((l) => [l.kind, l.status, Number(l.amount_kobo)])).toEqual([['draw', 'waiting', expected]])
+
+    await asUser(staff, `select public.demo_run_draw($1)`, [id])
+    const drawn = await lines(id)
+    expect(drawn.map((l) => [l.kind, l.status])).toEqual([['caution_fee', 'waiting'], ['draw', 'waiting']])
+    expect(Number(drawn[0].amount_kobo)).toBe(Number(row.caution_fee_kobo))
+
+    const [{ id: o }] = await order(id)
+    expect((await lines(id)).every((l) => l.status === 'waiting')).toBe(true)
+    await deliver(o)
+    expect((await lines(id)).every((l) => l.status === 'due')).toBe(true)
+  })
+
+  it('pays a sale its price less the fee, once delivered, and nothing on a draw that ended unsold', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_product($1) id`, [{ title: 'Payout chair', description: '', category: 'Home', priceKobo: 5_000_000 }])
+    expect(await lines(id)).toEqual([])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    const [{ id: o }] = await order(id, { prize: false, price: 5_000_000, fee: 250_000, handled: 'store' })
+    expect((await lines(id)).map((l) => [l.kind, l.status, Number(l.amount_kobo)])).toEqual([['sale', 'waiting', 4_750_000]])
+    await deliver(o)
+    await deliver(o) // nothing changes the second time
+    expect((await lines(id)).map((l) => [l.status])).toEqual([['due']])
+    expect(await admin(`select 1 from public.payouts where listing_id = $1`, [id])).toHaveLength(1)
+
+    const [{ id: unsold }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
+    await asUser(staff, `select public.approve_listing($1)`, [unsold])
+    await asUser(staff, `select public.demo_expire($1)`, [unsold])
+    expect(await lines(unsold)).toEqual([])
+  })
+
+  it('owes a withdrawn listing its fee back at once, and nothing if it was kept', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
+    await asUser(store, `select public.withdraw_listing($1)`, [id])
+    expect((await lines(id)).map((l) => [l.kind, l.status])).toEqual([['caution_fee', 'due']])
+    const [{ id: rejected }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
+    await asUser(staff, `select public.reject_listing($1, 'price_wrong')`, [rejected])
+    await asUser(store, `select public.resubmit_listing($1, $2)`, [rejected, listingInput()])
+    await asUser(store, `select public.withdraw_listing($1)`, [rejected])
+    expect(await lines(rejected)).toEqual([])
+  })
+
+  it('gives a shared pickup one fee line, due once all its draws are delivered', async () => {
+    const item = (title: string) => { const { handover: _h, ...rest } = listingInput({ title, priceKobo: 1_000_000, ticketPriceKobo: 500_000 }); void _h; return rest }
+    const [{ ids }] = await asUser<{ ids: string[] }>(store, `select public.create_listing_batch($1) ids`, [{ items: [item('One'), item('Two')], handover: listingInput().handover }])
+    for (const id of ids) {
+      await asUser(staff, `select public.approve_listing($1)`, [id])
+      await asUser(staff, `select public.demo_sell_out($1)`, [id])
+      await asUser(staff, `select public.demo_run_draw($1)`, [id])
+    }
+    const fees = () => admin<{ status: string }>(`select status from public.payouts where kind = 'caution_fee' and listing_id = any($1)`, [ids])
+    expect((await fees()).map((f) => f.status)).toEqual(['waiting'])
+    const [{ id: first }] = await order(ids[0])
+    await deliver(first)
+    expect((await fees()).map((f) => f.status)).toEqual(['waiting'])
+    const [{ id: second }] = await order(ids[1])
+    await deliver(second)
+    expect((await fees()).map((f) => f.status)).toEqual(['due'])
+  })
+
+  it('keeps bank details from buyers and other sellers, and only the server can save them', async () => {
+    await save(store, '044', '0123456789')
+    const read = `select account_number from public.payout_accounts where merchant_id = '${IKEJA}'`
+    expect(await asUser(store, read)).toEqual([{ account_number: '0123456789' }])
+    expect(await asUser(staff, read)).toEqual([{ account_number: '0123456789' }])
+    expect(await asUser(other, read)).toEqual([])
+    expect(await asUser(buyer, read)).toEqual([])
+    await expect(asUser(store, `select public.save_payout_account($1, '044', 'Bank', '0123456789', 'ME')`, [store])).rejects.toThrow(/permission denied/)
+    await expect(asUser(store, `select public.note_bank_lookup($1)`, [store])).rejects.toThrow(/permission denied/)
+    expect(await asUser(buyer, `select 1 from public.payouts`)).toEqual([])
+    await expect(asUser(store, `insert into public.payouts (merchant_id, listing_id, kind, amount_kobo) select merchant_id, id, 'sale', 1 from public.listings limit 1`)).rejects.toThrow(/permission denied/)
+  })
+
+  it('holds a changed account, tells the seller whatever their switches say, and keeps the old one on file', async () => {
+    await save(other, '044', '1111111111')
+    const [before] = await admin<{ held: boolean }>(`select payable_from > now() held from public.payout_accounts where merchant_id = $1`, [OTHER_SHOP])
+    expect(before.held).toBe(false)
+    await save(other, '044', '1111111111') // the same one changes nothing
+    expect(await admin(`select 1 from public.notifications where user_id = $1 and kind = 'store_bank_changed'`, [other])).toEqual([])
+
+    await asUser(other, `select public.set_push_preference('storePayouts', false)`)
+    await asUser(other, `select public.save_push_subscription($1, $2, $3)`, ['https://fcm.googleapis.com/fcm/send/payoutother', 'B'.repeat(87), 'a'.repeat(22)])
+    await save(other, '058', '2222222222', 'NEW NAME')
+    const [after] = await admin<{ hours: string }>(`select extract(epoch from payable_from - now()) / 3600 hours from public.payout_accounts where merchant_id = $1`, [OTHER_SHOP])
+    expect(Math.round(Number(after.hours))).toBe(PAYOUT_ACCOUNT_HOLD_HOURS)
+    expect(await admin(`select account_number from private.payout_account_history where merchant_id = $1`, [OTHER_SHOP])).toEqual([{ account_number: '1111111111' }])
+    const pushes = await admin<{ title: string; body: string }>(`select title, body from private.push_outbox where user_id = $1 and title = 'Bank account changed'`, [other])
+    expect(pushes).toHaveLength(1)
+    expect(pushes[0].body).not.toContain('2222')
+  })
+
+  it('limits lookups, and only for sellers', async () => {
+    expect((await asService<{ r: string }>(`select public.note_bank_lookup($1) r`, [buyer]))[0].r).toBe('not_seller')
+    for (let i = 0; i < 10; i++) expect((await asService<{ r: string }>(`select public.note_bank_lookup($1) r`, [store]))[0].r).toBe('ok')
+    expect((await asService<{ r: string }>(`select public.note_bank_lookup($1) r`, [store]))[0].r).toBe('too_many')
+  })
+
+  it('lets only an admin mark what’s due paid, once, with a reference, and not during a hold', async () => {
+    const id = await soldDraw()
+    await asUser(staff, `select public.demo_run_draw($1)`, [id])
+    const ids = async () => (await admin<{ id: string }>(`select id from public.payouts where listing_id = $1`, [id])).map((r) => r.id)
+    const mark = (who: string, refs: string[], ref = 'TRF-123') => asUser(who, `select public.mark_payouts_paid($1, $2)`, [refs, ref])
+
+    await expectFail(mark(staff, await ids()), 'invalid_input') // still waiting
+    const [{ id: o }] = await order(id)
+    await deliver(o)
+    await expectFail(mark(store, await ids()), 'forbidden')
+    await expectFail(mark(staff, await ids(), ' x '), 'invalid_input')
+
+    await admin(`update public.payout_accounts set payable_from = now() + interval '1 hour' where merchant_id = $1`, [IKEJA])
+    const held = await expectFail(mark(staff, await ids()), 'invalid_input')
+    expect(held.detail).toContain('on hold')
+    await admin(`update public.payout_accounts set payable_from = now() where merchant_id = $1`, [IKEJA])
+
+    await mark(staff, await ids())
+    const paid = await admin<{ status: string; reference: string; paid_to: string; paid_by: string }>(`select status, reference, paid_to, paid_by from public.payouts where listing_id = $1`, [id])
+    expect(paid.every((p) => p.status === 'paid' && p.reference === 'TRF-123' && p.paid_to === 'Test Bank •••• 6789' && p.paid_by === staff)).toBe(true)
+    await expectFail(mark(staff, await ids()), 'invalid_input') // not twice
+    const told = await asUser(store, `select kind, listing_id from public.notifications where kind = 'store_payout_sent'`)
+    expect(told).toEqual([{ kind: 'store_payout_sent', listing_id: null }])
+  })
+
+  it('won’t mix two sellers in one reference', async () => {
+    const mine = await soldDraw()
+    await asUser(staff, `select public.demo_run_draw($1)`, [mine])
+    const [{ id: o }] = await order(mine)
+    await deliver(o)
+    const [{ id: theirs }] = await asUser<{ id: string }>(other, `select public.create_listing($1) id`, [listingInput()])
+    await asUser(other, `select public.withdraw_listing($1)`, [theirs])
+    const ids = (await admin<{ id: string }>(`select id from public.payouts where listing_id = any($1)`, [[mine, theirs]])).map((r) => r.id)
+    const e = await expectFail(asUser(staff, `select public.mark_payouts_paid($1, 'TRF-9')`, [ids]), 'invalid_input')
+    expect(e.detail).toContain('one seller')
   })
 })
 

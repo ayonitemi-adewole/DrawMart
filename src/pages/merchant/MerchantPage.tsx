@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
+import { payoutTotals } from '@/domain/payouts'
 import { api } from '@/api'
-import { useCreateListing, useCreateListingBatch, useResubmitListing, useUpdateListing, useSavePickupItems, useSavedPickup, useMerchant, useMerchantListings, useMerchantOrders } from '@/api/hooks'
+import { useCreateListing, useCreateListingBatch, usePayouts, useResubmitListing, useUpdateListing, useSavePickupItems, useSavedPickup, useMerchant, useMerchantListings, useMerchantOrders } from '@/api/hooks'
 import type { ListingView, PickupItemInput } from '@/api/types'
 import { Countdown } from '@/components/Countdown'
 import {
@@ -32,7 +33,6 @@ import {
   TIME_SLOTS,
   addDays,
   PICKUP_ERROR_TEXT,
-  cautionFeesDue,
   pickupCautionFee,
   savedPickupDaysLeft,
   daysBetween,
@@ -80,6 +80,7 @@ export function MerchantPage() {
   const merchant = useMerchant()
   const listings = useMerchantListings()
   const orders = useMerchantOrders()
+  const payouts = usePayouts()
   const [params, setParams] = useSearchParams()
   const tab: Tab = TABS.find((t) => t === params.get('tab')) ?? 'draws'
   const kindParam = params.get('kind')
@@ -92,14 +93,7 @@ export function MerchantPage() {
   const active = data.filter(isActive)
   const review = data.filter((l) => l.status === 'pending_review')
   const toSend = orders.data?.filter((o) => o.status === 'paid').length ?? 0
-  // Drawn raffles pay out the price plus the caution fee back once it's delivered to the winner;
-  // orders pay out the price less the fee once it's delivered.
-  const awaiting =
-    data
-      .filter((l) => l.status === 'drawn' || l.status === 'sold_out')
-      .reduce((s, l) => s + computeListingEconomics(l).sellerPayoutKobo, 0) +
-    cautionFeesDue(data.filter((l) => l.status === 'drawn')) +
-    (orders.data ?? []).filter((o) => o.status !== 'delivered').reduce((s, o) => s + o.priceKobo - o.feeKobo, 0)
+  const unpaid = payoutTotals(payouts.data ?? [])
 
   return (
     <div className="flex flex-col gap-6">
@@ -138,7 +132,9 @@ export function MerchantPage() {
         <StatTile icon={TicketIcon} label="Live & on sale" value={active.length} hint={`${active.filter((l) => l.kind === 'raffle').length} draws`} />
         <StatTile icon={ClipboardIcon} tone="ticket" label="In review" value={review.length} hint="Waiting on review, pickup or inspection" />
         <StatTile icon={TruckIcon} tone="sky" label="Orders to send" value={toSend} hint={`${orders.data?.length ?? 0} orders in all`} />
-        <StatTile icon={NairaIcon} tone="violet" label="Payout after delivery" value={formatNaira(awaiting)} hint="Includes caution fees back" />
+        <Link to="/store/payouts" className="flex text-ink no-underline transition hover:opacity-80">
+          <StatTile icon={NairaIcon} tone="violet" className="w-full" label="Money coming to you" value={formatNaira(unpaid.waiting + unpaid.due)} hint={unpaid.due ? `${formatNaira(unpaid.due)} due. See payouts` : 'Paid after delivery. See payouts'} />
+        </Link>
       </div>
 
       <Segmented<Tab>

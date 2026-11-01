@@ -35,6 +35,8 @@ import { MerchantPage } from '@/pages/merchant/MerchantPage'
 import { ResultPage } from '@/pages/ResultPage'
 import { ConversationPage, MessagesPage, NewConversationPage } from '@/pages/MessagesPage'
 import { NotificationsPage } from '@/pages/NotificationsPage'
+import { AdminPayoutsPage } from '@/pages/admin/AdminPayoutsPage'
+import { StorePayoutsPage } from '@/pages/merchant/StorePayoutsPage'
 import { InsightsPage } from '@/pages/merchant/InsightsPage'
 import { SellPage } from '@/pages/SellPage'
 import { SignInPage } from '@/pages/SignInPage'
@@ -163,6 +165,7 @@ const router = createBrowserRouter([
       { index: true, element: <MerchantPage /> },
       { path: 'listings/:id', element: <ListingPage /> },
       { path: 'notifications', element: <NotificationsPage /> },
+      { path: 'payouts', element: <StorePayoutsPage /> },
       { path: 'insights', element: <InsightsPage /> },
       { path: 'messages', element: <MessagesPage basePath="/store/messages" /> },
       { path: 'messages/:id', element: <ConversationPage basePath="/store/messages" /> },
@@ -178,6 +181,7 @@ const router = createBrowserRouter([
       { path: 'products', element: <AdminProductsPage /> },
       { path: 'draws', element: <AdminDrawsPage /> },
       { path: 'boosts', element: <AdminBoostsPage /> },
+      { path: 'payouts', element: <AdminPayoutsPage /> },
       { path: 'prizes', element: <AdminPrizesPage /> },
       { path: 'stories', element: <AdminStoriesPage /> },
       { path: 'sellers', element: <AdminSellersPage /> },

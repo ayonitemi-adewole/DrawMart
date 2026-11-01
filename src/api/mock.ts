@@ -33,6 +33,8 @@ import {
 import { nairaToKobo } from '@/domain/money'
 import { canChangeInReview, withdrawalFees } from '@/domain/listingActions'
 import { closingReminderSent, pickupReminderDue } from '@/domain/storeNotifications'
+import type { PayoutLineView } from './types'
+import { PAYOUT_ACCOUNT_HOLD_HOURS, accountNumberError, markPaidError, maskAccountNumber, payoutsFor, type PayoutAccount, type PayoutLine } from '@/domain/payouts'
 import { newRejection, REJECTION_ERROR_TEXT, rejectionError, resentCautionFee } from '@/domain/rejection'
 import { DEMO_ACCOUNTS } from './demoAccounts'
 import {
@@ -83,7 +85,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v31' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v32' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -105,7 +107,7 @@ interface Db {
   seeds: Record<string, string>
   /** Reference of the purchase that sold the last ticket, kept for the draw. */
   closingRefs: Record<string, string>
-  notifications: { id: string; userId: string; kind: NotificationKind; listingId: string; createdAt: string; read: boolean; celebrated: boolean }[]
+  notifications: { id: string; userId: string; kind: NotificationKind; listingId: string | null; createdAt: string; read: boolean; celebrated: boolean }[]
   tickets: Ticket[]
   ledger: LedgerEntry[]
   results: DrawResult[]
@@ -118,6 +120,8 @@ interface Db {
   pushPreferences: Record<string, Partial<PushPreferences>>
   savedAlertsSent: { userId: string; savedListingId: string; kind: SavedAlertKind; at: string }[]
   pushSubscriptions: (PushSubscriptionKeys & { userId: string })[]
+  payouts: (PayoutLine & { merchantId: string })[]
+  payoutAccounts: Record<string, PayoutAccount>
   winnerStories: { id: string; userId: string; listingId: string; firstName: string | null; status: 'pending' | 'approved' | 'rejected' | 'withdrawn'; consentVersion: number; consentAt: string; withdrawnAt: string | null }[]
   winnerConsentLog: { userId: string; listingId: string; event: 'given' | 'withdrawn'; consentVersion: number; at: string }[]
   /** Listing ids each buyer has saved, newest first. */
@@ -549,6 +553,8 @@ async function freshDb(): Promise<Db> {
     pushPreferences: {},
     savedAlertsSent: [],
     pushSubscriptions: [],
+    payouts: [],
+    payoutAccounts: {},
     winnerStories: [],
     winnerConsentLog: [],
     addresses: {},
@@ -669,12 +675,12 @@ function participants(db: Db, listing: Listing): Set<string> {
   return new Set(db.tickets.filter((t) => t.listingId === listing.id && t.userId !== CROWD).map((t) => t.userId))
 }
 
-function notify(db: Db, userId: string, kind: NotificationKind, listingId: string, at: string) {
+function notify(db: Db, userId: string, kind: NotificationKind, listingId: string | null, at: string) {
   db.notifications.push({ id: uid('N'), userId, kind, listingId, createdAt: at, read: false, celebrated: false })
 }
 
 /** Everyone running this shop: its store account (whose id is the shop's), or an individual seller. */
-function notifyShop(db: Db, merchantId: string, kind: NotificationKind, listingId: string, at: string) {
+function notifyShop(db: Db, merchantId: string, kind: NotificationKind, listingId: string | null, at: string) {
   notify(db, merchantId, kind, listingId, at)
   for (const [userId, shop] of Object.entries(db.sellerShops)) if (shop === merchantId) notify(db, userId, kind, listingId, at)
 }
@@ -771,6 +777,19 @@ function processDeadlines(db: Db, now: number): boolean {
     }
   }
   return changed
+}
+
+/** payouts.ts payoutsFor decides; this records it. A line only ever moves forward. */
+function syncPayouts(db: Db, now: number) {
+  for (const d of payoutsFor(db.listings, db.orders)) {
+    if (d.amountKobo <= 0) continue
+    let line = db.payouts.find((p) => p.kind === d.kind && (d.orderId ? p.orderId === d.orderId : p.listingId === d.listingId))
+    if (!line) {
+      line = { id: uid('Y'), merchantId: d.merchantId, listingId: d.listingId, orderId: d.orderId, kind: d.kind, amountKobo: d.amountKobo, status: 'waiting', createdAt: iso(now), dueAt: null, paidAt: null, reference: null, paidTo: null }
+      db.payouts.push(line)
+    }
+    if (d.due && line.status === 'waiting') Object.assign(line, { status: 'due', dueAt: iso(now) })
+  }
 }
 
 /** A shared pickup's one fee follows all its draws (listing.ts settlePickupFee). */
@@ -914,6 +933,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       settlePickups(db)
       const out = await fn(db)
       settlePickups(db)
+      syncPayouts(db, now())
       delete db.viewer
       save(db)
       return out
@@ -1069,6 +1089,20 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     }
     db.listings.push(listing)
     return listing
+  }
+
+  /** Stands in for the bank's lookup. Numbers starting 000 aren't found, to try that path. */
+  const mockAccountName = (bankCode: string, accountNumber: string) => {
+    const problem = accountNumberError(accountNumber)
+    if (problem) throw new ApiError('invalid_input', problem)
+    if (!bankCode) throw new ApiError('invalid_input', 'Pick a bank from the list.')
+    if (accountNumber.startsWith('000')) throw new ApiError('invalid_input', 'We couldn’t find that account. Check the bank and number.')
+    return `TEST ACCOUNT ${accountNumber.slice(-4)}`
+  }
+
+  const payoutView = (db: Db, p: Db['payouts'][number]): PayoutLineView => {
+    const l = getListingOr404(db, p.listingId)
+    return { ...p, listingTitle: l.title, productCode: l.productCode }
   }
 
   const ownListing = (db: Db, id: string) => {
@@ -1470,9 +1504,9 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           .filter((n) => n.userId === inbox())
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
           .map((n) => {
-            const l = getListingOr404(db, n.listingId)
+            const l = n.listingId ? getListingOr404(db, n.listingId) : null
             return {
-              id: n.id, kind: n.kind, listingId: n.listingId, listingTitle: l.title, listingImage: l.images[0] ?? null, listingCategory: l.category, drawAt: l.drawAt,
+              id: n.id, kind: n.kind, listingId: n.listingId ?? '', listingTitle: l?.title ?? '', listingImage: l?.images[0] ?? null, listingCategory: l?.category ?? 'Phones', drawAt: l?.drawAt ?? null,
               winningNumber: db.results.find((r) => r.listingId === n.listingId)?.winningNumber ?? null, createdAt: n.createdAt, read: n.read, celebrated: n.celebrated,
             }
           }),
@@ -1616,6 +1650,58 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const listing = productListing({ ...input, merchantId: shopId(db), status: 'pending_review' }, now())
         db.listings.push(listing)
         return listingView(db, listing, 'full')
+      }),
+
+    listPayouts: () =>
+      tx((db) => db.payouts.filter((p) => p.merchantId === shopId(db)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((p) => payoutView(db, p))),
+
+    getPayoutAccount: () => tx((db) => db.payoutAccounts[shopId(db)] ?? null),
+
+    listBanks: () => tx(() => [{ code: '044', name: 'Access Bank' }, { code: '058', name: 'GTBank' }, { code: '057', name: 'Zenith Bank' }]),
+
+    lookupBankAccount: (bankCode, accountNumber) =>
+      tx((db) => {
+        shopId(db)
+        return { accountName: mockAccountName(bankCode, accountNumber) }
+      }),
+
+    savePayoutAccount: (bankCode, accountNumber) =>
+      tx((db) => {
+        const shop = shopId(db)
+        const accountName = mockAccountName(bankCode, accountNumber)
+        const old = db.payoutAccounts[shop]
+        if (old?.bankCode === bankCode && old.accountNumber === accountNumber) return
+        const at = now()
+        const bankName = { '044': 'Access Bank', '058': 'GTBank', '057': 'Zenith Bank' }[bankCode]
+        if (!bankName) throw new ApiError('invalid_input', 'Pick a bank from the list.')
+        db.payoutAccounts[shop] = { bankCode, bankName, accountNumber, accountName, confirmedAt: iso(at), payableFrom: iso(old ? at + PAYOUT_ACCOUNT_HOLD_HOURS * 3_600_000 : at) }
+        if (old) notifyShop(db, shop, 'store_bank_changed', null, iso(at))
+      }),
+
+    listDuePayouts: () =>
+      tx((db) => {
+        const due = db.payouts.filter((p) => p.status === 'due').sort((a, b) => (a.dueAt ?? '').localeCompare(b.dueAt ?? ''))
+        return [...new Set(due.map((p) => p.merchantId))].map((merchantId) => ({
+          merchantId,
+          merchantName: db.merchants.find((m) => m.id === merchantId)!.name,
+          account: db.payoutAccounts[merchantId] ?? null,
+          lines: due.filter((p) => p.merchantId === merchantId).map((p) => payoutView(db, p)),
+        }))
+      }),
+
+    markPayoutsPaid: (ids, reference) =>
+      tx((db) => {
+        const lines = db.payouts.filter((p) => ids.includes(p.id))
+        const merchants = new Set(lines.map((p) => p.merchantId))
+        if (lines.length !== ids.length) throw new ApiError('invalid_input', 'Only payouts that are due can be marked paid.')
+        if (merchants.size > 1) throw new ApiError('invalid_input', 'Mark one seller’s payouts at a time.')
+        const [merchantId] = merchants
+        const account = merchantId ? db.payoutAccounts[merchantId] ?? null : null
+        const problem = markPaidError(lines, account, reference, now())
+        if (problem) throw new ApiError('invalid_input', problem)
+        const at = iso(now())
+        for (const p of lines) Object.assign(p, { status: 'paid', paidAt: at, reference: reference.trim(), paidTo: `${account!.bankName} ${maskAccountNumber(account!.accountNumber)}` })
+        notifyShop(db, merchantId, 'store_payout_sent', null, at)
       }),
 
     listMerchantOrders: () =>

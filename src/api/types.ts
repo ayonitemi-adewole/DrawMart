@@ -9,6 +9,7 @@ import type { HandoverDetails } from '@/domain/listing'
 import type { PinResult } from '@/domain/delivery'
 import type { SavedAddress, SavedAddressInput } from '@/domain/addresses'
 import type { CheckoutDetails } from '@/domain/cart'
+import type { PayoutAccount, PayoutLine } from '@/domain/payouts'
 import type { NotificationPreference, PushPreferences, PushSubscriptionKeys } from '@/domain/push'
 import type { OrderError } from '@/domain/orders'
 import type { PurchaseError } from '@/domain/rules'
@@ -275,6 +276,25 @@ export interface BoostInsightsView {
   daily: DayMetrics[]
 }
 
+/** A payout line with what the seller needs to recognise it. */
+export interface PayoutLineView extends PayoutLine {
+  listingTitle: string
+  productCode: string
+}
+
+export interface BankOption {
+  code: string
+  name: string
+}
+
+/** One seller's due payouts, for an admin to send. */
+export interface DuePayoutGroup {
+  merchantId: string
+  merchantName: string
+  account: PayoutAccount | null
+  lines: PayoutLineView[]
+}
+
 export interface NotificationView {
   id: string
   kind: NotificationKind
@@ -530,6 +550,17 @@ export interface DrawMartApi {
   createProduct(input: NewProductInput): Promise<ListingView>
   /** Orders for this store's items, with delivery details. */
   listMerchantOrders(): Promise<OrderView[]>
+  listPayouts(): Promise<PayoutLineView[]>
+  getPayoutAccount(): Promise<PayoutAccount | null>
+  listBanks(): Promise<BankOption[]>
+  /** Asks the bank whose account this is. Saves nothing. */
+  lookupBankAccount(bankCode: string, accountNumber: string): Promise<{ accountName: string }>
+  /** Looks the account up again on the server and saves it. A change holds payouts for a while. */
+  savePayoutAccount(bankCode: string, accountNumber: string): Promise<void>
+  /** Admin: what's due, per seller. */
+  listDuePayouts(): Promise<DuePayoutGroup[]>
+  /** Admin: after sending the transfer. One seller at a time. */
+  markPayoutsPaid(ids: string[], reference: string): Promise<void>
   /** The store has sent the item. */
   dispatchOrder(orderId: string): Promise<void>
 

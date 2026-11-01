@@ -179,6 +179,13 @@ export const MonitorIcon = (p: IconProps) => (
     <path d="M8 20h8M12 16v4" />
   </Icon>
 );
+export const DownloadIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M12 3v12" />
+    <path d="m7 10 5 5 5-5" />
+    <path d="M5 21h14" />
+  </Icon>
+);
 export const CopyIcon = (p: IconProps) => (
   <Icon {...p}>
     <rect x="9" y="9" width="11" height="11" rx="2" />

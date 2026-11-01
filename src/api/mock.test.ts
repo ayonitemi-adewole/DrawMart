@@ -570,6 +570,100 @@ describe('mock api', () => {
     expect((await api.getListing(d.id)).cautionFee.status).toBe('held')
   })
 
+  describe('payouts', () => {
+    const sign = async (api: ReturnType<typeof make>, who: string) => {
+      await api.auth.signOut()
+      await api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+    }
+
+    it('keeps an account until it’s changed, and holds the change', async () => {
+      let t = Date.now()
+      const api = make(() => t)
+      await sign(api, 'store')
+      expect(await api.getPayoutAccount()).toBeNull()
+      await expect(api.lookupBankAccount('044', '123')).rejects.toMatchObject({ code: 'invalid_input' })
+      await expect(api.lookupBankAccount('044', '0001234567')).rejects.toThrow('couldn’t find')
+      expect(await api.lookupBankAccount('044', '0123456789')).toEqual({ accountName: 'TEST ACCOUNT 6789' })
+
+      await api.savePayoutAccount('044', '0123456789')
+      const first = (await api.getPayoutAccount())!
+      expect(first.accountName).toBe('TEST ACCOUNT 6789')
+      expect(Date.parse(first.payableFrom)).toBeLessThanOrEqual(t)
+      await api.savePayoutAccount('044', '0123456789') // the same one changes nothing
+      expect((await api.listNotifications()).some((n) => n.kind === 'store_bank_changed')).toBe(false)
+
+      await api.savePayoutAccount('058', '9876543210')
+      expect(Date.parse((await api.getPayoutAccount())!.payableFrom)).toBe(t + 48 * 3_600_000)
+      expect((await api.listNotifications()).filter((n) => n.kind === 'store_bank_changed')).toHaveLength(1)
+    })
+
+    it('only lets a seller add one', async () => {
+      const api = make()
+      await sign(api, 'funke')
+      await expect(api.savePayoutAccount('044', '0123456789')).rejects.toMatchObject({ code: 'forbidden' })
+    })
+
+    it('follows a sale from waiting to paid, once, and tells the store', async () => {
+      const api = make()
+      const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+      await sign(api, 'store')
+      const p = await api.createProduct({ title: 'Payout chair', description: '', category: 'Home', priceKobo: k(50_000) })
+      await sign(api, 'admin')
+      await api.approveListing(p.id)
+      await sign(api, 'funke')
+      await api.topUp(k(60_000))
+      const placed = await buyNow(api, p.id, delivery)
+
+      await sign(api, 'store')
+      const line = async () => (await api.listPayouts()).find((l) => l.listingId === p.id)!
+      expect(await line()).toMatchObject({ kind: 'sale', status: 'waiting', amountKobo: placed.priceKobo - placed.feeKobo, productCode: p.productCode, listingTitle: 'Payout chair' })
+      await api.dispatchOrder(placed.id)
+
+      await sign(api, 'rider')
+      await api.takeDelivery(placed.id)
+      await api.confirmDelivery(placed.id, placed.deliveryPin!)
+
+      await sign(api, 'store')
+      expect((await line()).status).toBe('due')
+      const { id } = await line()
+
+      await sign(api, 'admin')
+      const group = () => api.listDuePayouts().then((g) => g.find((x) => x.lines.some((l) => l.id === id)))
+      expect((await group())?.account).toBeNull()
+      await expect(api.markPayoutsPaid([id], 'TRF-1')).rejects.toThrow('bank account')
+
+      await sign(api, 'store')
+      await api.savePayoutAccount('044', '0123456789')
+      await sign(api, 'admin')
+      expect((await group())?.account?.accountName).toBe('TEST ACCOUNT 6789')
+      await expect(api.markPayoutsPaid([id], ' ')).rejects.toThrow('reference')
+      await api.markPayoutsPaid([id], ' TRF-1 ')
+      expect(await group()).toBeUndefined()
+      await expect(api.markPayoutsPaid([id], 'TRF-2')).rejects.toThrow('due')
+
+      await sign(api, 'store')
+      expect(await line()).toMatchObject({ status: 'paid', reference: 'TRF-1', paidTo: 'Access Bank •••• 6789' })
+      expect((await api.listNotifications()).filter((n) => n.kind === 'store_payout_sent')).toHaveLength(1)
+      await sign(api, 'lekki')
+      expect((await api.listPayouts()).some((l) => l.id === id)).toBe(false)
+    })
+
+    it('won’t pay into a changed account until the hold is over', async () => {
+      let t = Date.now()
+      const api = make(() => t)
+      await sign(api, 'store')
+      await api.savePayoutAccount('044', '0123456789')
+      const draw = await api.createListing(newListing())
+      await api.withdrawListing(draw.id)
+      const id = (await api.listPayouts()).find((l) => l.listingId === draw.id)!.id
+      await api.savePayoutAccount('058', '9876543210')
+      await sign(api, 'admin')
+      await expect(api.markPayoutsPaid([id], 'TRF-1')).rejects.toThrow('on hold')
+      t += 48 * 3_600_000 + 1000
+      await api.markPayoutsPaid([id], 'TRF-1')
+    })
+  })
+
   const signInAs = async (api: ReturnType<typeof make>, who: string) => {
     await api.auth.signOut()
     await api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')

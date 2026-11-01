@@ -5,6 +5,8 @@
  * sees). Every write is an RPC to a database function in
  * supabase/migrations, which enforces the same rules as src/domain.
  */
+import type { PayoutAccount, PayoutKind, PayoutStatus } from '@/domain/payouts'
+import type { BankOption, PayoutLineView } from './types'
 import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js'
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
@@ -121,6 +123,33 @@ interface ListingRow {
   result: DrawResultRow | null
   handover: HandoverRow | null
 }
+
+interface PayoutAccountRow {
+  bank_code: string
+  bank_name: string
+  account_number: string
+  account_name: string
+  confirmed_at: string
+  payable_from: string
+}
+
+interface PayoutRow {
+  id: string
+  listing_id: string
+  order_id: string | null
+  kind: PayoutKind
+  amount_kobo: number | string
+  status: PayoutStatus
+  created_at: string
+  due_at: string | null
+  paid_at: string | null
+  reference: string | null
+  paid_to: string | null
+  listing: { title: string; product_code: string }
+}
+
+const PAYOUT_SELECT = 'id, listing_id, order_id, kind, amount_kobo, status, created_at, due_at, paid_at, reference, paid_to, listing:listings(title, product_code)'
+const PAYOUT_ACCOUNT_SELECT = 'bank_code, bank_name, account_number, account_name, confirmed_at, payable_from'
 
 interface ProfileRow {
   id: string
@@ -540,6 +569,24 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     },
   }
 
+  async function bankAccount<T>(body: Record<string, unknown>): Promise<T> {
+    const { data, error } = await client.functions.invoke<T>('bank-account', { body })
+    if (error) {
+      const reply = await (error as { context?: Response }).context?.json?.().catch(() => null)
+      throw new ApiError('invalid_input', reply?.error ?? 'Couldn’t reach the bank check. Try again in a moment.')
+    }
+    return data!
+  }
+
+  const toPayoutAccount = (a: PayoutAccountRow): PayoutAccount => ({
+    bankCode: a.bank_code, bankName: a.bank_name, accountNumber: a.account_number, accountName: a.account_name, confirmedAt: a.confirmed_at, payableFrom: a.payable_from,
+  })
+
+  const toPayoutLine = (p: PayoutRow): PayoutLineView => ({
+    id: p.id, listingId: p.listing_id, orderId: p.order_id, kind: p.kind, amountKobo: num(p.amount_kobo), status: p.status, createdAt: p.created_at, dueAt: p.due_at, paidAt: p.paid_at,
+    reference: p.reference, paidTo: p.paid_to, listingTitle: p.listing.title, productCode: p.listing.product_code,
+  })
+
   async function checkDeposit(txRef: string): Promise<DepositStatus> {
     const { data, error } = await client.functions.invoke<{ status: DepositStatus }>('confirm-deposit', { body: { txRef } })
     if (error) {
@@ -649,8 +696,8 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     removeFromCart: (listingId) => rpc('remove_from_cart', { p_listing_id: listingId }),
 
     getPushPreferences: async () => {
-      const row = unwrap(await client.from('push_preferences').select('wins, draw_results, orders, messages, saved_items, draw_reveal, store_orders, store_listings, store_draws, store_pickups').maybeSingle<{ wins: boolean; draw_results: boolean; orders: boolean; messages: boolean; saved_items: boolean; draw_reveal: boolean; store_orders: boolean; store_listings: boolean; store_draws: boolean; store_pickups: boolean }>())
-      return row ? { wins: row.wins, drawResults: row.draw_results, orders: row.orders, messages: row.messages, savedItems: row.saved_items, drawReveal: row.draw_reveal, storeOrders: row.store_orders, storeListings: row.store_listings, storeDraws: row.store_draws, storePickups: row.store_pickups } : DEFAULT_PUSH_PREFERENCES
+      const row = unwrap(await client.from('push_preferences').select('wins, draw_results, orders, messages, saved_items, draw_reveal, store_orders, store_listings, store_draws, store_pickups, store_payouts').maybeSingle<{ wins: boolean; draw_results: boolean; orders: boolean; messages: boolean; saved_items: boolean; draw_reveal: boolean; store_orders: boolean; store_listings: boolean; store_draws: boolean; store_pickups: boolean; store_payouts: boolean }>())
+      return row ? { wins: row.wins, drawResults: row.draw_results, orders: row.orders, messages: row.messages, savedItems: row.saved_items, drawReveal: row.draw_reveal, storeOrders: row.store_orders, storeListings: row.store_listings, storeDraws: row.store_draws, storePickups: row.store_pickups, storePayouts: row.store_payouts } : DEFAULT_PUSH_PREFERENCES
     },
     setPushPreference: (category, enabled) => rpc('set_push_preference', { p_category: category, p_enabled: enabled }),
     savePushSubscription: ({ endpoint, p256dh, auth }) => rpc('save_push_subscription', { p_endpoint: endpoint, p_p256dh: p256dh, p_auth: auth }),
@@ -835,8 +882,8 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
           .returns<{ id: string; kind: NotificationView['kind']; listing_id: string; created_at: string; read_at: string | null; celebrated_at: string | null; listing: { title: string; images: string[]; category: Category; draw_at: string | null; result: { winning_number: number } | null } }[]>(),
       )
       return rows.map((n) => ({
-        id: n.id, kind: n.kind, listingId: n.listing_id, listingTitle: n.listing.title, listingImage: n.listing.images?.[0] ?? null, listingCategory: n.listing.category, drawAt: n.listing.draw_at,
-        winningNumber: n.listing.result?.winning_number ?? null, createdAt: n.created_at, read: n.read_at !== null, celebrated: n.celebrated_at !== null,
+        id: n.id, kind: n.kind, listingId: n.listing_id ?? '', listingTitle: n.listing?.title ?? '', listingImage: n.listing?.images?.[0] ?? null, listingCategory: n.listing?.category, drawAt: n.listing?.draw_at,
+        winningNumber: n.listing?.result?.winning_number ?? null, createdAt: n.created_at, read: n.read_at !== null, celebrated: n.celebrated_at !== null,
       }))
     },
 
@@ -920,6 +967,36 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     },
 
     withdrawListing: (id) => rpc('withdraw_listing', { p_listing_id: id }),
+
+    listPayouts: async () => {
+      const id = await myMerchantId()
+      return unwrap(await client.from('payouts').select(PAYOUT_SELECT).eq('merchant_id', id).order('created_at', { ascending: false }).returns<PayoutRow[]>()).map(toPayoutLine)
+    },
+
+    getPayoutAccount: async () => {
+      const id = await myMerchantId()
+      const row = unwrap(await client.from('payout_accounts').select(PAYOUT_ACCOUNT_SELECT).eq('merchant_id', id).maybeSingle<PayoutAccountRow>())
+      return row ? toPayoutAccount(row) : null
+    },
+
+    listBanks: async () => (await bankAccount<{ banks: BankOption[] }>({ action: 'banks' })).banks,
+    lookupBankAccount: (bankCode, accountNumber) => bankAccount<{ accountName: string }>({ action: 'lookup', bankCode, accountNumber }),
+    savePayoutAccount: async (bankCode, accountNumber) => {
+      await bankAccount({ action: 'save', bankCode, accountNumber })
+    },
+
+    listDuePayouts: async () => {
+      const rows = unwrap(await client.from('payouts').select(`merchant_id, merchant:merchants(name), ${PAYOUT_SELECT}`).eq('status', 'due').order('due_at').returns<(PayoutRow & { merchant_id: string; merchant: { name: string } })[]>())
+      const ids = [...new Set(rows.map((r) => r.merchant_id))]
+      const accounts = ids.length ? unwrap(await client.from('payout_accounts').select(`merchant_id, ${PAYOUT_ACCOUNT_SELECT}`).in('merchant_id', ids).returns<(PayoutAccountRow & { merchant_id: string })[]>()) : []
+      return ids.map((merchantId) => {
+        const mine = rows.filter((r) => r.merchant_id === merchantId)
+        const account = accounts.find((a) => a.merchant_id === merchantId)
+        return { merchantId, merchantName: mine[0].merchant.name, account: account ? toPayoutAccount(account) : null, lines: mine.map(toPayoutLine) }
+      })
+    },
+
+    markPayoutsPaid: (ids, reference) => rpc('mark_payouts_paid', { p_ids: ids, p_reference: reference }),
 
     resubmitListing: async (id, input) => {
       const merchantId = await myMerchantId()
