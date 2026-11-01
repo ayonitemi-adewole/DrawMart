@@ -954,7 +954,7 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
 
     approveSeller: (id) => rpc('approve_seller', { p_application_id: id }),
     rejectSeller: (id, note) => rpc('reject_seller', { p_application_id: id, p_note: note }),
-    rejectListing: (id) => rpc('reject_listing', { p_listing_id: id }),
+    rejectListing: (id, reason, note) => rpc('reject_listing', { p_listing_id: id, p_reason: reason, p_note: note }),
 
     // Demo (admins only, test mode only; enforced in the database)
     demoSellOut: (id) => rpc('demo_sell_out', { p_listing_id: id }),
