@@ -17,6 +17,7 @@ import type { BoostPackage, BoostWindow } from '@/domain/boosts'
 import type { DayMetrics, ListingMetricsInput, MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput, SellerApplicationStatus } from '@/domain/sellers'
 import type {
+  CancelReason,
   Category,
   RejectionReason,
   DrawResult,
@@ -52,6 +53,8 @@ export interface DrawResultView extends DrawResult {
 }
 
 export interface ListingView extends Omit<Listing, 'handover'> {
+  /** Only for its own seller and admins: a new price waiting for review. */
+  pendingPriceKobo?: Kobo | null
   /** Pickup/inspection booking. Only sent to the listing's store and admins; null for buyers. */
   handover: Handover | null
   merchant: Merchant
@@ -355,10 +358,25 @@ export interface CartLine {
   wanted: number
 }
 
+export interface CancelRateView {
+  merchantId: string
+  merchantName: string
+  orders: number
+  cancelled: number
+}
+
+export interface PriceReviewView {
+  listing: ListingView
+  newPriceKobo: Kobo
+  requestedAt: string
+}
+
 export interface CheckoutInput extends CheckoutDetails {
   listingIds: string[]
   /** By listing id. A listing not in here is one. */
   quantities?: Record<string, number>
+  /** The total the buyer saw: it's refused if a price has changed since. */
+  expectedTotalKobo?: Kobo
 }
 
 export interface ListingFilter {
@@ -551,6 +569,16 @@ export interface DrawMartApi {
   /** Queues a regular product for admin review. */
   /** Changes a listing that's still in review, up to its pickup or inspection day. */
   updateListing(id: string, input: NewListingInput | NewProductInput): Promise<ListingView>
+  /** Hidden from browse and search, but kept, with its insights and chats. Products only. */
+  pauseListing(id: string): Promise<void>
+  resumeListing(id: string): Promise<void>
+  /** Adds (or, if negative, removes) stock. Products only. */
+  changeStock(id: string, change: number): Promise<void>
+  /** Applies now, or waits for an admin if it's a big change (true). It keeps selling at the old price until then. */
+  changePrice(id: string, priceKobo: Kobo): Promise<boolean>
+  listPriceReviews(): Promise<PriceReviewView[]>
+  /** `newPriceKobo` is the price the admin saw; it fails if the seller has changed it since. */
+  reviewPriceChange(id: string, newPriceKobo: Kobo, approve: boolean): Promise<void>
   /** Takes back a listing that's still in review, up to its pickup or inspection day. */
   withdrawListing(id: string): Promise<void>
   /** Takes one of this store's rejected listings back to review with its fixed details. */
@@ -571,6 +599,10 @@ export interface DrawMartApi {
   markPayoutsPaid(ids: string[], reference: string): Promise<void>
   /** The store has sent the item. */
   dispatchOrder(orderId: string): Promise<void>
+  /** Before it's ready for a rider. The buyer is refunded straight away, the way they paid. */
+  cancelOrder(orderId: string, reason: CancelReason, note: string): Promise<void>
+  /** Each seller's orders and cancellations in the last 30 days. Admins only. */
+  listCancelRates(): Promise<CancelRateView[]>
 
   // Admin
   listPendingListings(): Promise<ListingView[]>

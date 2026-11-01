@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
-import type { Kobo, RejectionReason } from '@/domain/types'
+import type { CancelReason, Kobo, RejectionReason } from '@/domain/types'
 import { api } from './index'
 import type { MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput } from '@/domain/sellers'
@@ -20,6 +20,8 @@ export const keys = {
   wallet: ['wallet'] as const,
   merchant: ['merchant'] as const,
   merchantListings: ['merchant-listings'] as const,
+  priceReviews: ['price-reviews'] as const,
+  cancelRates: ['cancel-rates'] as const,
   pending: ['pending'] as const,
   myOrders: ['my-orders'] as const,
   merchantOrders: ['merchant-orders'] as const,
@@ -90,6 +92,8 @@ export const useMyOrders = () => useQuery({ queryKey: keys.myOrders, queryFn: ()
 export const useMerchantOrders = () => useQuery({ queryKey: keys.merchantOrders, queryFn: () => api.listMerchantOrders(), enabled: useHasShop() })
 export const useSellerApplications = () =>
   useQuery({ queryKey: keys.sellerApplications, queryFn: () => api.listSellerApplications(), enabled: useIs('admin') })
+export const useCancelRates = () => useQuery({ queryKey: keys.cancelRates, queryFn: () => api.listCancelRates(), enabled: useIs('admin') })
+export const usePriceReviews = () => useQuery({ queryKey: keys.priceReviews, queryFn: () => api.listPriceReviews(), enabled: useIs('admin') })
 export const usePendingListings = () => useQuery({ queryKey: keys.pending, queryFn: () => api.listPendingListings(), enabled: useIs('admin') })
 
 // Messages. No push channel yet, so open chats poll every few seconds and the inbox less often.
@@ -362,6 +366,11 @@ export function useDeliveryActions() {
   }
 }
 
+export function useCancelOrder() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: ({ id, reason, note }: { id: string; reason: CancelReason; note: string }) => api.cancelOrder(id, reason, note), onSettled: invalidate })
+}
+
 export function useDispatchOrder() {
   const invalidate = useInvalidateAll()
   return useMutation({ mutationFn: (orderId: string) => api.dispatchOrder(orderId), onSettled: invalidate })
@@ -409,6 +418,26 @@ export function useSavePayoutAccount() {
 export function useMarkPayoutsPaid() {
   const invalidate = useInvalidateAll()
   return useMutation({ mutationFn: ({ ids, reference }: { ids: string[]; reference: string }) => api.markPayoutsPaid(ids, reference), onSettled: invalidate })
+}
+
+export function usePauseProduct() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: ({ id, paused }: { id: string; paused: boolean }) => (paused ? api.pauseListing(id) : api.resumeListing(id)), onSettled: invalidate })
+}
+
+export function useChangeStock() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: ({ id, change }: { id: string; change: number }) => api.changeStock(id, change), onSettled: invalidate })
+}
+
+export function useChangePrice() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: ({ id, priceKobo }: { id: string; priceKobo: Kobo }) => api.changePrice(id, priceKobo), onSettled: invalidate })
+}
+
+export function useReviewPriceChange() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: ({ id, newPriceKobo, approve }: { id: string; newPriceKobo: Kobo; approve: boolean }) => api.reviewPriceChange(id, newPriceKobo, approve), onSettled: invalidate })
 }
 
 export function useResubmitListing() {

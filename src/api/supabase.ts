@@ -6,7 +6,7 @@
  * supabase/migrations, which enforces the same rules as src/domain.
  */
 import type { PayoutAccount, PayoutKind, PayoutStatus } from '@/domain/payouts'
-import type { BankOption, PayoutLineView } from './types'
+import type { BankOption, CancelRateView, PayoutLineView } from './types'
 import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js'
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
@@ -18,7 +18,7 @@ import { WINNER_CONSENT_VERSION } from '@/domain/winnerStories'
 import { DEFAULT_PUSH_PREFERENCES } from '@/domain/push'
 import { ORDER_ERROR_TEXT, clampQuantity } from '@/domain/orders'
 import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication } from '@/domain/sellers'
-import type { Category, Fulfilment, PickupPoint, FeeMode, Handover, LedgerEntry, LedgerKind, ListingKind, ListingStatus, Merchant, OrderStatus, RejectionReason, UnsoldPolicy, User } from '@/domain/types'
+import type { CancelReason, Category, Fulfilment, PickupPoint, FeeMode, Handover, LedgerEntry, LedgerKind, ListingKind, ListingStatus, Merchant, OrderStatus, RejectionReason, UnsoldPolicy, User } from '@/domain/types'
 import { DEMO_ACCOUNTS } from './demoAccounts'
 import {
   type AccountRole,
@@ -113,6 +113,7 @@ interface ListingRow {
   closes_at: string
   pickup_batch_id: string | null
   stock: number
+  reviewed_price_kobo: number | null
   rejection_reason: RejectionReason | null
   rejection_note: string | null
   revision: number
@@ -199,6 +200,9 @@ interface OrderRow {
   merchant_id: string
   price_kobo: number
   quantity: number
+  cancelled_at: string | null
+  cancel_reason: CancelReason | null
+  cancel_note: string | null
   fee_kobo: number
   delivery_address: string | null
   delivery_phone: string
@@ -334,6 +338,7 @@ function toListingView(l: ListingRow, me: string | null, mine: Mine): ListingVie
     ticketCount: l.ticket_count,
     ticketsSold: l.tickets_sold,
     stock: l.stock,
+    reviewedPriceKobo: l.reviewed_price_kobo === null ? null : num(l.reviewed_price_kobo),
     feeMode: l.fee_mode,
     feeBps: l.fee_bps,
     unsoldPolicy: l.unsold_policy,
@@ -379,6 +384,9 @@ function toOrderView(o: OrderRow): OrderView {
     priceKobo: num(o.price_kobo),
     feeKobo: num(o.fee_kobo),
     quantity: o.quantity,
+    cancelledAt: o.cancelled_at,
+    cancelReason: o.cancel_reason,
+    cancelNote: o.cancel_note,
     delivery: { address: o.delivery_address ?? '', location: toPoint(o.delivery_lat, o.delivery_lng), contactPhone: o.delivery_phone },
     fulfilment: o.fulfilment,
     pickupPoint: o.pickup_point ? toPickupPoint(o.pickup_point) : null,
@@ -743,6 +751,7 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
         p: {
           listingIds: input.listingIds,
           quantities: input.quantities ?? {},
+          expectedTotalKobo: input.expectedTotalKobo ?? null,
           fulfilment: input.fulfilment,
           address: pickup ? null : input.delivery.address,
           phone: input.delivery.contactPhone,
@@ -940,7 +949,10 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     listMerchantListings: async () => {
       const id = await myMerchantId()
       const rows = unwrap(await client.from('listings').select(LISTING_SELECT).eq('merchant_id', id).order('created_at', { ascending: false }).returns<ListingRow[]>())
-      return views(rows)
+      // Row security only returns this seller's.
+      const reviews = unwrap(await client.from('price_reviews').select('listing_id, new_price_kobo').returns<{ listing_id: string; new_price_kobo: number }[]>())
+      const pending = new Map(reviews.map((r) => [r.listing_id, num(r.new_price_kobo)]))
+      return (await views(rows)).map((l) => ({ ...l, pendingPriceKobo: pending.get(l.id) ?? null }))
     },
 
     createListing: async (input: NewListingInput) => {
@@ -975,6 +987,20 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     },
 
     withdrawListing: (id) => rpc('withdraw_listing', { p_listing_id: id }),
+    pauseListing: (id) => rpc('pause_listing', { p_listing_id: id }),
+    resumeListing: (id) => rpc('resume_listing', { p_listing_id: id }),
+    changeStock: (id, change) => rpc('change_stock', { p_listing_id: id, p_change: change }),
+    changePrice: (id, priceKobo) => rpc<boolean>('change_price', { p_listing_id: id, p_price_kobo: priceKobo }),
+    listPriceReviews: async () => {
+      const rows = unwrap(await client.from('price_reviews').select('listing_id, new_price_kobo, requested_at').order('requested_at').returns<{ listing_id: string; new_price_kobo: number; requested_at: string }[]>())
+      if (!rows.length) return []
+      const listings = await views(unwrap(await client.from('listings').select(LISTING_SELECT).in('id', rows.map((r) => r.listing_id)).returns<ListingRow[]>()))
+      return rows.flatMap((r) => {
+        const listing = listings.find((l) => l.id === r.listing_id)
+        return listing ? [{ listing, newPriceKobo: num(r.new_price_kobo), requestedAt: r.requested_at }] : []
+      })
+    },
+    reviewPriceChange: (id, newPriceKobo, approve) => rpc('review_price_change', { p_listing_id: id, p_new_price: newPriceKobo, p_approve: approve }),
 
     listPayouts: async () => {
       const id = await myMerchantId()
@@ -1025,6 +1051,8 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       return unwrap(await client.from('orders').select(ORDER_SELECT).eq('merchant_id', id).order('created_at', { ascending: false }).returns<OrderRow[]>()).map(toOrderView)
     },
 
+    cancelOrder: (orderId, reason, note) => rpc('cancel_order', { p_order_id: orderId, p_reason: reason, p_note: note }),
+    listCancelRates: () => rpc<CancelRateView[]>('merchant_cancel_rates'),
     dispatchOrder: (orderId) => rpc('dispatch_order', { p_order_id: orderId }),
 
     // Admin

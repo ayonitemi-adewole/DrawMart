@@ -743,6 +743,124 @@ describe('regular products and orders', () => {
     await expectFail(buy(1), 'not_for_sale')
   })
 
+  it('lets a seller pause, restock and reprice a product, and nobody else', async () => {
+    const seller = await newUser('controls-store@example.com', { merchantId: '11111111-1111-4111-8111-000000000005' })
+    const shopper = await newUser('controls-shopper@example.com')
+    await asUser(shopper, `select public.top_up(5000000)`)
+    const [{ id }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [{ title: 'Lamp', description: '', category: 'Home', priceKobo: 1_000_000, stock: 2 }])
+    await expectFail(asUser(seller, `select public.pause_listing($1)`, [id]), 'invalid_input')
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    const read = async () => (await admin<{ status: string; stock: number; price_kobo: string; fee_bps: number }>(`select status, stock, price_kobo, fee_bps from public.listings where id = $1`, [id]))[0]
+    const buy = (expected?: number) => asUser(shopper, `select public.checkout($1)`, [{ listingIds: [id], expectedTotalKobo: expected, fulfilment: 'delivery', address: delivery[0], phone: delivery[1], lat: delivery[2], lng: delivery[3] }])
+    for (const call of ['pause_listing($1)', 'resume_listing($1)', 'change_stock($1, 1)', 'change_price($1, 1000000)']) await expectFail(asUser(store, `select public.${call}`, [id]), 'not_found')
+    await expectFail(asUser(shopper, `select public.pause_listing($1)`, [id]), 'forbidden')
+
+    // Paused: not for sale, but its page, orders and chats still work.
+    await asUser(shopper, `select public.send_first_message($1, 'Is this still available?')`, [id])
+    await asUser(seller, `select public.pause_listing($1)`, [id])
+    await expectFail(buy(), 'not_for_sale')
+    expect(await asUser(shopper, `select status from public.listings where id = $1`, [id])).toEqual([{ status: 'paused' }])
+    const [{ conv }] = await asUser<{ conv: string }>(shopper, `select id conv from public.conversations where listing_id = $1`, [id])
+    await asUser(seller, `select public.send_message($1, 'Back next week')`, [conv])
+    await asUser(seller, `select public.resume_listing($1)`, [id])
+
+    // Small changes apply now, measured from the reviewed price.
+    expect((await asUser<{ r: boolean }>(seller, `select public.change_price($1, 1200000) r`, [id]))[0].r).toBe(false)
+    expect(Number((await read()).price_kobo)).toBe(1_200_000)
+    expect((await asUser<{ r: boolean }>(seller, `select public.change_price($1, 1250000) r`, [id]))[0].r).toBe(true)
+    expect(Number((await read()).price_kobo)).toBe(1_200_000)
+
+    // Buyers can't see a price that hasn't been agreed; the seller and admins can.
+    expect(await asUser(shopper, `select 1 from public.price_reviews where listing_id = $1`, [id])).toEqual([])
+    expect(await asUser(store, `select 1 from public.price_reviews where listing_id = $1`, [id])).toEqual([])
+    expect(await asUser(seller, `select 1 from public.price_reviews where listing_id = $1`, [id])).toHaveLength(1)
+    await expectFail(asUser(seller, `select public.review_price_change($1, 1250000, true)`, [id]), 'forbidden')
+    await expectFail(asUser(staff, `select public.review_price_change($1, 1300000, true)`, [id]), 'invalid_input')
+    await asUser(staff, `select public.review_price_change($1, 1250000, true)`, [id])
+    expect(await read()).toMatchObject({ fee_bps: platformFeeBps(1_250_000) })
+    expect(Number((await read()).price_kobo)).toBe(1_250_000)
+    await expectFail(asUser(staff, `select public.review_price_change($1, 1250000, true)`, [id]), 'invalid_input')
+    await asUser(seller, `select public.change_price($1, 2000000)`, [id])
+    await asUser(staff, `select public.review_price_change($1, 2000000, false)`, [id])
+    expect(Number((await read()).price_kobo)).toBe(1_250_000)
+    const kinds = (await asUser<{ kind: string }>(seller, `select kind from public.notifications where listing_id = $1`, [id])).map((n) => n.kind)
+    expect(kinds).toEqual(expect.arrayContaining(['store_price_approved', 'store_price_rejected']))
+
+    // A price they haven't seen is never charged.
+    const e = await expectFail(buy(1_000_000), 'invalid_input')
+    expect(e.detail).toContain('price has just changed')
+    await buy(1_250_000)
+
+    // Stock follows sales, and a sale at the same moment isn't overwritten: it adds or removes.
+    await expectFail(asUser(seller, `select public.change_stock($1, -2)`, [id]), 'invalid_input')
+    await expectFail(asUser(seller, `select public.change_stock($1, 0)`, [id]), 'invalid_input')
+    await expectFail(asUser(seller, `select public.change_stock($1, 10000)`, [id]), 'invalid_input')
+    await asUser(seller, `select public.change_stock($1, -1)`, [id])
+    expect(await read()).toMatchObject({ stock: 0, status: 'sold' })
+    await asUser(seller, `select public.change_stock($1, 3)`, [id])
+    expect(await read()).toMatchObject({ stock: 3, status: 'for_sale' })
+    await asUser(seller, `select public.pause_listing($1)`, [id])
+    await asUser(seller, `select public.change_stock($1, -3)`, [id])
+    expect(await read()).toMatchObject({ stock: 0, status: 'paused' })
+    await asUser(seller, `select public.resume_listing($1)`, [id])
+    expect((await read()).status).toBe('sold')
+
+    // Its insights are kept through all of this.
+    const metrics = (await asUser<{ m: { listings: { listingId: string; units: number }[] } }>(seller, `select public.merchant_metrics(7) m`))[0].m
+    expect(metrics.listings.find((l) => l.listingId === id)?.units).toBe(1)
+  })
+
+  it('refunds a cancelled order the way it was paid, and tells the buyer why', async () => {
+    const seller = await newUser('cancel-store@example.com', { merchantId: '11111111-1111-4111-8111-000000000005' })
+    const rival = await newUser('cancel-rival@example.com', { merchantId: IKEJA })
+    const shopper = await newUser('cancel-shopper@example.com')
+    await asUser(shopper, `select public.top_up(5000000)`)
+    await admin(`insert into public.ledger_entries (user_id, kind, credit_kobo, memo) values ($1, 'store_credit', 300000, 'credit')`, [shopper])
+    const [{ id }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [{ title: 'Kettle', description: '', category: 'Home', priceKobo: 500_000, stock: 4 }])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    const start = await balance(shopper)
+    const read = async () => (await admin<{ stock: number; status: string }>(`select stock, status from public.listings where id = $1`, [id]))[0]
+    const buy = async (quantity = 1) => (await asUser<{ ids: string[] }>(shopper, `select public.checkout($1) ids`, [{ listingIds: [id], quantities: { [id]: quantity }, fulfilment: 'delivery', address: delivery[0], phone: delivery[1], lat: delivery[2], lng: delivery[3] }]))[0].ids[0]
+
+    const first = await buy(2) // ₦3,000 of credit first, then cash
+    expect(await read()).toEqual({ stock: 2, status: 'for_sale' })
+    expect(await admin(`select cash_kobo, credit_kobo from private.order_payments where order_id = $1`, [first])).toEqual([{ cash_kobo: 700000, credit_kobo: 300000 }])
+    // Sellers can't see how a buyer paid.
+    await expect(asUser(seller, `select * from private.order_payments`)).rejects.toThrow()
+
+    await expectFail(asUser(rival, `select public.cancel_order($1, 'damaged')`, [first]), 'not_found')
+    await expectFail(asUser(shopper, `select public.cancel_order($1, 'damaged')`, [first]), 'not_found')
+    await expectFail(asUser(seller, `select public.cancel_order($1, 'nonsense')`, [first]), 'invalid_input')
+    await expectFail(asUser(seller, `select public.cancel_order($1, 'other', 'no')`, [first]), 'invalid_input')
+    expect(await admin(`select 1 from public.payouts where order_id = $1`, [first])).toHaveLength(1)
+
+    await asUser(seller, `select public.cancel_order($1, 'cant_send', 'Shop closed this week')`, [first])
+    expect(await balance(shopper)).toEqual(start)
+    expect(await read()).toEqual({ stock: 4, status: 'for_sale' })
+    expect(await admin(`select 1 from public.payouts where order_id = $1`, [first])).toEqual([])
+    expect(await admin(`select 1 from private.order_pins where order_id = $1`, [first])).toEqual([])
+    expect(await asUser(shopper, `select status, cancel_reason, cancel_note from public.orders where id = $1`, [first])).toEqual([{ status: 'cancelled', cancel_reason: 'cant_send', cancel_note: 'Shop closed this week' }])
+    expect(await asUser(shopper, `select kind from public.notifications where listing_id = $1 and kind = 'order_cancelled'`, [id])).toHaveLength(1)
+    await expectFail(asUser(seller, `select public.cancel_order($1, 'cant_send')`, [first]), 'invalid_input') // only once
+    // A refund doesn't touch the weekly ticket limit, and a cancelled order isn't a sale.
+    expect(await admin(`select kind from public.ledger_entries where user_id = $1 and memo like 'Refund%'`, [shopper])).toEqual([{ kind: 'order_refund' }])
+    expect((await asUser<{ m: { listings: { listingId: string; units: number }[] } }>(seller, `select public.merchant_metrics(7) m`))[0].m.listings.find((l) => l.listingId === id)?.units).toBe(0)
+
+    const second = await buy()
+    await asUser(seller, `select public.dispatch_order($1)`, [second])
+    await expectFail(asUser(seller, `select public.cancel_order($1, 'damaged')`, [second]), 'invalid_input') // already ready for a rider
+    const third = await buy()
+    await asUser(seller, `select public.cancel_order($1, 'damaged')`, [third])
+    expect((await read()).stock).toBe(2) // it doesn't go back
+    const fourth = await buy()
+    await asUser(seller, `select public.cancel_order($1, 'out_of_stock')`, [fourth])
+    expect(await read()).toEqual({ stock: 0, status: 'sold' })
+
+    await expectFail(asUser(seller, `select public.merchant_cancel_rates()`), 'forbidden')
+    const [{ r }] = await asUser<{ r: { merchantId: string; orders: number; cancelled: number }[] }>(staff, `select public.merchant_cancel_rates() r`)
+    expect(r.find((x) => x.merchantId === '11111111-1111-4111-8111-000000000005')?.cancelled).toBeGreaterThanOrEqual(3)
+  })
+
   it('sells once, paying with credit first, and records the order', async () => {
     await admin(`insert into public.ledger_entries (user_id, kind, credit_kobo, memo) values ($1, 'store_credit', 300000, 'credit')`, [buyer])
     await asUser(buyer, `select public.top_up(1500000)`)

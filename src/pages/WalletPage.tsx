@@ -548,6 +548,7 @@ const KIND: Record<LedgerKind, { icon: IconComponent; tone: string }> = {
   refund: { icon: RefreshIcon, tone: "bg-sky-soft text-sky" },
   store_credit: { icon: GiftIcon, tone: "bg-ticket-soft text-ticket-ink" },
   order_payment: { icon: StoreIcon, tone: "bg-sunken text-muted" },
+  order_refund: { icon: StoreIcon, tone: "bg-brand-soft text-brand-ink" },
   adjustment: { icon: ArrowUpIcon, tone: "bg-violet-soft text-violet" },
 };
 

@@ -18,6 +18,12 @@ function describe(n: NotificationView, store: boolean): { icon: IconComponent; t
       return { icon: LockIcon, title: 'Bank account changed', body: 'If this wasn’t you, contact DrawMart now. Payouts are on hold for now.', to: store ? '/store/payouts' : '/sell?tab=payouts' }
     case 'store_new_order':
       return { icon: TruckIcon, title: `New order: ${n.listingTitle}`, body: 'Get it ready, then mark it ready for a rider.', to: `${home}?tab=orders` }
+    case 'order_cancelled':
+      return { icon: XIcon, title: `Order cancelled: ${n.listingTitle}`, body: 'You’ve been refunded. See why.', to: '/tickets?view=orders' }
+    case 'store_price_approved':
+      return { icon: CheckIcon, title: `Price approved: ${n.listingTitle}`, body: 'The new price is live.', to: home }
+    case 'store_price_rejected':
+      return { icon: XIcon, title: `Price not approved: ${n.listingTitle}`, body: 'It stays on sale at its current price.', to: home }
     case 'store_listing_approved':
       return { icon: CheckIcon, title: `Approved: ${n.listingTitle}`, body: 'It’s now live for buyers.', to: home }
     case 'store_listing_rejected':

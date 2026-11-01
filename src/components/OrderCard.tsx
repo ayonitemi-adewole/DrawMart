@@ -1,14 +1,18 @@
+import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router'
-import { useDispatchOrder } from '@/api/hooks'
+import { useCancelOrder, useDispatchOrder } from '@/api/hooks'
 import type { OrderView } from '@/api/types'
 import { directionsUrl } from '@/domain/location'
+import { CANCEL_NOTE_MAX, CANCEL_REASONS, CANCEL_REASON_FOR_BUYER, CANCEL_REASON_TEXT, CANCEL_STOCK_TEXT, canCancelOrder, cancelError } from '@/domain/orderCancel'
+import type { CancelReason } from '@/domain/types'
 import { formatNaira } from '@/domain/money'
 import { dateTime } from '@/lib/time'
 import { ProductId } from './ProductId'
 import { DeliveryPin } from './DeliveryPin'
-import { MapPinIcon, PhoneIcon, StoreIcon, TruckIcon } from './icons'
+import { MapPinIcon, PhoneIcon, StoreIcon, TruckIcon, XIcon } from './icons'
+import { Sheet } from './Sheet'
 import { useToast } from './toast'
-import { Badge, Button, Card, ProductImage, errorMessage, type Tone } from './ui'
+import { Badge, Button, Card, Field, Notice, ProductImage, cx, errorMessage, inputCls, type Tone } from './ui'
 
 function statusOf(o: OrderView): { label: string; tone: Tone } {
   const pickup = o.fulfilment === 'pickup'
@@ -19,6 +23,8 @@ function statusOf(o: OrderView): { label: string; tone: Tone } {
       return { label: pickup ? 'On its way to the pickup location' : 'On the way', tone: 'sky' }
     case 'delivered':
       return { label: pickup ? 'Collected' : 'Delivered', tone: 'brand' }
+    case 'cancelled':
+      return { label: 'Cancelled', tone: 'hot' }
   }
 }
 
@@ -34,6 +40,8 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
   const pickup = o.fulfilment === 'pickup'
   const sender = audience !== 'buyer'
   const onError = (e: unknown) => toast(errorMessage(e), 'error')
+  const cancelled = o.status === 'cancelled'
+  const [cancelling, setCancelling] = useState(false)
 
   return (
     <Card className="flex min-w-0 animate-fade-up flex-col gap-4 p-4 sm:p-5">
@@ -62,7 +70,14 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
         </div>
       </div>
 
-      <div className="flex flex-col gap-1.5 rounded-2xl bg-ground p-3 text-sm">
+      {cancelled && o.cancelReason ? (
+        <Notice tone="neutral" icon={XIcon} title={audience === 'buyer' ? `Refunded ${formatNaira(o.priceKobo)} to your wallet` : `Buyer refunded ${formatNaira(o.priceKobo)}`}>
+          {audience === 'buyer' ? CANCEL_REASON_FOR_BUYER[o.cancelReason] : CANCEL_REASON_TEXT[o.cancelReason]}
+          {o.cancelNote ? ` “${o.cancelNote}”` : ''}
+        </Notice>
+      ) : null}
+
+      {cancelled ? null : <div className="flex flex-col gap-1.5 rounded-2xl bg-ground p-3 text-sm">
         {pickup && o.pickupPoint ? (
           <>
             <span className="flex items-start gap-2 text-muted">
@@ -95,7 +110,7 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
             Your payout {formatNaira(o.priceKobo - o.feeKobo)} after the {formatNaira(o.feeKobo)} platform fee, once it’s delivered.
           </span>
         ) : null}
-      </div>
+      </div>}
 
       {audience === 'buyer' && o.deliveryPin ? <DeliveryPin pin={o.deliveryPin} pickup={pickup} /> : null}
       {sender && o.status === 'paid' ? (
@@ -103,6 +118,12 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
           <TruckIcon size={16} /> {pickup ? 'Ready to go to the pickup location' : 'Ready for a rider'}
         </Button>
       ) : null}
+      {audience === 'store' && canCancelOrder(o) ? (
+        <Button variant="ghost" onClick={() => setCancelling(true)}>
+          <XIcon size={16} /> I can’t fulfil this
+        </Button>
+      ) : null}
+      {cancelling ? <CancelSheet order={o} onClose={() => setCancelling(false)} /> : null}
       {o.status === 'delivered' && o.deliveredAt ? <span className="text-xs text-subtle">{pickup ? 'Collected' : 'Delivered'} {dateTime(o.deliveredAt)}</span> : null}
       {audience === 'buyer' && o.isPrize && o.status === 'delivered' ? (
         <Link to={`/draws/${o.listingId}`} className="flex min-h-11 w-fit items-center text-sm">
@@ -110,5 +131,67 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
         </Link>
       ) : null}
     </Card>
+  )
+}
+
+/** This card moves to another tab as soon as the list refreshes, so wait on the promise. */
+function CancelSheet({ order: o, onClose }: { order: OrderView; onClose: () => void }) {
+  const cancel = useCancelOrder()
+  const toast = useToast()
+  const [reason, setReason] = useState<CancelReason | null>(null)
+  const [note, setNote] = useState('')
+  const [showError, setShowError] = useState(false)
+  const problem = cancelError({ reason, note })
+
+  function onSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (problem || !reason) {
+      setShowError(true)
+      return
+    }
+    cancel
+      .mutateAsync({ id: o.id, reason, note })
+      .then(() => {
+        toast('Order cancelled. The buyer has been refunded and told why.', 'info')
+        onClose()
+      })
+      .catch((err) => toast(errorMessage(err), 'error'))
+  }
+
+  return (
+    <Sheet open onClose={() => !cancel.isPending && onClose()} title="Cancel order">
+      <h2 className="pr-10 font-display text-2xl font-extrabold">Cancel this order?</h2>
+      <p className="text-sm text-muted">
+        {o.listingTitle}{o.quantity > 1 ? ` × ${o.quantity}` : ''}. The buyer gets {formatNaira(o.priceKobo)} back straight away and sees your reason. This can’t be undone, and cancelling often affects your standing.
+      </p>
+      <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
+        <fieldset className="flex flex-col gap-1">
+          <legend className="mb-1.5 text-sm font-bold">Why?</legend>
+          {CANCEL_REASONS.map((r) => (
+            <label key={r} className={cx('flex min-h-11 cursor-pointer items-center gap-3 rounded-xl border px-3 text-sm transition', reason === r ? 'border-brand bg-brand-soft' : 'border-line hover:border-line-strong')}>
+              <input type="radio" name={`cancel-${o.id}`} checked={reason === r} onChange={() => setReason(r)} className="size-4 shrink-0 accent-brand" />
+              {CANCEL_REASON_TEXT[r]}
+            </label>
+          ))}
+        </fieldset>
+        {reason ? <p className="text-xs text-subtle">{CANCEL_STOCK_TEXT[reason]}</p> : null}
+        <Field
+          label={reason === 'other' ? 'Tell the buyer why' : 'Note for the buyer (optional)'}
+          htmlFor={`cancel-note-${o.id}`}
+          hint={`${note.length}/${CANCEL_NOTE_MAX}`}
+          error={showError && problem ? problem : undefined}
+        >
+          <textarea id={`cancel-note-${o.id}`} value={note} maxLength={CANCEL_NOTE_MAX} onChange={(e) => setNote(e.target.value)} rows={2} className={cx(inputCls, 'py-3')} />
+        </Field>
+        <div className="flex gap-2">
+          <Button type="button" variant="outline" className="flex-1" onClick={onClose} disabled={cancel.isPending}>
+            Keep the order
+          </Button>
+          <Button type="submit" variant="danger" className="flex-1" loading={cancel.isPending}>
+            Cancel and refund
+          </Button>
+        </div>
+      </form>
+    </Sheet>
   )
 }

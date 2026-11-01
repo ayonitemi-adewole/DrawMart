@@ -118,7 +118,7 @@ function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: L
     }
     if (short || !available) return
     checkout.mutate(
-      { listingIds: items.map((l) => l.id), quantities, ...details },
+      { listingIds: items.map((l) => l.id), quantities, expectedTotalKobo: total, ...details },
       {
         onSuccess: (orders) => {
           setPlaced(orders)

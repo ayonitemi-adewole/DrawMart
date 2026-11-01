@@ -35,6 +35,7 @@ import { MerchantPage } from '@/pages/merchant/MerchantPage'
 import { ResultPage } from '@/pages/ResultPage'
 import { ConversationPage, MessagesPage, NewConversationPage } from '@/pages/MessagesPage'
 import { NotificationsPage } from '@/pages/NotificationsPage'
+import { AdminCancellationsPage } from '@/pages/admin/AdminCancellationsPage'
 import { AdminPayoutsPage } from '@/pages/admin/AdminPayoutsPage'
 import { StorePayoutsPage } from '@/pages/merchant/StorePayoutsPage'
 import { InsightsPage } from '@/pages/merchant/InsightsPage'
@@ -182,6 +183,7 @@ const router = createBrowserRouter([
       { path: 'draws', element: <AdminDrawsPage /> },
       { path: 'boosts', element: <AdminBoostsPage /> },
       { path: 'payouts', element: <AdminPayoutsPage /> },
+      { path: 'cancellations', element: <AdminCancellationsPage /> },
       { path: 'prizes', element: <AdminPrizesPage /> },
       { path: 'stories', element: <AdminStoriesPage /> },
       { path: 'sellers', element: <AdminSellersPage /> },

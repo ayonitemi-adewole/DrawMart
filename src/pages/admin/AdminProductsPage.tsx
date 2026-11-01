@@ -24,6 +24,7 @@ const STATUS: Record<ListingStatus, { label: string; tone: Tone }> = {
   sold: { label: 'Sold', tone: 'sky' },
   rejected: { label: 'Rejected', tone: 'hot' },
   withdrawn: { label: 'Withdrawn', tone: 'neutral' },
+  paused: { label: 'Paused', tone: 'neutral' },
 }
 const ALL_STATUSES = Object.keys(STATUS) as ListingStatus[]
 

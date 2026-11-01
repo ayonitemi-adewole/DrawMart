@@ -22,7 +22,7 @@ export function BuyNowPanel({ listing: l }: { listing: ListingView }) {
   const shop = useMerchant()
   const toast = useToast()
   const price = salePriceKobo(l)
-  const mine = orders.data?.find((o) => o.listingId === l.id)
+  const mine = orders.data?.find((o) => o.listingId === l.id && o.status !== 'cancelled')
   const inCart = cart.data?.some((c) => c.listing.id === l.id)
   const ownItem = shop.data?.id === l.merchantId
 
@@ -107,6 +107,7 @@ const ORDER_STEP: Record<OrderView['status'], string> = {
   paid: 'Paid. The store is getting it ready.',
   dispatched: 'On its way. Give the rider your PIN once you have it.',
   delivered: 'You have it. Enjoy!',
+  cancelled: 'It was cancelled, and you’ve been refunded.',
 }
 
 /** Products only: raffle items are held and checked by DrawMart, so there's nobody to ask. */

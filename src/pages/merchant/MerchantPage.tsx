@@ -53,6 +53,7 @@ import { calendarDay, dateTime } from '@/lib/time'
 import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
 import { listingMatchesSearch } from '@/domain/productCode'
 import { ListingKindChooser, MerchantOrders, NewProduct } from './NewProduct'
+import { ProductControls } from './ProductControls'
 import { PushPrompt } from '@/components/PushSettings'
 import { FormStartNotice, ListingActions, RejectionNotice, listingFormFrom, type ListingForm, type ListingFormMode } from './parts'
 import { resentCautionFee } from '@/domain/rejection'
@@ -131,7 +132,7 @@ export function MerchantPage() {
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile icon={TicketIcon} label="Live & on sale" value={active.length} hint={`${active.filter((l) => l.kind === 'raffle').length} draws`} />
         <StatTile icon={ClipboardIcon} tone="ticket" label="In review" value={review.length} hint="Waiting on review, pickup or inspection" />
-        <StatTile icon={TruckIcon} tone="sky" label="Orders to send" value={toSend} hint={`${orders.data?.length ?? 0} orders in all`} />
+        <StatTile icon={TruckIcon} tone="sky" label="Orders to send" value={toSend} hint={`${orders.data?.filter((o) => o.status !== 'cancelled').length ?? 0} orders in all`} />
         <Link to="/store/payouts" className="flex text-ink no-underline transition hover:opacity-80">
           <StatTile icon={NairaIcon} tone="violet" className="w-full" label="Money coming to you" value={formatNaira(unpaid.waiting + unpaid.due)} hint={unpaid.due ? `${formatNaira(unpaid.due)} due. See payouts` : 'Paid after delivery. See payouts'} />
         </Link>
@@ -1076,6 +1077,7 @@ const STATUS: Record<ListingView['status'], { label: string; tone: Tone }> = {
   sold: { label: 'Sold · see orders', tone: 'sky' },
   rejected: { label: 'Rejected', tone: 'hot' },
   withdrawn: { label: 'Withdrawn', tone: 'neutral' },
+  paused: { label: 'Paused', tone: 'neutral' },
 }
 
 const statusFor = (l: ListingView) => (l.kind === 'product' && l.status === 'for_sale' ? { label: 'On sale', tone: 'brand' as Tone } : STATUS[l.status])
@@ -1087,7 +1089,7 @@ const CAUTION_TEXT: Record<ListingView['cautionFee']['status'], string> = {
   none: '',
 }
 
-type StatusFilter = 'all' | 'live' | 'pending_review' | 'rejected' | 'done'
+type StatusFilter = 'all' | 'live' | 'pending_review' | 'rejected' | 'paused' | 'done'
 
 export function MerchantListings({ onNew, onOpen, emptyBody }: { onNew: () => void; onOpen: (mode: ListingFormMode, l: ListingView) => void; emptyBody?: string }) {
   const q = useMerchantListings()
@@ -1097,7 +1099,7 @@ export function MerchantListings({ onNew, onOpen, emptyBody }: { onNew: () => vo
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />
 
   const inFilter = (l: ListingView, f: StatusFilter) =>
-    f === 'all' ? true : f === 'live' ? isActive(l) : f === 'pending_review' || f === 'rejected' ? l.status === f : !isActive(l) && l.status !== 'pending_review' && l.status !== 'rejected'
+    f === 'all' ? true : f === 'live' ? isActive(l) : f === 'pending_review' || f === 'rejected' || f === 'paused' ? l.status === f : !isActive(l) && l.status !== 'pending_review' && l.status !== 'rejected' && l.status !== 'paused'
   const found = q.data.filter((l) => listingMatchesSearch(l, search))
   const items = found.filter((l) => inFilter(l, filter))
   const count = (f: StatusFilter) => found.filter((l) => inFilter(l, f)).length
@@ -1115,6 +1117,7 @@ export function MerchantListings({ onNew, onOpen, emptyBody }: { onNew: () => vo
             { value: 'live', label: 'Live & on sale', count: count('live') },
             { value: 'pending_review', label: 'In review', count: count('pending_review') },
             ...(q.data.some((l) => l.status === 'rejected') ? [{ value: 'rejected' as const, label: 'Rejected', count: count('rejected') }] : []),
+            ...(q.data.some((l) => l.status === 'paused') ? [{ value: 'paused' as const, label: 'Paused', count: count('paused') }] : []),
             { value: 'done', label: 'Finished', count: count('done') },
           ]}
         />
@@ -1233,6 +1236,7 @@ function ProductCard({ listing: l, onOpen }: { listing: ListingView; onOpen: (mo
           <dd className="font-semibold tabular-nums">{formatNaira(payoutKobo)}</dd>
         </div>
       </dl>
+      <ProductControls listing={l} />
       <ListingActions listing={l} onOpen={onOpen} />
       <BoostRow listing={l} />
     </Card>

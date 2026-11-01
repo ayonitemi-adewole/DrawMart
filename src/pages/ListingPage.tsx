@@ -532,6 +532,7 @@ const STATUS_TEXT: Record<ListingView["status"], string> = {
   sold: "Sold",
   rejected: "Not on sale",
   withdrawn: "Not on sale",
+  paused: "Not on sale",
 };
 
 function useInView(ref: React.RefObject<HTMLElement | null>) {

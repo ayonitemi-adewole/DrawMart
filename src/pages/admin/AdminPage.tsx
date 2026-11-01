@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { usePendingListings, useReviewListing } from '@/api/hooks'
+import { usePendingListings, usePriceReviews, useReviewListing, useReviewPriceChange } from '@/api/hooks'
 import type { ListingView } from '@/api/types'
 import { CalendarIcon, CarIcon, CheckIcon, ClipboardIcon, LockIcon, MapPinIcon, TruckIcon, XIcon } from '@/components/icons'
 import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
@@ -57,6 +57,7 @@ export function AdminPage() {
       >
         Listings to review
       </PageTitle>
+      <PriceReviews />
       {q.isPending ? (
         <Skeleton className="h-60" />
       ) : q.isError ? (
@@ -76,6 +77,47 @@ export function AdminPage() {
         </div>
       )}
     </div>
+  )
+}
+
+/** Big price changes on products that are on sale. They keep selling at the old price meanwhile. */
+function PriceReviews() {
+  const q = usePriceReviews()
+  const review = useReviewPriceChange()
+  const toast = useToast()
+  if (!q.data?.length) return null
+
+  function decide(id: string, newPriceKobo: number, approve: boolean) {
+    review
+      .mutateAsync({ id, newPriceKobo, approve })
+      .then(() => toast(approve ? 'New price is live.' : 'Price change turned down.', approve ? 'success' : 'info'))
+      .catch((e) => toast(errorMessage(e), 'error'))
+  }
+
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="font-display text-lg font-extrabold">Price changes</h2>
+      {q.data.map(({ listing: l, newPriceKobo }) => (
+        <Card key={l.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
+          <ProductImage category={l.category} src={l.images[0]} alt="" size="sm" className="size-14 shrink-0" />
+          <div className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
+            <strong className="truncate">{l.title}</strong>
+            <ProductId code={l.productCode} copy />
+            <span className="text-muted">
+              {l.merchant.name}: {formatNaira(l.reviewedPriceKobo ?? l.priceKobo)} last reviewed, {formatNaira(l.priceKobo)} now, asking <strong className="text-ink">{formatNaira(newPriceKobo)}</strong>
+            </span>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <Button variant="outline" disabled={review.isPending} onClick={() => decide(l.id, newPriceKobo, false)}>
+              Turn down
+            </Button>
+            <Button disabled={review.isPending} onClick={() => decide(l.id, newPriceKobo, true)}>
+              Approve
+            </Button>
+          </div>
+        </Card>
+      ))}
+    </section>
   )
 }
 

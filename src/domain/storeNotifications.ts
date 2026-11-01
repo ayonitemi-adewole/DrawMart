@@ -27,7 +27,7 @@ export function closingReminderSent(closesAt: ISODate, sentAt: readonly ISODate[
 const SELLER_KINDS: readonly NotificationKind[] = [
   'store_new_order', 'store_listing_approved', 'store_listing_rejected', 'store_draw_sold_out',
   'store_winner_picked', 'store_draw_closing', 'store_pickup_tomorrow', 'store_new_message',
-  'store_payout_sent', 'store_bank_changed',
+  'store_payout_sent', 'store_bank_changed', 'store_price_approved', 'store_price_rejected',
 ]
 
 /** About something this account sells, rather than something it's buying. */

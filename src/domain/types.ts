@@ -36,6 +36,7 @@ export type ListingStatus =
   | 'sold' // a fixed-price item was bought
   | 'rejected'
   | 'withdrawn' // the store took it back while it was in review
+  | 'paused' // a product the seller has hidden for now: out of browse and search, but kept
 
 /** How the item reaches DrawMart for checking: big items are inspected where they are. */
 export type HandoverMethod = 'pickup' | 'inspection'
@@ -117,6 +118,8 @@ export interface Listing {
   status: ListingStatus
   /** Only while rejected, and only seen by its store and admins. Null on rows rejected before reasons existed. */
   rejection?: ListingRejection | null
+  /** The price an admin last reviewed. A big change from this needs another review. */
+  reviewedPriceKobo?: Kobo | null
   /** Counts changes while in review, so an admin only approves the version they saw. */
   revision?: number
   /** Rejected since it was last approved: withdrawing then doesn't get the caution fee back. */
@@ -163,6 +166,7 @@ export type LedgerKind =
   | 'refund'
   | 'store_credit' // consolation credit after losing a draw
   | 'order_payment' // bought a fixed-price item
+  | 'order_refund' // a seller cancelled it; doesn't touch the weekly limit
   | 'adjustment'
 
 /** Append-only wallet ledger. Balances are always derived, never stored. */
@@ -178,7 +182,10 @@ export interface LedgerEntry {
 }
 
 /** paid → the seller has it ready for a rider → the rider confirms it with the buyer's PIN. */
-export type OrderStatus = 'paid' | 'dispatched' | 'delivered'
+export type OrderStatus = 'paid' | 'dispatched' | 'delivered' | 'cancelled'
+
+/** Why a seller cancelled an order (orderCancel.ts). */
+export type CancelReason = 'out_of_stock' | 'damaged' | 'cant_send' | 'other'
 
 /** Where the buyer wants a fixed-price item sent. Seen only by the buyer, the store and admins. */
 export interface Delivery {
@@ -211,6 +218,9 @@ export interface Order {
   feeKobo: Kobo
   /** How many. priceKobo and feeKobo are for all of them. */
   quantity: number
+  cancelledAt: ISODate | null
+  cancelReason: CancelReason | null
+  cancelNote: string | null
   /** Pickup orders have an empty address and no pin, only the phone. */
   delivery: Delivery
   fulfilment: Fulfilment
@@ -226,7 +236,7 @@ export interface Order {
 }
 
 export type NotificationKind =
-  | 'store_new_order' | 'store_listing_approved' | 'store_listing_rejected' | 'store_draw_sold_out'
+  | 'order_cancelled' | 'store_price_approved' | 'store_price_rejected' | 'store_new_order' | 'store_listing_approved' | 'store_listing_rejected' | 'store_draw_sold_out'
   | 'store_winner_picked' | 'store_draw_closing' | 'store_pickup_tomorrow' | 'store_new_message'
   | 'store_payout_sent' | 'store_bank_changed'
   | 'draw_sold_out' | 'draw_won' | 'draw_lost' | 'saved_almost_sold' | 'saved_closing_soon' | 'saved_relisted' | 'saved_back_on_sale' | 'saved_price_drop'

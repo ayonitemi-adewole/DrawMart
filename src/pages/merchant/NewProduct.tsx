@@ -7,11 +7,11 @@ import type { ListingView } from '@/api/types'
 import { CheckIcon, ClipboardIcon, ShieldIcon, StoreIcon, TicketIcon, TruckIcon, type IconComponent } from '@/components/icons'
 import { OrderCard } from '@/components/OrderCard'
 import { useToast } from '@/components/toast'
-import { Badge, Button, Card, EmptyState, ErrorState, Field, Notice, ProductImage, Skeleton, cx, errorMessage, inputCls } from '@/components/ui'
+import { Badge, Button, Card, EmptyState, ErrorState, Field, Notice, ProductImage, Segmented, Skeleton, cx, errorMessage, inputCls } from '@/components/ui'
 import { platformFeeBps } from '@/domain/fees'
 import { formatNaira, parseNairaInput } from '@/domain/money'
 import { PRODUCT_ERROR_TEXT, saleEconomics, validateProduct, type ProductError } from '@/domain/orders'
-import type { Category, ListingKind } from '@/domain/types'
+import type { Category, ListingKind, OrderStatus } from '@/domain/types'
 import { CategoryPicker, FormStartNotice, PhotoPicker, Section, type ListingForm } from './parts'
 
 const KINDS: { kind: ListingKind; icon: IconComponent; title: string; body: string; points: string[] }[] = [
@@ -240,15 +240,27 @@ function ProductSent({ listing: l, onDone }: { listing: ListingView; onDone: () 
 }
 
 /** Orders for this store's fixed-price items. */
+const ORDER_TABS: { value: OrderTab; label: string; has: (s: OrderStatus) => boolean; empty: string }[] = [
+  { value: 'send', label: 'To send', has: (s) => s === 'paid', empty: 'Nothing waiting to be sent.' },
+  { value: 'way', label: 'On the way', has: (s) => s === 'dispatched', empty: 'Nothing on the way.' },
+  { value: 'done', label: 'Delivered', has: (s) => s === 'delivered', empty: 'Nothing delivered yet.' },
+  { value: 'cancelled', label: 'Cancelled', has: (s) => s === 'cancelled', empty: 'Nothing cancelled.' },
+]
+type OrderTab = 'send' | 'way' | 'done' | 'cancelled'
+
 export function MerchantOrders() {
   const q = useMerchantOrders()
   const [search, setSearch] = useState('')
+  const [chosen, setChosen] = useState<OrderTab | null>(null)
   if (q.isPending) return <Skeleton className="h-60" />
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />
   if (q.data.length === 0)
     return <EmptyState icon={TruckIcon} title="No orders yet" body="When a buyer buys one of your fixed-price items, it shows up here with their delivery address." />
   const toSend = q.data.filter((o) => o.status === 'paid')
-  const found = q.data.filter((o) => matchesProductSearch(search, o.productCode, o.listingTitle))
+  const searched = q.data.filter((o) => matchesProductSearch(search, o.productCode, o.listingTitle))
+  // Opens on the first tab with something in it.
+  const tab = ORDER_TABS.find((t) => t.value === chosen) ?? ORDER_TABS.find((t) => q.data.some((o) => t.has(o.status))) ?? ORDER_TABS[0]
+  const found = searched.filter((o) => tab.has(o.status))
   return (
     <section className="flex flex-col gap-4">
       {toSend.length ? (
@@ -256,6 +268,13 @@ export function MerchantOrders() {
           {toSend.length === 1 ? '1 order is' : `${toSend.length} orders are`} waiting. Mark each one ready once a rider can collect it.
         </Notice>
       ) : null}
+      <Segmented<OrderTab>
+        label="Show orders"
+        value={tab.value}
+        onChange={setChosen}
+        size="sm"
+        options={ORDER_TABS.map((t) => ({ value: t.value, label: t.label, count: searched.filter((o) => t.has(o.status)).length }))}
+      />
       <ProductSearch value={search} onChange={setSearch} />
       {found.length ? (
         <div className="grid gap-3 md:grid-cols-2">
@@ -263,8 +282,10 @@ export function MerchantOrders() {
             <OrderCard key={o.id} order={o} audience="store" />
           ))}
         </div>
-      ) : (
+      ) : search.trim() ? (
         <NoProductMatch query={search} />
+      ) : (
+        <p className="py-6 text-center text-sm text-muted">{tab.empty}</p>
       )}
     </section>
   )

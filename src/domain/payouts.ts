@@ -87,7 +87,7 @@ export function payoutsFor(listings: readonly PayoutListing[], orders: readonly 
   const prizeDelivered = (id: string) => orders.some((o) => o.listingId === id && o.isPrize && o.status === 'delivered')
 
   for (const o of orders) {
-    if (!o.isPrize) lines.push({ merchantId: o.merchantId, listingId: o.listingId, orderId: o.id, kind: 'sale', amountKobo: o.priceKobo - o.feeKobo, due: o.status === 'delivered' })
+    if (!o.isPrize && o.status !== 'cancelled') lines.push({ merchantId: o.merchantId, listingId: o.listingId, orderId: o.id, kind: 'sale', amountKobo: o.priceKobo - o.feeKobo, due: o.status === 'delivered' })
   }
   for (const l of listings) {
     if (l.kind === 'raffle' && (l.status === 'sold_out' || l.status === 'drawn')) {

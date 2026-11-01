@@ -32,6 +32,8 @@ import {
 } from '@/domain/listing'
 import { nairaToKobo } from '@/domain/money'
 import { canChangeInReview, withdrawalFees } from '@/domain/listingActions'
+import { canCancelOrder, cancelError, stockAfterCancel } from '@/domain/orderCancel'
+import { canControlProduct, repriceNeedsReview, statusAfterStock, stockChangeError } from '@/domain/productControls'
 import { closingReminderSent, pickupReminderDue } from '@/domain/storeNotifications'
 import type { PayoutLineView } from './types'
 import { PAYOUT_ACCOUNT_HOLD_HOURS, accountNumberError, markPaidError, maskAccountNumber, payoutsFor, type PayoutAccount, type PayoutLine } from '@/domain/payouts'
@@ -51,12 +53,12 @@ import { checkPin, isDeliveryPin, newDeliveryPin, type PinState } from '@/domain
 import { newProductCode } from '@/domain/productCode'
 import { MAX_SAVED_ADDRESSES, SAVED_ADDRESS_ERROR_TEXT, sortAddresses, validateSavedAddress, type SavedAddress, type SavedAddressInput } from '@/domain/addresses'
 import { CART_ERROR_TEXT, CHECKOUT_ERROR_TEXT, cartError, checkoutTotalKobo, isCar, isWonPrize, lineAmountKobo, validateCheckout } from '@/domain/cart'
-import { ORDER_ERROR_TEXT, PRODUCT_ERROR_TEXT, clampQuantity, quantityError, saleEconomics, takeStock, validateProduct } from '@/domain/orders'
+import { ORDER_ERROR_TEXT, PRODUCT_ERROR_TEXT, MIN_PRODUCT_PRICE_KOBO, clampQuantity, quantityError, saleEconomics, takeStock, validateProduct } from '@/domain/orders'
 import { MAX_MESSAGES_PER_MINUTE, messageError } from '@/domain/messages'
 import { fillDays, lagosDay } from '@/domain/metrics'
 import { BOOST_DEFAULTS, BOOST_ERROR_TEXT, DEFAULT_BOOST_PACKAGES, boostEndsAt, boostWindow, boostsUnlocked, canBoost } from '@/domain/boosts'
 import { SELLER_APPLICATION_ERROR_TEXT, normalizeNin, validateSellerApplication } from '@/domain/sellers'
-import type { Category, DrawResult, NotificationKind, PickupPoint, LedgerEntry, Listing, ListingStatus, Merchant, Order, Ticket, UnsoldPolicy, User } from '@/domain/types'
+import type { Category, DrawResult, Kobo, NotificationKind, PickupPoint, LedgerEntry, Listing, ListingStatus, Merchant, Order, Ticket, UnsoldPolicy, User } from '@/domain/types'
 import {
   ApiError,
   type DrawMartApi,
@@ -85,7 +87,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v34' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v36' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -97,7 +99,7 @@ const TOLU_SHOP = 'm-tolu'
 const DAY = 24 * 60 * 60 * 1000
 
 /** The PIN and who's carrying it stay out of the order everyone else sees. */
-type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState }
+type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState; paidCashKobo: Kobo; paidCreditKobo: Kobo }
 
 interface Db {
   users: User[]
@@ -117,6 +119,7 @@ interface Db {
   addresses: Record<string, SavedAddress[]>
   /** Listing ids in each buyer's cart, oldest first. */
   carts: Record<string, string[]>
+  priceReviews: { listingId: string; newPriceKobo: Kobo; requestedAt: string }[]
   /** By buyer, then listing. Anything not in here is one. */
   cartQuantities: Record<string, Record<string, number>>
   pushPreferences: Record<string, Partial<PushPreferences>>
@@ -552,6 +555,7 @@ async function freshDb(): Promise<Db> {
     pendingLimits: {},
     orders: [],
     carts: {},
+    priceReviews: [],
     cartQuantities: {},
     saved: {},
     pushPreferences: {},
@@ -836,7 +840,7 @@ function listingView(db: Db, l: Listing, audience: 'buyer' | 'full' = 'buyer'): 
   const merchant = db.merchants.find((m) => m.id === l.merchantId)!
   const myNumbers = db.tickets.filter((t) => t.listingId === l.id && t.userId === (db.viewer ?? ME)).map((t) => t.number)
   const r = db.results.find((x) => x.listingId === l.id)
-  return { ...l, handover: audience === 'full' ? l.handover : null, rejection: audience === 'full' ? l.rejection : null, merchant, myNumbers, result: r ? resultView(db, r) : null }
+  return { ...l, handover: audience === 'full' ? l.handover : null, rejection: audience === 'full' ? l.rejection : null, pendingPriceKobo: audience === 'full' ? (db.priceReviews.find((r) => r.listingId === l.id)?.newPriceKobo ?? null) : null, merchant, myNumbers, result: r ? resultView(db, r) : null }
 }
 
 function conversationView(db: Db, c: MockConversation, me: ChatSide): ConversationView {
@@ -866,7 +870,7 @@ function statsBetween(db: Db, l: Listing, from: string, to: string) {
   const views = db.views.filter((v) => v.listingId === l.id && v.day >= from && v.day <= to)
   // A refunded draw's tickets were paid back, so they aren't sales.
   const tickets = l.kind === 'raffle' && (l.status === 'live' || l.status === 'sold_out' || l.status === 'drawn') ? db.tickets.filter((t) => t.listingId === l.id && inRange(t.purchasedAt)) : []
-  const orders = db.orders.filter((o) => o.listingId === l.id && !o.isPrize && inRange(o.createdAt))
+  const orders = db.orders.filter((o) => o.listingId === l.id && !o.isPrize && o.status !== 'cancelled' && inRange(o.createdAt))
   return {
     views: views.length,
     visitors: new Set(views.map((v) => v.visitor)).size,
@@ -880,10 +884,10 @@ function statsBetween(db: Db, l: Listing, from: string, to: string) {
 
 /** `forBuyer`: the buyer's own screens, the only place a PIN may go. */
 function orderView(db: Db, order: MockOrder, forBuyer = false): OrderView {
-  const { pin, riderId: _riderId, pinState: _pinState, ...o } = order
+  const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, ...o } = order
   const l = db.listings.find((x) => x.id === o.listingId)!
   const merchant = db.merchants.find((m) => m.id === o.merchantId)!
-  return { ...o, deliveryPin: forBuyer && o.status !== 'delivered' ? pin : null, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, merchantName: merchant.name }
+  return { ...o, deliveryPin: forBuyer && o.status !== 'delivered' && o.status !== 'cancelled' ? pin : null, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, merchantName: merchant.name }
 }
 
 // -------------------------------------------------------------------- API
@@ -1107,6 +1111,14 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
   const payoutView = (db: Db, p: Db['payouts'][number]): PayoutLineView => {
     const l = getListingOr404(db, p.listingId)
     return { ...p, listingTitle: l.title, productCode: l.productCode }
+  }
+
+  /** Tells anyone who saved it if it's now cheaper (savedAlerts.ts priceDropped). */
+  function applyPrice(db: Db, l: Listing, priceKobo: Kobo) {
+    const dropped = l.status === 'for_sale' && priceKobo < l.priceKobo
+    l.priceKobo = priceKobo
+    l.feeBps = platformFeeBps(priceKobo)
+    if (dropped) for (const userId of saversOf(db, l.id)) alertSaved(db, userId, l.id, l, 'saved_price_drop', now())
   }
 
   const ownListing = (db: Db, id: string) => {
@@ -1406,7 +1418,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     listPickupPoints: () => tx(() => PICKUP_POINTS),
 
-    checkout: ({ listingIds, quantities = {}, ...details }) =>
+    checkout: ({ listingIds, quantities = {}, expectedTotalKobo, ...details }) =>
       tx((db) => {
         if (!listingIds.length) throw new ApiError('invalid_input', 'Your cart is empty.')
         if (new Set(listingIds).size !== listingIds.length) throw new ApiError('not_found', 'One of those items no longer exists.')
@@ -1422,6 +1434,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           if (isCar(v) && views.length > 1) throw new ApiError('invalid_input', 'Cars are arranged on their own, not with other items.')
           if (isWonPrize(v) && db.orders.some((o) => o.listingId === v.id)) throw new ApiError('invalid_input', `${v.title} has already been arranged.`)
         }
+        if (expectedTotalKobo !== undefined && expectedTotalKobo !== checkoutTotalKobo(views, (v) => quantities[v.id] ?? 1)) throw new ApiError('invalid_input', 'A price has just changed. Check the new total.')
         const mine = db.ledger.filter((e) => e.userId === buyer())
         let balance = balanceFromLedger(mine)
         if (balance.cashKobo + balance.creditKobo < checkoutTotalKobo(views, (v) => quantities[v.id] ?? 1)) throw new ApiError('insufficient_funds', ORDER_ERROR_TEXT.insufficient_funds)
@@ -1435,8 +1448,10 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           const prize = isWonPrize(v)
           const quantity = quantities[v.id] ?? 1
           const price = lineAmountKobo(v, quantity)!
+          let paid = { fromCash: 0, fromCredit: 0 }
           if (!prize) {
             const pay = splitPayment(price, balance)
+            paid = pay
             balance = { cashKobo: balance.cashKobo - pay.fromCash, creditKobo: balance.creditKobo - pay.fromCredit }
             db.ledger.push({ id: uid('E'), userId: buyer(), kind: 'order_payment', cashKobo: -pay.fromCash, creditKobo: -pay.fromCredit, memo: `Bought · ${l.title}${quantity > 1 ? ` × ${quantity}` : ''}`, listingId: l.id, createdAt: at })
             const taken = takeStock(l.stock, quantity)
@@ -1444,7 +1459,8 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
             if (taken.soldOut) l.status = 'sold'
           }
           const order: MockOrder = {
-            pin: newDeliveryPin(), riderId: null, pinState: { attempts: 0, lockedUntil: null },
+            pin: newDeliveryPin(), riderId: null, pinState: { attempts: 0, lockedUntil: null }, paidCashKobo: paid.fromCash, paidCreditKobo: paid.fromCredit,
+            cancelledAt: null, cancelReason: null, cancelNote: null,
             id: uid('O'), listingId: l.id, buyerId: buyer(), merchantId: l.merchantId, quantity, priceKobo: price, feeKobo: prize ? 0 : saleEconomics(price, l.feeBps).feeKobo,
             delivery: pickup ? { address: '', location: null, contactPhone: details.delivery.contactPhone.trim() } : { address: details.delivery.address.trim(), location: details.delivery.location, contactPhone: details.delivery.contactPhone.trim() },
             fulfilment: details.fulfilment, pickupPoint, isPrize: prize, handledBy: prize && !isCar(l) ? 'drawmart' : 'store',
@@ -1646,6 +1662,63 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         Object.assign(l, { status: 'withdrawn', cautionFee: withdrawn, pickupBatchId: null })
       }),
 
+    pauseListing: (id) =>
+      tx((db) => {
+        const l = ownListing(db, id)
+        if (l.kind !== 'product' || l.status !== 'for_sale') throw new ApiError('invalid_input', 'Only products on sale can be paused.')
+        l.status = 'paused'
+      }),
+
+    resumeListing: (id) =>
+      tx((db) => {
+        const l = ownListing(db, id)
+        if (l.status !== 'paused') throw new ApiError('invalid_input', 'Only paused products can be resumed.')
+        l.status = l.stock > 0 ? 'for_sale' : 'sold'
+      }),
+
+    changeStock: (id, change) =>
+      tx((db) => {
+        const l = ownListing(db, id)
+        if (!canControlProduct(l)) throw new ApiError('invalid_input', 'Only products on sale, paused or sold out can change stock.')
+        const problem = stockChangeError(l.stock, change)
+        if (problem) throw new ApiError('invalid_input', problem)
+        const was = l.status
+        l.stock += change
+        l.status = statusAfterStock(l.status, l.stock)
+        if (was === 'sold' && l.status === 'for_sale') for (const userId of saversOf(db, l.id)) alertSaved(db, userId, l.id, l, 'saved_back_on_sale', now())
+      }),
+
+    changePrice: (id, priceKobo) =>
+      tx((db) => {
+        const l = ownListing(db, id)
+        if (!canControlProduct(l)) throw new ApiError('invalid_input', 'Only products on sale, paused or sold out can change price.')
+        if (!Number.isInteger(priceKobo) || priceKobo < MIN_PRODUCT_PRICE_KOBO) throw new ApiError('invalid_input', PRODUCT_ERROR_TEXT.price_too_low)
+        db.priceReviews = db.priceReviews.filter((r) => r.listingId !== l.id)
+        if (repriceNeedsReview(priceKobo, l.reviewedPriceKobo ?? l.priceKobo)) {
+          db.priceReviews.push({ listingId: l.id, newPriceKobo: priceKobo, requestedAt: iso(now()) })
+          return true
+        }
+        applyPrice(db, l, priceKobo)
+        return false
+      }),
+
+    listPriceReviews: () =>
+      tx((db) => db.priceReviews.map((r) => ({ listing: listingView(db, getListingOr404(db, r.listingId), 'full'), newPriceKobo: r.newPriceKobo, requestedAt: r.requestedAt }))),
+
+    reviewPriceChange: (id, newPriceKobo, approve) =>
+      tx((db) => {
+        const r = db.priceReviews.find((x) => x.listingId === id)
+        if (!r) throw new ApiError('invalid_input', 'That price change has already been dealt with.')
+        if (r.newPriceKobo !== newPriceKobo) throw new ApiError('invalid_input', 'The seller just changed this price. Check it again.')
+        db.priceReviews = db.priceReviews.filter((x) => x !== r)
+        const l = getListingOr404(db, id)
+        if (approve) {
+          applyPrice(db, l, newPriceKobo)
+          l.reviewedPriceKobo = newPriceKobo
+        }
+        notifyShop(db, l.merchantId, approve ? 'store_price_approved' : 'store_price_rejected', l.id, iso(now()))
+      }),
+
     resubmitListing: (id, input) =>
       tx((db) => {
         const l = ownListing(db, id)
@@ -1721,6 +1794,35 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     listMerchantOrders: () =>
       tx((db) => db.orders.filter((o) => o.merchantId === shopId(db) && o.handledBy === 'store').sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((o) => orderView(db, o))),
+
+    cancelOrder: (orderId, reason, note) =>
+      tx((db) => {
+        const o = db.orders.find((x) => x.id === orderId && x.handledBy === 'store' && x.merchantId === shopId(db))
+        if (!o) throw new ApiError('not_found', 'That order doesn’t exist.')
+        const problem = cancelError({ reason, note })
+        if (problem) throw new ApiError('invalid_input', problem)
+        if (o.isPrize) throw new ApiError('invalid_input', 'Won items can’t be cancelled here. Contact DrawMart.')
+        if (!canCancelOrder(o)) throw new ApiError('invalid_input', 'Only orders that aren’t ready for a rider yet can be cancelled.')
+        const l = getListingOr404(db, o.listingId)
+        const at = iso(now())
+        Object.assign(o, { status: 'cancelled', cancelledAt: at, cancelReason: reason, cancelNote: note.trim() || null })
+        db.payouts = db.payouts.filter((p) => !(p.orderId === o.id && p.status === 'waiting'))
+        db.ledger.push({ id: uid('E'), userId: o.buyerId, kind: 'order_refund', cashKobo: o.paidCashKobo, creditKobo: o.paidCreditKobo, memo: `Refund · ${l.title}`, listingId: l.id, createdAt: at })
+        const was = l.status
+        Object.assign(l, stockAfterCancel(reason, l, o.quantity))
+        if (was === 'sold' && l.status === 'for_sale') for (const userId of saversOf(db, l.id)) alertSaved(db, userId, l.id, l, 'saved_back_on_sale', now())
+        notify(db, o.buyerId, 'order_cancelled', l.id, at)
+      }),
+
+    listCancelRates: () =>
+      tx((db) => {
+        const since = iso(now() - 30 * DAY)
+        const recent = db.orders.filter((o) => !o.isPrize && o.createdAt >= since)
+        return db.merchants.flatMap((m) => {
+          const mine = recent.filter((o) => o.merchantId === m.id)
+          return mine.length ? [{ merchantId: m.id, merchantName: m.name, orders: mine.length, cancelled: mine.filter((o) => o.status === 'cancelled').length }] : []
+        })
+      }),
 
     dispatchOrder: (orderId) =>
       tx((db) => {
@@ -1953,6 +2055,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (l.status !== 'pending_review') throw new ApiError('invalid_input', 'Only listings in review can be approved.')
         if (revision !== undefined && revision !== (l.revision ?? 0)) throw new ApiError('invalid_input', 'The store just changed this listing. Check it again.')
         l.wasRejected = false
+        l.reviewedPriceKobo = l.priceKobo
         notifyShop(db, l.merchantId, 'store_listing_approved', l.id, iso(now()))
         if (l.kind === 'product') {
           l.status = 'for_sale' // products skip the draw

@@ -360,6 +360,114 @@ describe('mock api', () => {
     expect(lines.map((l) => l.amountKobo)).toContain(order.priceKobo - order.feeKobo)
   })
 
+  it('lets a seller pause, restock and reprice a product', async () => {
+    const api = make()
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const seller = () => api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const shopper = () => api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    await seller()
+    const p = await api.createProduct({ title: 'Lamp', description: '', category: 'Home', priceKobo: k(10_000), stock: 2 })
+    await expect(api.pauseListing(p.id)).rejects.toThrow('on sale')
+    await expect(api.changeStock(p.id, 1)).rejects.toMatchObject({ code: 'invalid_input' })
+    await api.approveListing(p.id)
+    const browse = async () => (await api.listListings({ status: ['live', 'for_sale'] })).some((l) => l.id === p.id)
+
+    // Paused: out of browse and not for sale, but still there.
+    await api.pauseListing(p.id)
+    expect(await browse()).toBe(false)
+    await shopper()
+    await api.topUp(k(100_000))
+    expect((await api.getListing(p.id)).status).toBe('paused')
+    await expect(buyNow(api, p.id, delivery)).rejects.toMatchObject({ code: 'not_for_sale' })
+    await expect(api.pauseListing(p.id)).rejects.toThrow()
+    await seller()
+    await expect(api.pauseListing(p.id)).rejects.toThrow('on sale')
+    await api.resumeListing(p.id)
+    expect(await browse()).toBe(true)
+
+    // A small change applies now, measured from the reviewed price, so small ones can't add up.
+    expect(await api.changePrice(p.id, k(12_000))).toBe(false)
+    expect((await api.getListing(p.id)).priceKobo).toBe(k(12_000))
+    expect(await api.changePrice(p.id, k(12_500))).toBe(true)
+    const pending = () => api.listMerchantListings().then((all) => all.find((l) => l.id === p.id)!)
+    expect(await pending()).toMatchObject({ priceKobo: k(12_000), pendingPriceKobo: k(12_500), status: 'for_sale' })
+    expect((await api.getListing(p.id)).pendingPriceKobo).toBeNull() // buyers don't see it
+
+    // Admin: only the version they saw.
+    await expect(api.reviewPriceChange(p.id, k(13_000), true)).rejects.toThrow('just changed')
+    await api.reviewPriceChange(p.id, k(12_500), true)
+    expect(await pending()).toMatchObject({ priceKobo: k(12_500), reviewedPriceKobo: k(12_500), pendingPriceKobo: null })
+    await expect(api.reviewPriceChange(p.id, k(12_500), true)).rejects.toThrow('dealt with')
+    await api.changePrice(p.id, k(20_000))
+    await api.reviewPriceChange(p.id, k(20_000), false)
+    expect(await pending()).toMatchObject({ priceKobo: k(12_500), pendingPriceKobo: null })
+    expect((await api.listNotifications()).map((n) => n.kind)).toEqual(expect.arrayContaining(['store_price_approved', 'store_price_rejected']))
+
+    // A price they haven't seen is never charged.
+    await shopper()
+    const details = { fulfilment: 'delivery' as const, delivery, pickupPointId: null }
+    await expect(api.checkout({ listingIds: [p.id], expectedTotalKobo: k(10_000), ...details })).rejects.toThrow('price has just changed')
+    await api.checkout({ listingIds: [p.id], expectedTotalKobo: k(12_500), ...details })
+
+    // Stock: removing the last sells it out, and restocking brings it back. A pause stays a pause.
+    await seller()
+    await expect(api.changeStock(p.id, -2)).rejects.toThrow('remove more')
+    await api.changeStock(p.id, -1)
+    expect(await pending()).toMatchObject({ stock: 0, status: 'sold' })
+    await api.changeStock(p.id, 3)
+    expect(await pending()).toMatchObject({ stock: 3, status: 'for_sale' })
+    await api.pauseListing(p.id)
+    await api.changeStock(p.id, -3)
+    expect(await pending()).toMatchObject({ stock: 0, status: 'paused' })
+    await api.resumeListing(p.id)
+    expect((await pending()).status).toBe('sold')
+    await api.auth.signInWithPassword('lekki@drawmart.test', 'drawmart-demo')
+    await expect(api.changePrice(p.id, k(1_000))).rejects.toMatchObject({ code: 'not_found' })
+  })
+
+  it('refunds a cancelled order the way it was paid, and tells the buyer why', async () => {
+    const api = make()
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const seller = () => api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    const shopper = () => api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    await seller()
+    const p = await api.createProduct({ title: 'Kettle', description: '', category: 'Home', priceKobo: k(5_000), stock: 4 })
+    await api.approveListing(p.id)
+    await shopper()
+    await api.topUp(k(50_000))
+    const start = (await api.getWallet()).balance
+    const details = { fulfilment: 'delivery' as const, delivery, pickupPointId: null }
+    const [order] = await api.checkout({ listingIds: [p.id], quantities: { [p.id]: 2 }, ...details })
+    await expect(api.cancelOrder(order.id, 'out_of_stock', '')).rejects.toThrow() // a buyer can't cancel their own order
+
+    await seller()
+    await expect(api.cancelOrder(order.id, 'other', '')).rejects.toThrow('Say why')
+    expect((await api.listPayouts()).some((l) => l.orderId === order.id)).toBe(true)
+    await api.cancelOrder(order.id, 'cant_send', 'Shop closed this week')
+    await expect(api.cancelOrder(order.id, 'cant_send', '')).rejects.toThrow('ready for a rider')
+    expect((await api.listPayouts()).some((l) => l.orderId === order.id)).toBe(false)
+    expect((await api.getListing(p.id)).stock).toBe(4) // it goes back
+    expect((await api.getMerchantMetrics(7)).listings.find((l) => l.listingId === p.id)?.units ?? 0).toBe(0)
+
+    await shopper()
+    expect((await api.getWallet()).balance).toEqual(start)
+    const [mine] = (await api.listMyOrders()).filter((o) => o.id === order.id)
+    expect(mine).toMatchObject({ status: 'cancelled', cancelReason: 'cant_send', cancelNote: 'Shop closed this week', deliveryPin: null })
+    expect((await api.listNotifications()).find((n) => n.listingId === p.id)?.kind).toBe('order_cancelled')
+
+    // Out of stock takes the rest off sale, and a ready order can't be cancelled.
+    const [second] = await api.checkout({ listingIds: [p.id], ...details })
+    const [third] = await api.checkout({ listingIds: [p.id], ...details })
+    await seller()
+    await api.dispatchOrder(second.id)
+    await expect(api.cancelOrder(second.id, 'damaged', '')).rejects.toThrow('ready for a rider')
+    await api.cancelOrder(third.id, 'out_of_stock', '')
+    expect(await api.getListing(p.id)).toMatchObject({ stock: 0, status: 'sold' })
+    await api.auth.signInWithPassword('admin@drawmart.test', 'drawmart-demo')
+    const mineRate = (await api.listCancelRates()).find((r) => r.merchantId === order.merchantId)
+    expect(mineRate?.cancelled).toBe(2)
+  })
+
   it('only marks an order delivered through a delivery account and the buyer’s PIN', async () => {
     let t = Date.now()
     const api = make(() => t)
