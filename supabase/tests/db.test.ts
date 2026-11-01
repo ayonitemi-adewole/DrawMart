@@ -18,6 +18,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { verifyDraw, winningTicketNumber, createSeed } from '@/domain/draw'
 import { computeListingEconomics, platformFeeBps } from '@/domain/fees'
 import { DELIVERY_AREAS, areaFromText, defaultSizeFor, deliveryFeeKobo, placeholderPriceKobo, placeholderPricing } from '@/domain/deliveryFees'
+import { addConfirmTime, confirmDeadline } from '@/domain/orderConfirm'
 import { addDays, cautionFeeFor, localDate } from '@/domain/listing'
 import { DEMO_ACCOUNTS } from '@/api/demoAccounts'
 
@@ -867,6 +868,15 @@ describe('regular products and orders', () => {
     expect(r.find((x) => x.merchantId === '11111111-1111-4111-8111-000000000005')?.cancelled).toBeGreaterThanOrEqual(3)
   })
 
+  it('stops the time to confirm from 10pm to 9am, the same as src/domain', async () => {
+    for (const at of ['2026-11-02T10:00:00+01:00', '2026-11-02T09:00:00+01:00', '2026-11-02T21:00:00+01:00', '2026-11-02T11:00:00+01:00', '2026-11-02T21:59:30+01:00', '2026-11-02T22:00:00+01:00', '2026-11-02T23:30:00+01:00', '2026-11-03T03:00:00+01:00', '2026-11-03T08:59:00+01:00']) {
+      for (const hours of [3, 12]) {
+        const [{ t }] = await admin<{ t: Date }>(`select private.add_confirm_time($1::timestamptz, make_interval(hours => $2)) t`, [at, hours])
+        expect(new Date(t).getTime()).toBe(addConfirmTime(Date.parse(at), hours))
+      }
+    }
+  })
+
   it('cancels and pauses if a seller doesn’t confirm in time, with a reminder first', async () => {
     const seller = await newUser('confirm-store@example.com', { merchantId: '11111111-1111-4111-8111-000000000005' })
     const rival = await newUser('confirm-rival@example.com', { merchantId: IKEJA })
@@ -878,8 +888,8 @@ describe('regular products and orders', () => {
     const buy = async () => (await asUser<{ ids: string[] }>(shopper, `select public.checkout($1) ids`, [{ listingIds: [id], fulfilment: 'delivery', address: delivery[0], phone: delivery[1], lat: delivery[2], lng: delivery[3] }]))[0].ids[0]
     const late = await buy()
     const onTime = await buy()
-    const [row] = await admin<{ hours: number }>(`select extract(epoch from confirm_by - created_at) / 3600 hours from public.orders where id = $1`, [late])
-    expect(Math.round(Number(row.hours))).toBe(12)
+    const [row] = await admin<{ confirm_by: Date; created_at: Date }>(`select confirm_by, created_at from public.orders where id = $1`, [late])
+    expect(new Date(row.confirm_by).toISOString()).toBe(confirmDeadline(new Date(row.created_at).getTime()))
 
     await expectFail(asUser(rival, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [late]), 'not_found')
     await expectFail(asUser(shopper, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [late]), 'not_found')

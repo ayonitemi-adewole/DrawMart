@@ -120,7 +120,7 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
 
       {waiting && o.confirmBy ? (
         <Notice tone="ticket" icon={ClockIcon} title={audience === 'buyer' ? `The seller has until ${dateTime(o.confirmBy)} to confirm` : `Confirm by ${dateTime(o.confirmBy)}`}>
-          {audience === 'buyer' ? 'They’ll send a photo of your item. If they don’t, you’re refunded automatically.' : 'Take a fresh photo of the item. If you don’t, the order cancels, the buyer is refunded and the product is paused.'}
+          {audience === 'buyer' ? 'They’ll send a photo of your item. If they don’t, you’re refunded automatically.' : 'Take a fresh photo of the item. If you don’t, the order cancels, the buyer is refunded and the product is paused. Your time doesn’t run from 10pm to 9am.'}
         </Notice>
       ) : null}
       {o.confirmPhoto && !cancelled ? (

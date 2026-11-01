@@ -536,7 +536,7 @@ describe('mock api', () => {
   })
 
   it('cancels and pauses if a seller doesn’t confirm in time, with a reminder first', async () => {
-    let t = Date.now()
+    let t = Date.parse('2026-11-02T10:00:00+01:00') // due at 10pm, Lagos time
     const api = make(() => t)
     const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
     const details = { fulfilment: 'delivery' as const, delivery, pickupPointId: null }
