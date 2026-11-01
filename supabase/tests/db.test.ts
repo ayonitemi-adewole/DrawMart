@@ -18,6 +18,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { verifyDraw, winningTicketNumber, createSeed } from '@/domain/draw'
 import { computeListingEconomics, platformFeeBps } from '@/domain/fees'
 import { DELIVERY_AREAS, areaFromText, defaultSizeFor, deliveryFeeKobo, placeholderPriceKobo, placeholderPricing } from '@/domain/deliveryFees'
+import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO } from '@/domain/deliveryChecks'
 import { addConfirmTime, confirmDeadline } from '@/domain/orderConfirm'
 import { addDays, cautionFeeFor, localDate } from '@/domain/listing'
 import { DEMO_ACCOUNTS } from '@/api/demoAccounts'
@@ -951,6 +952,7 @@ describe('regular products and orders', () => {
     await expectFail(asUser(store, `select public.confirm_order($1)`, [id]), 'forbidden')
     const rider = await newUser('rider1@example.com', { role: 'delivery' })
     await asUser(rider, `select public.take_delivery($1)`, [id])
+    await asUser(rider, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
     const [{ pins }] = await asUser<{ pins: Record<string, string> }>(buyer, `select public.my_delivery_pins() pins`)
     expect((await asUser<{ r: { confirmed: boolean } }>(rider, `select public.confirm_delivery($1, $2) r`, [id, pins[id]]))[0].r.confirmed).toBe(true)
     const [o] = await admin<{ status: string; delivered_at: string | null }>(`select * from public.orders where id = $1`, [id])
@@ -1876,6 +1878,12 @@ describe('cart and checkout', () => {
       await asUser(rider, `select public.take_delivery($1)`, [id])
       await expectFail(asUser(otherRider, `select public.take_delivery($1)`, [id]), 'invalid_input')
       const [row] = await admin<{ delivery_address: string; delivery_phone: string }>(`select delivery_address, delivery_phone from public.orders where id = $1`, [id])
+      // No buyer details until it's passed the check.
+      expect((await jobs(rider)).find((j) => j.id === id)?.dropOff).toBeNull()
+      await expectFail(tryPin(rider, id, '123456'), 'invalid_input')
+      await expectFail(asUser(rider, `select public.pass_collection($1, '{}')`, [id]), 'invalid_input')
+      await expectFail(asUser(otherRider, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id]), 'invalid_input')
+      await asUser(rider, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
       expect((await jobs(rider)).find((j) => j.id === id)?.dropOff).toMatchObject({ address: row.delivery_address, contactPhone: row.delivery_phone })
       expect((await jobs(otherRider)).find((j) => j.id === id)).toBeUndefined()
       await expectFail(tryPin(otherRider, id, '123456'), 'invalid_input')
@@ -1885,6 +1893,7 @@ describe('cart and checkout', () => {
       await asUser(rider, `select public.release_delivery($1)`, [id])
       expect((await jobs(otherRider)).find((j) => j.id === id)).toMatchObject({ mine: false, dropOff: null })
       await asUser(otherRider, `select public.take_delivery($1)`, [id])
+      await asUser(otherRider, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
       const pin = (await pinsOf(b))[id]
       expect((await tryPin(otherRider, id, pin)).confirmed).toBe(true)
 
@@ -1895,6 +1904,107 @@ describe('cart and checkout', () => {
       const [o] = await admin<{ status: string; delivered_at: string | null; rider_id: string }>(`select status, delivered_at, rider_id from public.orders where id = $1`, [id])
       expect(o).toMatchObject({ status: 'delivered', rider_id: otherRider })
       expect(o.delivered_at).not.toBeNull()
+    })
+
+    describe('checks', () => {
+      const SHOP = '11111111-1111-4111-8111-000000000005'
+      let seller: string, staffUser: string
+      const riding = async (email: string) => {
+        const shopper = await newUser(email)
+        await asUser(shopper, `select public.top_up(5000000)`)
+        const [{ id: listing }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [{ title: 'Checked lamp', description: '', category: 'Home', priceKobo: 1_000_000, stock: 2 }])
+        await asUser(staffUser, `select public.approve_listing($1)`, [listing])
+        const start = await balance(shopper)
+        const [{ ids }] = await asUser<{ ids: string[] }>(shopper, `select public.checkout($1) ids`, [{ listingIds: [listing], fulfilment: 'delivery', address: '15 Awolowo Road, Ikoyi', phone: '0803 123 4567', lat: 6.45, lng: 3.43 }])
+        await asUser(seller, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [ids[0]])
+        await asUser(seller, `select public.dispatch_order($1)`, [ids[0]])
+        await asUser(rider, `select public.take_delivery($1)`, [ids[0]])
+        return { shopper, listing, id: ids[0], start }
+      }
+      const fail = (id: string) => asUser(rider, `select public.fail_collection($1, array['no_item'], '', '{}')`, [id])
+      const seen = (who: string, id: string) => asUser<{ cancel_reason: string; status: string }>(who, `select status, cancel_reason from public.orders where id = $1`, [id])
+
+      beforeAll(async () => {
+        seller = await newUser('check-store@example.com', { merchantId: SHOP })
+        staffUser = await newUser('check-staff@example.com', { role: 'admin' })
+      })
+
+      it('refunds and credits the buyer, and charges the seller, when a check fails', async () => {
+        const { shopper, listing, id, start } = await riding('check1@example.com')
+        await expectFail(asUser(otherRider, `select public.fail_collection($1, array['damaged'], '', array['/assets/x.jpg'])`, [id]), 'invalid_input')
+        await expectFail(asUser(rider, `select public.fail_collection($1, array['nonsense'], '', array['/assets/x.jpg'])`, [id]), 'invalid_input')
+        await expectFail(asUser(rider, `select public.fail_collection($1, array['damaged'], '', '{}')`, [id]), 'invalid_input') // needs proof
+        await expectFail(asUser(seller, `select public.fail_collection($1, array['no_item'], '', '{}')`, [id]), 'forbidden')
+        await asUser(rider, `select public.fail_collection($1, array['damaged'], 'Cracked', array['/assets/x.jpg'])`, [id])
+
+        expect(await balance(shopper)).toEqual({ cash: start.cash, credit: String(Number(start.credit) + APOLOGY_CREDIT_KOBO) })
+        expect((await seen(shopper, id))[0]).toMatchObject({ status: 'cancelled', cancel_reason: 'failed_check' })
+        expect((await jobs(rider)).some((j) => j.id === id)).toBe(false)
+        const lines = await asUser<{ kind: string; status: string; amount_kobo: number }>(seller, `select kind, status, amount_kobo from public.payouts where order_id = $1`, [id])
+        expect(lines).toEqual([{ kind: 'charge', status: 'due', amount_kobo: -FAILURE_CHARGE_KOBO }])
+        expect(await admin(`select stock from public.listings where id = $1`, [listing])).toEqual([{ stock: 1 }])
+      })
+
+      it('refuses at the door only with the buyer’s PIN, and sends it back', async () => {
+        const { shopper, id, start } = await riding('check2@example.com')
+        await expectFail(asUser(rider, `select public.refuse_delivery($1, '123456', 'refused_wrong', '', '/assets/x.jpg')`, [id]), 'invalid_input') // not collected
+        await asUser(rider, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+        const pin = (await pinsOf(shopper))[id]
+        const wrong = pin === '000000' ? '111111' : '000000'
+        const refuse = (p: string, reason = 'refused_wrong', photo = '/assets/x.jpg') => asUser<{ r: { confirmed: boolean; attemptsLeft: number } }>(rider, `select public.refuse_delivery($1, $2, $3, 'Not it', $4) r`, [id, p, reason, photo])
+        await expectFail(refuse(pin, 'changed_my_mind'), 'invalid_input')
+        await expectFail(refuse(pin, 'refused_wrong', 'nope'), 'invalid_input')
+        expect((await refuse(wrong))[0].r).toMatchObject({ confirmed: false, attemptsLeft: 4 })
+        expect(await seen(shopper, id)).toEqual([{ status: 'dispatched', cancel_reason: null }])
+        expect((await refuse(pin))[0].r.confirmed).toBe(true)
+
+        expect(Number((await balance(shopper)).cash)).toBe(Number(start.cash))
+        expect((await jobs(rider)).find((j) => j.id === id)).toMatchObject({ returning: true, dropOff: null })
+        await expectFail(asUser(otherRider, `select public.complete_return($1, '/assets/y.jpg')`, [id]), 'invalid_input')
+        await asUser(rider, `select public.complete_return($1, '/assets/y.jpg')`, [id])
+        await expectFail(asUser(rider, `select public.complete_return($1, '/assets/y.jpg')`, [id]), 'invalid_input')
+        expect((await jobs(rider)).some((j) => j.id === id)).toBe(false)
+        expect(await admin(`select return_state from public.orders where id = $1`, [id])).toEqual([{ return_state: 'returned' }])
+      })
+
+      it('won’t send a negative payout, and suspends after 3 failures until an admin lifts it', async () => {
+        await admin(`update public.orders set cancelled_at = now() - interval '40 days' where merchant_id = $1 and cancel_reason is not null`, [SHOP]) // earlier tests' failures
+        await admin(`insert into public.payout_accounts (merchant_id, bank_code, bank_name, account_number, account_name) values ($1, '044', 'Access Bank', '0123456789', 'TEST') on conflict do nothing`, [SHOP])
+        await admin(`update public.payout_accounts set payable_from = now() - interval '1 day' where merchant_id = $1`, [SHOP])
+        let last = ''
+        for (const n of [1, 2, 3]) {
+          const r = await riding(`suspend${n}@example.com`)
+          await fail(r.id)
+          last = r.listing
+        }
+        const charges = await admin<{ id: string }>(`select id from public.payouts where merchant_id = $1 and kind = 'charge' and status = 'due'`, [SHOP])
+        await expectFail(asUser(staffUser, `select public.mark_payouts_paid($1::uuid[], 'TRF-1')`, [charges.map((c) => c.id)]), 'invalid_input')
+
+        expect(await admin(`select status from public.listings where id = $1`, [last])).toEqual([{ status: 'paused' }])
+        await expectFail(asUser(seller, `select public.resume_listing($1)`, [last]), 'forbidden')
+        await expectFail(asUser(seller, `select public.create_product($1)`, [{ title: 'No', description: '', category: 'Home', priceKobo: 100_000 }]), 'forbidden')
+        await expectFail(asUser(seller, `select public.lift_suspension($1)`, [SHOP]), 'forbidden')
+        const [{ r }] = await asUser<{ r: { merchantId: string; failed: number; suspended: boolean }[] }>(staffUser, `select public.merchant_cancel_rates() r`)
+        expect(r.find((x) => x.merchantId === SHOP)).toMatchObject({ failed: expect.any(Number), suspended: true })
+        await asUser(staffUser, `select public.lift_suspension($1)`, [SHOP])
+        await asUser(seller, `select public.resume_listing($1)`, [last])
+        expect(await admin(`select status from public.listings where id = $1`, [last])).toEqual([{ status: 'for_sale' }])
+      })
+
+      it('cancels an order confirmed but never made ready', async () => {
+        const shopper = await newUser('check-ready@example.com')
+        await asUser(shopper, `select public.top_up(5000000)`)
+        const [{ id: listing }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [{ title: 'Never ready', description: '', category: 'Home', priceKobo: 500_000, stock: 2 }])
+        await asUser(staffUser, `select public.approve_listing($1)`, [listing])
+        const [{ ids }] = await asUser<{ ids: string[] }>(shopper, `select public.checkout($1) ids`, [{ listingIds: [listing], fulfilment: 'delivery', address: '15 Awolowo Road, Ikoyi', phone: '0803 123 4567', lat: 6.45, lng: 3.43 }])
+        await asUser(seller, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [ids[0]])
+        await admin(`select private.process_deadlines()`)
+        expect(await seen(shopper, ids[0])).toEqual([{ status: 'paid', cancel_reason: null }])
+        await admin(`update public.orders set ready_by = now() - interval '1 minute' where id = $1`, [ids[0]])
+        await admin(`select private.process_deadlines()`)
+        expect(await seen(shopper, ids[0])).toEqual([{ status: 'cancelled', cancel_reason: 'not_sent' }])
+        expect(await admin(`select status, stock from public.listings where id = $1`, [listing])).toEqual([{ status: 'paused', stock: 2 }])
+      })
     })
 
     it('can’t be delivered before it’s dispatched', async () => {
@@ -1910,6 +2020,7 @@ describe('cart and checkout', () => {
     it('pauses after too many wrong PINs, and keeps the count even though nothing is raised', async () => {
       const { b, id } = await readyOrder('pin4@example.com')
       await asUser(rider, `select public.take_delivery($1)`, [id])
+      await asUser(rider, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
       const pin = (await pinsOf(b))[id]
       const wrong = pin === '000000' ? '111111' : '000000'
       await expectFail(tryPin(rider, id, '12'), 'invalid_input')
@@ -1923,6 +2034,7 @@ describe('cart and checkout', () => {
       // Handing it to another rider doesn't reset the count.
       await asUser(rider, `select public.release_delivery($1)`, [id])
       await asUser(otherRider, `select public.take_delivery($1)`, [id])
+      await asUser(otherRider, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
       expect(await tryPin(otherRider, id, pin)).toMatchObject({ confirmed: false })
 
       await admin(`update private.order_pins set locked_until = now() - interval '1 minute' where order_id = $1`, [id])

@@ -19,7 +19,7 @@ import { DEFAULT_PUSH_PREFERENCES } from '@/domain/push'
 import { ORDER_ERROR_TEXT, clampQuantity } from '@/domain/orders'
 import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication } from '@/domain/sellers'
 import type { DeliveryArea } from '@/domain/deliveryFees'
-import type { CancelReason, Category, Kobo, PackageSize, Fulfilment, PickupPoint, FeeMode, Handover, LedgerEntry, LedgerKind, ListingKind, ListingStatus, Merchant, OrderStatus, RejectionReason, UnsoldPolicy, User } from '@/domain/types'
+import type { CollectionProblem, CancelReason, Category, Kobo, PackageSize, Fulfilment, PickupPoint, FeeMode, Handover, LedgerEntry, LedgerKind, ListingKind, ListingStatus, Merchant, OrderStatus, RejectionReason, UnsoldPolicy, User } from '@/domain/types'
 import { DEMO_ACCOUNTS } from './demoAccounts'
 import {
   type AccountRole,
@@ -66,6 +66,7 @@ interface MerchantRow {
   cac_number: string
   verified: boolean
   delivery_area: string | null
+  suspended_at: string | null
 }
 
 interface HandoverRow {
@@ -206,6 +207,13 @@ interface OrderRow {
   confirm_by: string | null
   confirmed_at: string | null
   confirm_photo: string | null
+  ready_by: string | null
+  collected_at: string | null
+  collection_photos: string[] | null
+  collection_problems: CollectionProblem[] | null
+  refusal_photo: string | null
+  return_state: 'returning' | 'returned' | null
+  returned_at: string | null
   delivery_fee_kobo: number
   cancelled_at: string | null
   cancel_reason: CancelReason | null
@@ -277,7 +285,7 @@ const num = (v: number | string | null | undefined) => Number(v ?? 0)
 const toPoint = (lat: number | null, lng: number | null) => (lat === null || lng === null ? null : { lat, lng })
 
 function toMerchant(m: MerchantRow): Merchant {
-  return { id: m.id, kind: m.kind, name: m.name, area: m.area, deliveryArea: m.delivery_area, cacNumber: m.cac_number, verified: m.verified }
+  return { id: m.id, kind: m.kind, name: m.name, area: m.area, deliveryArea: m.delivery_area, suspendedAt: m.suspended_at, cacNumber: m.cac_number, verified: m.verified }
 }
 
 function toUser(p: ProfileRow): User {
@@ -395,6 +403,13 @@ function toOrderView(o: OrderRow): OrderView {
     confirmBy: o.confirm_by,
     confirmedAt: o.confirmed_at,
     confirmPhoto: o.confirm_photo,
+    readyBy: o.ready_by,
+    collectedAt: o.collected_at,
+    collectionPhotos: o.collection_photos,
+    collectionProblems: o.collection_problems,
+    refusalPhoto: o.refusal_photo,
+    returnState: o.return_state,
+    returnedAt: o.returned_at,
     deliveryFeeKobo: num(o.delivery_fee_kobo),
     cancelledAt: o.cancelled_at,
     cancelReason: o.cancel_reason,
@@ -1076,6 +1091,21 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     setDeliveryPrice: (areaA, areaB, priceKobo) => rpc('set_delivery_price', { p_area_a: areaA, p_area_b: areaB, p_price_kobo: priceKobo }),
     setDeliverySizeExtra: (size, extraKobo) => rpc('set_delivery_size_extra', { p_size: size, p_extra_kobo: extraKobo }),
     setShopDeliveryArea: (area) => rpc('set_shop_delivery_area', { p_area: area }),
+    passCollection: async (orderId, photos) => {
+      await rpc('pass_collection', { p_order_id: orderId, p_photos: await uploadPhotos(`riders/${await requireId()}`, photos) })
+    },
+    failCollection: async (orderId, problems, note, photos) => {
+      await rpc('fail_collection', { p_order_id: orderId, p_problems: problems, p_note: note, p_photos: await uploadPhotos(`riders/${await requireId()}`, photos) })
+    },
+    refuseDelivery: async (orderId, pin, reason, note, photo) => {
+      const [url] = await uploadPhotos(`riders/${await requireId()}`, [photo])
+      return rpc<PinResult>('refuse_delivery', { p_order_id: orderId, p_pin: pin, p_reason: reason, p_note: note, p_photo: url })
+    },
+    completeReturn: async (orderId, photo) => {
+      const [url] = await uploadPhotos(`riders/${await requireId()}`, [photo])
+      await rpc('complete_return', { p_order_id: orderId, p_photo: url })
+    },
+    liftSuspension: (merchantId) => rpc('lift_suspension', { p_merchant_id: merchantId }),
     sellerConfirmOrder: async (orderId, photo) => {
       const [url] = await uploadPhotos(await myMerchantId(), [photo])
       await rpc('seller_confirm_order', { p_order_id: orderId, p_photo: url })

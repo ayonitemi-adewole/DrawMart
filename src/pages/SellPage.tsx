@@ -2,7 +2,7 @@ import { useRef, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router'
 import { useMe, useMerchant, useMerchantListings, useMySellerApplication, useSubmitSellerApplication } from '@/api/hooks'
 import type { SellerApplicationView } from '@/api/types'
-import { CameraIcon, ChartIcon, CheckIcon, ClockIcon, IdCardIcon, LayoutIcon, PlusIcon, ShieldIcon, StoreIcon, TruckIcon, XIcon, type IconComponent } from '@/components/icons'
+import { AlertIcon, CameraIcon, ChartIcon, CheckIcon, ClockIcon, IdCardIcon, LayoutIcon, PlusIcon, ShieldIcon, StoreIcon, TruckIcon, XIcon, type IconComponent } from '@/components/icons'
 import { useToast } from '@/components/toast'
 import { Badge, Button, Card, ErrorState, Field, Notice, PageTitle, Segmented, Skeleton, cx, errorMessage, inputCls } from '@/components/ui'
 import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication, type SellerApplicationError, type SellerApplicationInput } from '@/domain/sellers'
@@ -314,6 +314,11 @@ function SellerDashboard() {
         </span>
       </PageTitle>
       <PushPrompt seller />
+      {shop.data?.suspendedAt ? (
+        <Notice tone="hot" icon={AlertIcon} title="Your shop is suspended">
+          Too many orders have failed a check or been refused, so your products are paused and you can’t list new ones. Orders already placed still need sending. Contact DrawMart to sort this out.
+        </Notice>
+      ) : null}
       <Segmented<SellTab>
         label="Section"
         value={tab}

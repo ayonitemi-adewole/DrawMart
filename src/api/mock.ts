@@ -33,7 +33,8 @@ import {
 import { nairaToKobo } from '@/domain/money'
 import { canChangeInReview, withdrawalFees } from '@/domain/listingActions'
 import { checkoutDeliveryFees, deliveryPriceError, placeholderPricing, sizeExtraError, type DeliveryPricing } from '@/domain/deliveryFees'
-import { confirmDeadline, confirmOverdue, confirmReminderDue, needsConfirming } from '@/domain/orderConfirm'
+import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO, REFUSAL_REASONS, SUSPEND_AFTER_FAILURES, collectionFailError, photosError } from '@/domain/deliveryChecks'
+import { CONFIRM_HOURS, addConfirmTime, confirmDeadline, confirmOverdue, confirmReminderDue, needsConfirming } from '@/domain/orderConfirm'
 import { canCancelOrder, cancelError, stockAfterCancel } from '@/domain/orderCancel'
 import { canControlProduct, repriceNeedsReview, statusAfterStock, stockChangeError } from '@/domain/productControls'
 import { closingReminderSent, pickupReminderDue } from '@/domain/storeNotifications'
@@ -89,7 +90,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v38' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v39' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -757,6 +758,22 @@ function refundBuyers(db: Db, l: Listing, at: string) {
  * Deadlines: extend once if the listing allows it; otherwise refund every
  * buyer, then either close the listing or keep it on as a regular product.
  */
+/** deliveryChecks.ts: the seller's charge, the buyer's apology, and suspension if it keeps happening. */
+function penaliseSeller(db: Db, o: MockOrder, nowMs: number) {
+  const at = iso(nowMs)
+  db.payouts.push({ id: uid('Y'), merchantId: o.merchantId, listingId: o.listingId, orderId: o.id, kind: 'charge', amountKobo: -FAILURE_CHARGE_KOBO, status: 'due', createdAt: at, dueAt: at, paidAt: null, reference: null, paidTo: null })
+  db.ledger.push({ id: uid('E'), userId: o.buyerId, kind: 'store_credit', cashKobo: 0, creditKobo: APOLOGY_CREDIT_KOBO, memo: 'Sorry about your order', listingId: o.listingId, createdAt: at })
+  notifyShop(db, o.merchantId, 'store_order_failed', o.listingId, at)
+  const since = iso(nowMs - 30 * DAY)
+  const failures = db.orders.filter((x) => x.merchantId === o.merchantId && (x.cancelReason === 'failed_check' || x.cancelReason === 'refused_wrong' || x.cancelReason === 'refused_damaged') && x.cancelledAt! >= since)
+  const shop = db.merchants.find((m) => m.id === o.merchantId)!
+  if (failures.length >= SUSPEND_AFTER_FAILURES && !shop.suspendedAt) {
+    shop.suspendedAt = at
+    for (const l of db.listings) if (l.merchantId === shop.id && l.kind === 'product' && l.status === 'for_sale') l.status = 'paused'
+    notifyShop(db, shop.id, 'store_suspended', null, at)
+  }
+}
+
 /** Refunds the buyer and puts the stock right, for whoever has been allowed to cancel. */
 function cancelOrderNow(db: Db, o: MockOrder, reason: CancelReason, note: string, nowMs: number) {
   const l = db.listings.find((x) => x.id === o.listingId)!
@@ -816,6 +833,9 @@ function processDeadlines(db: Db, now: number): boolean {
   for (const o of db.orders) {
     if (confirmOverdue(o, now)) {
       cancelOrderNow(db, o, 'not_confirmed', '', now)
+      notifyShop(db, o.merchantId, 'store_order_expired', o.listingId, iso(now))
+    } else if (o.status === 'paid' && o.readyBy && Date.parse(o.readyBy) <= now) {
+      cancelOrderNow(db, o, 'not_sent', '', now)
       notifyShop(db, o.merchantId, 'store_order_expired', o.listingId, iso(now))
     } else if (!o.confirmRemindedAt && confirmReminderDue(o, now)) {
       o.confirmRemindedAt = iso(now)
@@ -1113,6 +1133,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
   async function addRaffle(db: Db, input: NewListingInput): Promise<Listing> {
     if (readSession()?.role === 'buyer') throw new ApiError('forbidden', 'Only registered stores can run raffle draws.')
+    if (db.merchants.find((m) => m.id === shopId(db))?.suspendedAt) throw new ApiError('forbidden', 'Your shop is suspended. Contact DrawMart.')
     const problems = raffleProblems(input)
     if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
     // DrawMart sets the fee from the item's value; the store never chooses it.
@@ -1513,6 +1534,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
             pin: newDeliveryPin(), riderId: null, pinState: { attempts: 0, lockedUntil: null }, paidCashKobo: paid.fromCash, paidCreditKobo: paid.fromCredit, paidFeeCashKobo: paidFee.fromCash, paidFeeCreditKobo: paidFee.fromCredit, checkoutId, deliveryFeeKobo,
             cancelledAt: null, cancelReason: null, cancelNote: null, confirmRemindedAt: null,
             confirmBy: prize ? null : confirmDeadline(now()), confirmedAt: null, confirmPhoto: null,
+            readyBy: null, collectedAt: null, collectionPhotos: null, collectionProblems: null, refusalPhoto: null, returnState: null, returnedAt: null,
             id: uid('O'), listingId: l.id, buyerId: buyer(), merchantId: l.merchantId, quantity, priceKobo: price, feeKobo: prize ? 0 : saleEconomics(price, l.feeBps).feeKobo,
             delivery: pickup ? { address: '', location: null, contactPhone: details.delivery.contactPhone.trim() } : { address: details.delivery.address.trim(), location: details.delivery.location, contactPhone: details.delivery.contactPhone.trim() },
             fulfilment: details.fulfilment, pickupPoint, isPrize: prize, handledBy: prize && !isCar(l) ? 'drawmart' : 'store',
@@ -1533,14 +1555,14 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       tx((db): DeliveryJob[] => {
         const me = rider()
         return db.orders
-          .filter((o) => (o.status === 'dispatched' && !o.riderId) || o.riderId === me)
+          .filter((o) => (o.status === 'dispatched' && !o.riderId) || (o.riderId === me && (o.status === 'dispatched' || o.status === 'delivered' || o.returnState === 'returning')))
           .sort((a, b) => (b.deliveredAt ?? '9').localeCompare(a.deliveredAt ?? '9') || (a.dispatchedAt ?? '').localeCompare(b.dispatchedAt ?? ''))
           .map((o) => {
             const l = db.listings.find((x) => x.id === o.listingId)!
             const merchant = db.merchants.find((m) => m.id === o.merchantId)!
-            const carrying = o.riderId === me && o.status === 'dispatched'
+            const carrying = o.riderId === me && o.status === 'dispatched' && !!o.collectedAt
             return {
-              id: o.id, quantity: o.quantity, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, fulfilment: o.fulfilment, status: o.status,
+              id: o.id, quantity: o.quantity, confirmPhoto: o.confirmPhoto, collected: !!o.collectedAt, returning: o.returnState === 'returning', productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, fulfilment: o.fulfilment, status: o.status,
               dispatchedAt: o.dispatchedAt, deliveredAt: o.deliveredAt, mine: !!o.riderId,
               collectFrom: o.handledBy === 'drawmart' ? { name: 'DrawMart escrow', area: 'Lagos' } : { name: merchant.name, area: merchant.area },
               pickupPoint: o.pickupPoint,
@@ -1556,6 +1578,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const o = db.orders.find((x) => x.id === orderId && x.status === 'dispatched' && !x.riderId)
         if (!o) throw new ApiError('invalid_input', 'Another rider has taken this delivery.')
         o.riderId = me
+        o.collectedAt = o.isPrize ? iso(now()) : null
       }),
 
     releaseDelivery: (orderId) =>
@@ -1564,12 +1587,14 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const o = db.orders.find((x) => x.id === orderId && x.status === 'dispatched' && x.riderId === me)
         if (!o) throw new ApiError('invalid_input', 'Only deliveries you’re carrying can be handed back.')
         o.riderId = null
+        o.collectedAt = null
+        o.collectionPhotos = null
       }),
 
     confirmDelivery: (orderId, pin) =>
       tx((db) => {
         const me = rider()
-        const o = db.orders.find((x) => x.id === orderId && x.status === 'dispatched' && x.riderId === me)
+        const o = db.orders.find((x) => x.id === orderId && x.status === 'dispatched' && x.riderId === me && x.collectedAt)
         if (!o) throw new ApiError('invalid_input', 'Only deliveries you’re carrying can be confirmed.')
         if (!isDeliveryPin(pin)) throw new ApiError('invalid_input', 'Enter the buyer’s 6-digit PIN.')
         const { result, state } = checkPin(o.pin, pin, o.pinState, now())
@@ -1724,6 +1749,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     resumeListing: (id) =>
       tx((db) => {
         const l = ownListing(db, id)
+        if (db.merchants.find((m) => m.id === l.merchantId)?.suspendedAt) throw new ApiError('forbidden', 'Your shop is suspended. Contact DrawMart.')
         if (l.status !== 'paused') throw new ApiError('invalid_input', 'Only paused products can be resumed.')
         l.status = l.stock > 0 ? 'for_sale' : 'sold'
       }),
@@ -1785,6 +1811,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     createProduct: (input: NewProductInput) =>
       tx((db) => {
+        if (db.merchants.find((m) => m.id === shopId(db))?.suspendedAt) throw new ApiError('forbidden', 'Your shop is suspended. Contact DrawMart.')
         const problems = validateProduct(input).map((e) => PRODUCT_ERROR_TEXT[e])
         if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
         const listing = productListing({ ...input, merchantId: shopId(db), status: 'pending_review' }, now())
@@ -1872,6 +1899,70 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         db.merchants.find((m) => m.id === shopId(db))!.deliveryArea = area
       }),
 
+    passCollection: (orderId, photos) =>
+      tx((db) => {
+        const problem = photosError(photos)
+        if (problem) throw new ApiError('invalid_input', problem)
+        const me = rider()
+        const o = db.orders.find((x) => x.id === orderId && x.riderId === me && x.status === 'dispatched' && !x.collectedAt)
+        if (!o) throw new ApiError('invalid_input', 'Only deliveries you’re about to collect can be checked.')
+        o.collectedAt = iso(now())
+        o.collectionPhotos = photos
+      }),
+
+    failCollection: (orderId, problems, note, photos) =>
+      tx((db) => {
+        const me = rider()
+        const o = db.orders.find((x) => x.id === orderId && x.riderId === me && x.status === 'dispatched' && !x.collectedAt)
+        if (!o) throw new ApiError('invalid_input', 'Only deliveries you’re about to collect can be checked.')
+        if (o.isPrize) throw new ApiError('invalid_input', 'Won items aren’t checked here. Contact DrawMart.')
+        const problem = collectionFailError(problems, photos)
+        if (problem) throw new ApiError('invalid_input', problem)
+        cancelOrderNow(db, o, 'failed_check', note, now())
+        o.collectionProblems = problems
+        o.collectionPhotos = photos
+        penaliseSeller(db, o, now())
+      }),
+
+    refuseDelivery: (orderId, pin, reason, note, photo) =>
+      tx((db) => {
+        const me = rider()
+        const o = db.orders.find((x) => x.id === orderId && x.status === 'dispatched' && x.riderId === me && x.collectedAt)
+        if (!o) throw new ApiError('invalid_input', 'Only deliveries you’re carrying can be refused.')
+        if (o.isPrize) throw new ApiError('invalid_input', 'Won items can’t be refused here. Contact DrawMart.')
+        if (!REFUSAL_REASONS.includes(reason)) throw new ApiError('invalid_input', 'Pick why it’s being refused.')
+        if (!isDeliveryPin(pin)) throw new ApiError('invalid_input', 'Enter the buyer’s 6-digit PIN.')
+        const problem = photosError([photo])
+        if (problem) throw new ApiError('invalid_input', problem)
+        const { result, state } = checkPin(o.pin, pin, o.pinState, now())
+        o.pinState = state
+        if (result.confirmed) {
+          cancelOrderNow(db, o, reason, note, now())
+          o.refusalPhoto = photo
+          o.returnState = 'returning'
+          penaliseSeller(db, o, now())
+        }
+        return result
+      }),
+
+    completeReturn: (orderId, photo) =>
+      tx((db) => {
+        const problem = photosError([photo])
+        if (problem) throw new ApiError('invalid_input', problem)
+        const me = rider()
+        const o = db.orders.find((x) => x.id === orderId && x.riderId === me && x.returnState === 'returning')
+        if (!o) throw new ApiError('invalid_input', 'Only items you’re taking back can be returned.')
+        o.returnState = 'returned'
+        o.returnedAt = iso(now())
+      }),
+
+    liftSuspension: (merchantId) =>
+      tx((db) => {
+        const shop = db.merchants.find((m) => m.id === merchantId)
+        if (!shop?.suspendedAt) throw new ApiError('invalid_input', 'This seller isn’t suspended.')
+        shop.suspendedAt = null
+      }),
+
     sellerConfirmOrder: (orderId, photo) =>
       tx((db) => {
         const o = db.orders.find((x) => x.id === orderId && x.handledBy === 'store' && x.merchantId === shopId(db))
@@ -1880,6 +1971,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (!/^(https:\/\/|\/assets\/|data:image\/)/.test(photo)) throw new ApiError('invalid_input', 'Add a photo of the item.')
         o.confirmedAt = iso(now())
         o.confirmPhoto = photo
+        o.readyBy ??= new Date(addConfirmTime(now(), CONFIRM_HOURS)).toISOString()
       }),
 
     cancelOrder: (orderId, reason, note) =>
@@ -1899,7 +1991,8 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const recent = db.orders.filter((o) => !o.isPrize && o.createdAt >= since)
         return db.merchants.flatMap((m) => {
           const mine = recent.filter((o) => o.merchantId === m.id)
-          return mine.length ? [{ merchantId: m.id, merchantName: m.name, orders: mine.length, cancelled: mine.filter((o) => o.status === 'cancelled').length }] : []
+          const failed = mine.filter((o) => o.cancelReason === 'failed_check' || o.cancelReason === 'refused_wrong' || o.cancelReason === 'refused_damaged').length
+          return mine.length || m.suspendedAt ? [{ merchantId: m.id, merchantName: m.name, orders: mine.length, cancelled: mine.filter((o) => o.status === 'cancelled').length, failed, suspended: !!m.suspendedAt }] : []
         })
       }),
 
@@ -2133,6 +2226,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       tx((db) => {
         const l = getListingOr404(db, id)
         if (l.status !== 'pending_review') throw new ApiError('invalid_input', 'Only listings in review can be approved.')
+        if (db.merchants.find((m) => m.id === l.merchantId)?.suspendedAt) throw new ApiError('invalid_input', 'This seller is suspended. Lift it first.')
         if (revision !== undefined && revision !== (l.revision ?? 0)) throw new ApiError('invalid_input', 'The store just changed this listing. Check it again.')
         l.wasRejected = false
         l.reviewedPriceKobo = l.priceKobo

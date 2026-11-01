@@ -20,6 +20,8 @@ import type { SellerApplicationInput, SellerApplicationStatus } from '@/domain/s
 import type {
   CancelReason,
   Category,
+  CollectionProblem,
+  RefusalReason,
   PackageSize,
   RejectionReason,
   DrawResult,
@@ -157,6 +159,12 @@ export interface DeliveryJob {
   productCode: string
   listingTitle: string
   quantity: number
+  /** The seller's photo, to compare with what's handed over. */
+  confirmPhoto: string | null
+  /** The rider has checked it and left with it. Won items count from the moment they're taken. */
+  collected: boolean
+  /** Refused at the door: going back to the seller. */
+  returning: boolean
   listingImage: string | null
   category: Category
   fulfilment: Fulfilment
@@ -167,7 +175,7 @@ export interface DeliveryJob {
   mine: boolean
   collectFrom: { name: string; area: string }
   pickupPoint: PickupPoint | null
-  /** Only for the rider carrying it. Never in the pool, and gone once delivered. */
+  /** Only for the rider carrying it, once it's passed the check. Never in the pool, and gone once delivered. */
   dropOff: { buyerName: string; address: string; location: GeoPoint | null; contactPhone: string } | null
   pinLockedUntil: string | null
 }
@@ -367,6 +375,9 @@ export interface CancelRateView {
   merchantName: string
   orders: number
   cancelled: number
+  /** Of those, failed checks and refusals. */
+  failed: number
+  suspended: boolean
 }
 
 export interface PriceReviewView {
@@ -607,6 +618,15 @@ export interface DrawMartApi {
   sellerConfirmOrder(orderId: string, photo: string): Promise<void>
   /** Before it's ready for a rider. The buyer is refunded straight away, the way they paid. */
   cancelOrder(orderId: string, reason: CancelReason, note: string): Promise<void>
+  /** The rider's check at the seller passed. */
+  passCollection(orderId: string, photos: string[]): Promise<void>
+  /** It didn't: the buyer is refunded with a small credit, and the seller is charged. */
+  failCollection(orderId: string, problems: CollectionProblem[], note: string, photos: string[]): Promise<void>
+  /** The buyer refused it at the door. Needs their PIN, so a rider can't claim it alone. */
+  refuseDelivery(orderId: string, pin: string, reason: RefusalReason, note: string, photo: string): Promise<PinResult>
+  /** A refused item is back with the seller. */
+  completeReturn(orderId: string, photo: string): Promise<void>
+  liftSuspension(merchantId: string): Promise<void>
   /** What delivery costs, for checkout and the admin page. Public, since it's only prices. */
   getDeliveryPricing(): Promise<DeliveryPricing>
   setDeliveryPrice(areaA: string, areaB: string, priceKobo: Kobo): Promise<void>

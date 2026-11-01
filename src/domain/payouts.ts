@@ -9,7 +9,7 @@ import { computeListingEconomics } from './fees'
 import { lagosDay } from './metrics'
 import type { Kobo, Listing, Order } from './types'
 
-export type PayoutKind = 'sale' | 'draw' | 'caution_fee'
+export type PayoutKind = 'sale' | 'draw' | 'caution_fee' | 'charge'
 export type PayoutStatus = 'waiting' | 'due' | 'paid'
 
 export interface PayoutLine {
@@ -46,7 +46,7 @@ export interface PayoutAccount {
 export const PAYOUT_ACCOUNT_HOLD_HOURS = 48
 export const MIN_REFERENCE_LENGTH = 3
 
-export const PAYOUT_KIND_TEXT: Record<PayoutKind, string> = { sale: 'Sale', draw: 'Draw payout', caution_fee: 'Caution fee back' }
+export const PAYOUT_KIND_TEXT: Record<PayoutKind, string> = { charge: 'Charge for a failed order', sale: 'Sale', draw: 'Draw payout', caution_fee: 'Caution fee back' }
 export const PAYOUT_STATUS_TEXT: Record<PayoutStatus, string> = { waiting: 'Waiting for delivery', due: 'Due', paid: 'Paid' }
 
 export function accountNumberError(accountNumber: string): string | null {
@@ -114,9 +114,10 @@ export function payoutTotals(lines: readonly Pick<PayoutLine, 'status' | 'amount
 }
 
 /** A problem with paying these lines, or null if they can go. */
-export function markPaidError(lines: readonly Pick<PayoutLine, 'status'>[], account: Pick<PayoutAccount, 'confirmedAt' | 'payableFrom'> | null, reference: string, nowMs: number): string | null {
+export function markPaidError(lines: readonly (Pick<PayoutLine, 'status'> & { amountKobo?: Kobo })[], account: Pick<PayoutAccount, 'confirmedAt' | 'payableFrom'> | null, reference: string, nowMs: number): string | null {
   if (!lines.length) return 'Pick something to pay.'
   if (lines.some((l) => l.status !== 'due')) return 'Only payouts that are due can be marked paid.'
+  if (lines.some((l) => l.amountKobo !== undefined) && lines.reduce((sum, l) => sum + (l.amountKobo ?? 0), 0) <= 0) return 'This seller’s charges are more than what’s due, so there’s nothing to send yet.'
   if (!account) return 'This seller hasn’t added a bank account yet.'
   if (!accountPayable(account, nowMs)) return 'This seller changed their bank account recently, so payouts are on hold.'
   if (reference.trim().length < MIN_REFERENCE_LENGTH) return 'Enter the transfer’s reference.'

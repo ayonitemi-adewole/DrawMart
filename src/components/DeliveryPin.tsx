@@ -11,7 +11,7 @@ export function DeliveryPin({ pin, pickup, title, className }: { pin: string; pi
       </span>
       <span className="font-mono text-3xl font-extrabold tracking-[0.25em] tabular-nums">{pin}</span>
       <span className="text-xs text-muted">
-        {pickup ? 'Give this to the counter staff when you collect.' : 'Only give this to the rider once you have the item.'} It’s how we know it reached you, so don’t share it before then.
+        {pickup ? 'Give this to the counter staff when you collect.' : 'Open it and check it first. Only give this to the rider once you’re happy, or to refuse it if it’s wrong or damaged.'} It’s how we know it reached you, so don’t share it before then.
       </span>
     </div>
   )

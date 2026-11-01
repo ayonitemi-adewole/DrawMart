@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
-import type { CancelReason, Kobo, PackageSize, RejectionReason } from '@/domain/types'
+import type { CancelReason, CollectionProblem, Kobo, PackageSize, RefusalReason, RejectionReason } from '@/domain/types'
 import { api } from './index'
 import type { MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput } from '@/domain/sellers'
@@ -365,6 +365,10 @@ export function useDeliveryActions() {
     take: useMutation({ mutationFn: (orderId: string) => api.takeDelivery(orderId), onSettled: invalidate }),
     release: useMutation({ mutationFn: (orderId: string) => api.releaseDelivery(orderId), onSettled: invalidate }),
     confirm: useMutation({ mutationFn: ({ id, pin }: { id: string; pin: string }) => api.confirmDelivery(id, pin), onSettled: invalidate }),
+    pass: useMutation({ mutationFn: ({ id, photos }: { id: string; photos: string[] }) => api.passCollection(id, photos), onSettled: invalidate }),
+    fail: useMutation({ mutationFn: ({ id, problems, note, photos }: { id: string; problems: CollectionProblem[]; note: string; photos: string[] }) => api.failCollection(id, problems, note, photos), onSettled: invalidate }),
+    refuse: useMutation({ mutationFn: ({ id, pin, reason, note, photo }: { id: string; pin: string; reason: RefusalReason; note: string; photo: string }) => api.refuseDelivery(id, pin, reason, note, photo), onSettled: invalidate }),
+    finishReturn: useMutation({ mutationFn: ({ id, photo }: { id: string; photo: string }) => api.completeReturn(id, photo), onSettled: invalidate }),
   }
 }
 
@@ -392,6 +396,11 @@ export function useSetShopDeliveryArea() {
 export function useSellerConfirmOrder() {
   const invalidate = useInvalidateAll()
   return useMutation({ mutationFn: ({ id, photo }: { id: string; photo: string }) => api.sellerConfirmOrder(id, photo), onSettled: invalidate })
+}
+
+export function useLiftSuspension() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: (merchantId: string) => api.liftSuspension(merchantId), onSettled: invalidate })
 }
 
 export function useCancelOrder() {

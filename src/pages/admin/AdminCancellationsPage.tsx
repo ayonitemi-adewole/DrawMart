@@ -1,12 +1,16 @@
-import { useCancelRates } from '@/api/hooks'
+import { useCancelRates, useLiftSuspension } from '@/api/hooks'
+import { useToast } from '@/components/toast'
 import { CheckIcon } from '@/components/icons'
-import { Badge, Card, EmptyState, ErrorState, PageTitle, Skeleton } from '@/components/ui'
+import { Badge, Button, Card, EmptyState, ErrorState, PageTitle, Skeleton, errorMessage } from '@/components/ui'
 import { CANCEL_FLAG_MIN, CANCEL_FLAG_PERCENT, cancelRateFlagged } from '@/domain/orderCancel'
 
 /** /admin/cancellations: frequent cancellations hurt buyers, so sellers above the line get a follow-up. */
 export function AdminCancellationsPage() {
   const q = useCancelRates()
-  const rows = (q.data ?? []).filter((r) => r.cancelled > 0).sort((a, b) => b.cancelled / b.orders - a.cancelled / a.orders)
+  const lift = useLiftSuspension()
+  const toast = useToast()
+  const share = (r: { orders: number; cancelled: number }) => (r.orders ? r.cancelled / r.orders : 0)
+  const rows = (q.data ?? []).filter((r) => r.cancelled > 0 || r.suspended).sort((a, b) => Number(b.suspended) - Number(a.suspended) || share(b) - share(a))
 
   return (
     <div className="flex flex-col gap-6">
@@ -26,10 +30,18 @@ export function AdminCancellationsPage() {
               <div className="flex min-w-0 flex-col gap-0.5">
                 <strong className="truncate">{r.merchantName}</strong>
                 <span className="text-muted">
-                  {r.cancelled} of {r.orders} {r.orders === 1 ? 'order' : 'orders'} cancelled ({Math.round((r.cancelled / r.orders) * 100)}%)
+                  {r.cancelled} of {r.orders} {r.orders === 1 ? 'order' : 'orders'} cancelled ({Math.round(share(r) * 100)}%){r.failed ? `, ${r.failed} failed a check or refused` : ''}
                 </span>
               </div>
-              {cancelRateFlagged(r.orders, r.cancelled) ? <Badge tone="hot">Needs a follow-up</Badge> : null}
+              <div className="flex flex-wrap items-center gap-2">
+                {cancelRateFlagged(r.orders, r.cancelled) ? <Badge tone="hot">Needs a follow-up</Badge> : null}
+                {r.suspended ? <Badge tone="hot">Suspended</Badge> : null}
+                {r.suspended ? (
+                  <Button variant="outline" size="sm" className="min-h-11" loading={lift.isPending} onClick={() => lift.mutate(r.merchantId, { onSuccess: () => toast('Suspension lifted. They can resume their products.'), onError: (e) => toast(errorMessage(e), 'error') })}>
+                    Lift suspension
+                  </Button>
+                ) : null}
+              </div>
             </div>
           ))}
         </Card>

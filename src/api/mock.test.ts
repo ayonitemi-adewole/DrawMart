@@ -1,3 +1,4 @@
+import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO } from '@/domain/deliveryChecks'
 import { areaPairPrice, deliveryFeeKobo, placeholderPricing } from '@/domain/deliveryFees'
 import { isProductCode } from '@/domain/productCode'
 import { describe, expect, it } from 'vitest'
@@ -556,6 +557,7 @@ describe('mock api', () => {
     await seller()
     await expect(api.sellerConfirmOrder(onTime.id, 'nonsense')).rejects.toThrow('Add a photo')
     await api.sellerConfirmOrder(onTime.id, '/assets/confirm.jpg')
+    await api.dispatchOrder(onTime.id)
     const kinds = async () => (await api.listNotifications()).filter((n) => n.listingId === p.id).map((n) => n.kind)
     t += 9.5 * 3_600_000
     expect(await kinds()).toContain('store_order_confirm_soon')
@@ -565,13 +567,128 @@ describe('mock api', () => {
     t += 3 * 3_600_000
     expect(await kinds()).toContain('store_order_expired')
     expect((await api.getListing(p.id))).toMatchObject({ status: 'paused', stock: 1 })
-    expect((await api.listMerchantOrders()).find((o) => o.id === onTime.id)).toMatchObject({ status: 'paid', confirmPhoto: '/assets/confirm.jpg' })
+    expect((await api.listMerchantOrders()).find((o) => o.id === onTime.id)).toMatchObject({ status: 'dispatched', confirmPhoto: '/assets/confirm.jpg' })
     await api.resumeListing(p.id)
 
     await shopper()
     expect((await api.listMyOrders()).find((o) => o.id === late.id)).toMatchObject({ status: 'cancelled', cancelReason: 'not_confirmed', deliveryPin: null })
     // Everything back but the confirmed order's item and the one delivery fee it still needs.
     expect((await api.getWallet()).balance.cashKobo).toBe(start - k(5_000) - onTime.deliveryFeeKobo)
+  })
+
+  describe('rider and door checks', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+    /** An order with a rider on it. Leaves the rider signed in. */
+    const riding = async (api: ReturnType<typeof make>, stock = 2) => {
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Checked lamp', description: '', category: 'Home', priceKobo: k(10_000), stock })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const before = (await api.getWallet()).balance
+      const [order] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await as(api, 'store')
+      await api.sellerConfirmOrder(order.id, '/assets/confirm.jpg')
+      await api.dispatchOrder(order.id)
+      await as(api, 'rider')
+      await api.takeDelivery(order.id)
+      return { p, order, before }
+    }
+
+    it('refunds and credits the buyer, charges the seller, and hides the buyer when a check fails', async () => {
+      const api = make()
+      const { p, order, before } = await riding(api)
+      const job = (await api.listDeliveryJobs()).find((j) => j.id === order.id)!
+      expect(job.confirmPhoto).toBe('/assets/confirm.jpg')
+      expect(job.dropOff).toBeNull()
+
+      await expect(api.failCollection(order.id, [], '', ['/assets/check.jpg'])).rejects.toThrow('Pick')
+      await expect(api.failCollection(order.id, ['damaged'], '', [])).rejects.toThrow('photos')
+      await api.failCollection(order.id, ['damaged'], 'Cracked base', ['/assets/check.jpg'])
+      expect((await api.listDeliveryJobs()).some((j) => j.id === order.id)).toBe(false)
+
+      await as(api, 'funke')
+      const after = (await api.getWallet()).balance
+      expect(after.cashKobo).toBe(before.cashKobo)
+      expect(after.creditKobo).toBe(before.creditKobo + APOLOGY_CREDIT_KOBO)
+      expect((await api.listMyOrders()).find((o) => o.id === order.id)).toMatchObject({ status: 'cancelled', cancelReason: 'failed_check', collectionProblems: ['damaged'], deliveryPin: null })
+
+      await as(api, 'store')
+      const lines = (await api.listPayouts()).filter((l) => l.orderId === order.id)
+      expect(lines.map((l) => [l.kind, l.status, l.amountKobo])).toEqual([['charge', 'due', -FAILURE_CHARGE_KOBO]])
+      expect((await api.listNotifications()).map((n) => n.kind)).toContain('store_order_failed')
+      expect((await api.getListing(p.id)).stock).toBe(1) // that one doesn't go back
+    })
+
+    it('lets the buyer refuse at the door with their PIN only, and sends it back', async () => {
+      const api = make()
+      const { order, before } = await riding(api)
+      await api.passCollection(order.id, ['/assets/check.jpg'])
+      const pin = order.deliveryPin!
+      const wrong = pin === '000000' ? '111111' : '000000'
+      await expect(api.refuseDelivery(order.id, '12', 'refused_wrong', '', '/assets/a.jpg')).rejects.toThrow('6-digit')
+      await expect(api.refuseDelivery(order.id, pin, 'refused_wrong', '', 'nope')).rejects.toThrow('photos')
+      expect(await api.refuseDelivery(order.id, wrong, 'refused_wrong', '', '/assets/a.jpg')).toEqual({ confirmed: false, attemptsLeft: 4, lockedUntil: null })
+      expect((await api.refuseDelivery(order.id, pin, 'refused_damaged', 'Dented', '/assets/a.jpg')).confirmed).toBe(true)
+
+      const job = (await api.listDeliveryJobs()).find((j) => j.id === order.id)!
+      expect(job).toMatchObject({ returning: true, dropOff: null })
+      await api.completeReturn(order.id, '/assets/b.jpg')
+      expect((await api.listDeliveryJobs()).some((j) => j.id === order.id)).toBe(false)
+      await expect(api.completeReturn(order.id, '/assets/b.jpg')).rejects.toThrow('taking back')
+
+      await as(api, 'funke')
+      const [mine] = (await api.listMyOrders()).filter((o) => o.id === order.id)
+      expect(mine).toMatchObject({ cancelReason: 'refused_damaged', returnState: 'returned' })
+      expect((await api.getWallet()).balance.cashKobo).toBe(before.cashKobo)
+    })
+
+    it('takes charges off the next payout, and won’t send a negative amount', async () => {
+      const api = make()
+      const { order } = await riding(api)
+      await api.failCollection(order.id, ['no_item'], '', [])
+      await as(api, 'admin')
+      const group = (await api.listDuePayouts()).find((g) => g.lines.some((l) => l.orderId === order.id))!
+      await expect(api.markPayoutsPaid(group.lines.filter((l) => l.kind === 'charge').map((l) => l.id), 'TRF-1')).rejects.toThrow('charges are more')
+    })
+
+    it('suspends after 3 failures in 30 days, until an admin lifts it', async () => {
+      const api = make()
+      let last = ''
+      for (let i = 0; i < 3; i++) {
+        const { p, order } = await riding(api)
+        await api.failCollection(order.id, ['no_item'], '', [])
+        last = p.id
+      }
+      await as(api, 'store')
+      expect((await api.getMyMerchant()).suspendedAt).toBeTruthy()
+      expect((await api.getListing(last)).status).toBe('paused')
+      await expect(api.resumeListing(last)).rejects.toThrow('suspended')
+      await expect(api.createProduct({ title: 'No', description: '', category: 'Home', priceKobo: k(1_000) })).rejects.toThrow('suspended')
+      await as(api, 'admin')
+      expect((await api.listCancelRates()).find((r) => r.suspended)?.failed).toBe(3)
+      await api.liftSuspension((await api.listCancelRates()).find((r) => r.suspended)!.merchantId)
+      await as(api, 'store')
+      await api.resumeListing(last)
+      expect((await api.getListing(last)).status).toBe('for_sale')
+    })
+
+    it('cancels if a confirmed order is never made ready', async () => {
+      let t = Date.parse('2026-11-02T10:00:00+01:00')
+      const api = make(() => t)
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Never ready', description: '', category: 'Home', priceKobo: k(5_000), stock: 2 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(50_000))
+      const [order] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await as(api, 'store')
+      await api.sellerConfirmOrder(order.id, '/assets/a.jpg')
+      t = Date.parse('2026-11-03T10:30:00+01:00')
+      expect(await api.getListing(p.id)).toMatchObject({ status: 'paused', stock: 2 })
+      expect((await api.listMerchantOrders()).find((o) => o.id === order.id)).toMatchObject({ status: 'cancelled', cancelReason: 'not_sent' })
+    })
   })
 
   it('only marks an order delivered through a delivery account and the buyer’s PIN', async () => {
@@ -608,6 +725,11 @@ describe('mock api', () => {
 
     await api.takeDelivery(placed.id)
     await expect(api.takeDelivery(placed.id)).rejects.toThrow(/Another rider/)
+    // Taken, but no buyer details until it's passed the check, and no delivering it either.
+    expect((await api.listDeliveryJobs()).find((j) => j.id === placed.id)).toMatchObject({ mine: true, collected: false, dropOff: null })
+    await expect(api.confirmDelivery(placed.id, pin)).rejects.toThrow(/carrying/)
+    await expect(api.passCollection(placed.id, [])).rejects.toThrow('photos')
+    await api.passCollection(placed.id, ['/assets/check.jpg'])
     const [taken] = (await api.listDeliveryJobs()).filter((j) => j.id === placed.id)
     expect(taken).toMatchObject({ mine: true, dropOff: { buyerName: 'Funke Ade', address: delivery.address, location: delivery.location, contactPhone: delivery.contactPhone } })
     expect(JSON.stringify(taken)).not.toContain(pin)
@@ -616,6 +738,7 @@ describe('mock api', () => {
     await api.releaseDelivery(placed.id)
     expect((await api.listDeliveryJobs()).find((j) => j.id === placed.id)).toMatchObject({ mine: false, dropOff: null })
     await api.takeDelivery(placed.id)
+    await api.passCollection(placed.id, ['/assets/check.jpg'])
 
     // Wrong PINs count, and pause it.
     await expect(api.confirmDelivery(placed.id, '12')).rejects.toThrow(/6-digit/)
@@ -901,6 +1024,7 @@ describe('mock api', () => {
 
       await sign(api, 'rider')
       await api.takeDelivery(placed.id)
+      await api.passCollection(placed.id, ['/assets/check.jpg'])
       await api.confirmDelivery(placed.id, placed.deliveryPin!)
 
       await sign(api, 'store')

@@ -6,7 +6,7 @@ import { useCreateListing, useCreateListingBatch, usePayouts, useResubmitListing
 import type { ListingView, PickupItemInput } from '@/api/types'
 import { Countdown } from '@/components/Countdown'
 import {
-  BackIcon,
+  AlertIcon, BackIcon,
   CalendarIcon,
   CarIcon,
   CheckCircleIcon,
@@ -124,6 +124,12 @@ export function MerchantPage() {
           </Button>
         ) : null}
       </div>
+
+      {merchant.data?.suspendedAt ? (
+        <Notice tone="hot" icon={AlertIcon} title="Your shop is suspended">
+          Too many orders have failed a check or been refused, so your products are paused and you can’t list new ones. Orders already placed still need sending. Contact DrawMart to sort this out.
+        </Notice>
+      ) : null}
 
       <PushPrompt seller />
 

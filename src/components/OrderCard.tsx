@@ -4,6 +4,7 @@ import { useCancelOrder, useDispatchOrder, useSellerConfirmOrder } from '@/api/h
 import { needsConfirming } from '@/domain/orderConfirm'
 import { photoToDataUrl } from '@/lib/image'
 import type { OrderView } from '@/api/types'
+import { APOLOGY_CREDIT_KOBO, COLLECTION_PROBLEM_TEXT } from '@/domain/deliveryChecks'
 import { directionsUrl } from '@/domain/location'
 import { CANCEL_NOTE_MAX, CANCEL_REASONS, CANCEL_REASON_FOR_BUYER, CANCEL_REASON_TEXT, CANCEL_STOCK_TEXT, canCancelOrder, cancelError } from '@/domain/orderCancel'
 import type { CancelReason } from '@/domain/types'
@@ -14,7 +15,7 @@ import { DeliveryPin } from './DeliveryPin'
 import { CameraIcon, ClockIcon, MapPinIcon, PhoneIcon, StoreIcon, TruckIcon, XIcon } from './icons'
 import { Sheet } from './Sheet'
 import { useToast } from './toast'
-import { Badge, Button, Card, Field, Notice, ProductImage, cx, errorMessage, inputCls, type Tone } from './ui'
+import { Badge, Button, Card, Field, Notice, ProductImage, buttonClass, cx, errorMessage, inputCls, type Tone } from './ui'
 
 function statusOf(o: OrderView, audience: 'buyer' | 'store' | 'admin'): { label: string; tone: Tone } {
   const pickup = o.fulfilment === 'pickup'
@@ -47,6 +48,7 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
   const [cancelling, setCancelling] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const waiting = needsConfirming(o)
+  const failedOrRefused = o.cancelReason === 'failed_check' || o.cancelReason === 'refused_wrong' || o.cancelReason === 'refused_damaged'
 
   return (
     <Card className="flex min-w-0 animate-fade-up flex-col gap-4 p-4 sm:p-5">
@@ -81,6 +83,34 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
           {audience === 'buyer' ? CANCEL_REASON_FOR_BUYER[o.cancelReason] : CANCEL_REASON_TEXT[o.cancelReason]}
           {o.cancelNote ? ` “${o.cancelNote}”` : ''}
         </Notice>
+      ) : null}
+
+      {cancelled && o.collectionProblems?.length ? (
+        <p className="text-sm text-muted">The rider found: {o.collectionProblems.map((p) => COLLECTION_PROBLEM_TEXT[p]).join(', ')}.</p>
+      ) : null}
+      {cancelled && audience === 'buyer' && failedOrRefused ? (
+        <div className="flex flex-wrap gap-2">
+          <Link to={`/listings/${o.listingId}`} className={buttonClass('outline')}>
+            See this item again
+          </Link>
+          <Link to={`/browse?category=${encodeURIComponent(o.category)}`} className={buttonClass('outline')}>
+            See similar items
+          </Link>
+        </div>
+      ) : null}
+      {cancelled && audience === 'buyer' && failedOrRefused ? <p className="text-xs text-subtle">We’ve also added {formatNaira(APOLOGY_CREDIT_KOBO)} of store credit to say sorry.</p> : null}
+      {cancelled && audience === 'store' && o.returnState ? (
+        <Notice tone="neutral" icon={TruckIcon} title={o.returnState === 'returned' ? 'It’s back with you' : 'A rider is bringing it back'}>
+          {o.returnedAt ? `Returned ${dateTime(o.returnedAt)}.` : 'Expect them soon.'}
+        </Notice>
+      ) : null}
+      {cancelled && audience !== 'buyer' && (o.collectionPhotos?.length || o.refusalPhoto) ? (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+          {[...(o.collectionPhotos ?? []), ...(o.refusalPhoto ? [o.refusalPhoto] : [])].map((src, i) => (
+            <img key={i} src={src} alt="The rider’s photo" className="size-16 rounded-xl border border-line bg-photo object-cover" />
+          ))}
+          The rider’s photos.
+        </div>
       ) : null}
 
       {cancelled ? null : <div className="flex flex-col gap-1.5 rounded-2xl bg-ground p-3 text-sm">
@@ -121,6 +151,11 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
       {waiting && o.confirmBy ? (
         <Notice tone="ticket" icon={ClockIcon} title={audience === 'buyer' ? `The seller has until ${dateTime(o.confirmBy)} to confirm` : `Confirm by ${dateTime(o.confirmBy)}`}>
           {audience === 'buyer' ? 'They’ll send a photo of your item. If they don’t, you’re refunded automatically.' : 'Take a fresh photo of the item. If you don’t, the order cancels, the buyer is refunded and the product is paused. Your time doesn’t run from 10pm to 9am.'}
+        </Notice>
+      ) : null}
+      {audience === 'store' && o.status === 'paid' && o.readyBy && !waiting ? (
+        <Notice tone="ticket" icon={ClockIcon} title={`Mark it ready by ${dateTime(o.readyBy)}`}>
+          If you don’t, the order cancels, the buyer is refunded and the product is paused.
         </Notice>
       ) : null}
       {o.confirmPhoto && !cancelled ? (

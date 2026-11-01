@@ -81,6 +81,8 @@ export interface Merchant {
   area: string // e.g. "Ikeja"
   /** The delivery area its items leave from (deliveryFees.ts). */
   deliveryArea?: string | null
+  /** Set after too many failed orders (deliveryChecks.ts). Its products are paused and it can't list. */
+  suspendedAt?: ISODate | null
   /** Empty for individual sellers. */
   cacNumber: string
   verified: boolean
@@ -193,7 +195,9 @@ export interface LedgerEntry {
 export type OrderStatus = 'paid' | 'dispatched' | 'delivered' | 'cancelled'
 
 /** Why a seller cancelled an order (orderCancel.ts). */
-export type CancelReason = 'out_of_stock' | 'damaged' | 'cant_send' | 'other' | 'not_confirmed'
+export type RefusalReason = 'refused_wrong' | 'refused_damaged'
+export type CollectionProblem = 'wrong_item' | 'wrong_quantity' | 'damaged' | 'wont_power_on' | 'no_item'
+export type CancelReason = 'out_of_stock' | 'damaged' | 'cant_send' | 'other' | 'not_confirmed' | 'not_sent' | 'failed_check' | RefusalReason
 
 /** Where the buyer wants a fixed-price item sent. Seen only by the buyer, the store and admins. */
 export interface Delivery {
@@ -233,6 +237,16 @@ export interface Order {
   confirmedAt: ISODate | null
   /** The seller's fresh photo of the item. */
   confirmPhoto: string | null
+  /** Once confirmed, the seller must make it ready for a rider by this, or it cancels. */
+  readyBy: ISODate | null
+  /** The rider checked it against the listing and left with it. */
+  collectedAt: ISODate | null
+  collectionPhotos: string[] | null
+  collectionProblems: CollectionProblem[] | null
+  refusalPhoto: string | null
+  /** A refused item goes back to the seller. */
+  returnState: 'returning' | 'returned' | null
+  returnedAt: ISODate | null
   cancelledAt: ISODate | null
   cancelReason: CancelReason | null
   cancelNote: string | null
@@ -251,7 +265,7 @@ export interface Order {
 }
 
 export type NotificationKind =
-  | 'order_cancelled' | 'store_order_confirm_soon' | 'store_order_expired' | 'store_price_approved' | 'store_price_rejected' | 'store_new_order' | 'store_listing_approved' | 'store_listing_rejected' | 'store_draw_sold_out'
+  | 'order_cancelled' | 'store_order_failed' | 'store_suspended' | 'store_order_confirm_soon' | 'store_order_expired' | 'store_price_approved' | 'store_price_rejected' | 'store_new_order' | 'store_listing_approved' | 'store_listing_rejected' | 'store_draw_sold_out'
   | 'store_winner_picked' | 'store_draw_closing' | 'store_pickup_tomorrow' | 'store_new_message'
   | 'store_payout_sent' | 'store_bank_changed'
   | 'draw_sold_out' | 'draw_won' | 'draw_lost' | 'saved_almost_sold' | 'saved_closing_soon' | 'saved_relisted' | 'saved_back_on_sale' | 'saved_price_drop'
