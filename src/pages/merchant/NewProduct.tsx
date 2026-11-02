@@ -12,8 +12,9 @@ import { platformFeeBps } from '@/domain/fees'
 import { formatNaira, parseNairaInput } from '@/domain/money'
 import { PRODUCT_ERROR_TEXT, saleEconomics, validateProduct, type ProductError } from '@/domain/orders'
 import type { Category, ListingKind, OrderStatus, PackageSize } from '@/domain/types'
+import { ShopPickupCard } from '@/components/ShopPickup'
 import { PACKAGE_SIZES, PACKAGE_SIZE_TEXT, defaultSizeFor } from '@/domain/deliveryFees'
-import { CategoryPicker, FormStartNotice, PhotoPicker, Section, ShopAreaPicker, type ListingForm } from './parts'
+import { CategoryPicker, FormStartNotice, PhotoPicker, Section, type ListingForm } from './parts'
 
 const KINDS: { kind: ListingKind; icon: IconComponent; title: string; body: string; points: string[] }[] = [
   {
@@ -169,7 +170,7 @@ export function NewProduct({ onBack, onDone, form }: { onBack: () => void; onDon
             />
             <p className="text-xs text-subtle">{PACKAGE_SIZE_TEXT[size].sub} Bigger packages cost buyers more to deliver.</p>
           </fieldset>
-          <ShopAreaPicker />
+          <ShopPickupCard />
         </Section>
 
         <Notice icon={ShieldIcon} title="No escrow, no caution fee">
@@ -283,6 +284,7 @@ export function MerchantOrders() {
           {toSend.length === 1 ? '1 order is' : `${toSend.length} orders are`} waiting. Confirm each one with a photo, then mark it ready when a rider can collect it.
         </Notice>
       ) : null}
+      <ShopPickupCard />
       <Segmented<OrderTab>
         label="Show orders"
         value={tab.value}

@@ -1090,6 +1090,11 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     },
     setDeliveryPrice: (areaA, areaB, priceKobo) => rpc('set_delivery_price', { p_area_a: areaA, p_area_b: areaB, p_price_kobo: priceKobo }),
     setDeliverySizeExtra: (size, extraKobo) => rpc('set_delivery_size_extra', { p_size: size, p_extra_kobo: extraKobo }),
+    getShopPickup: async () => {
+      const row = unwrap(await client.from('shop_pickups').select('address, lat, lng, contact_phone').eq('merchant_id', await myMerchantId()).maybeSingle<{ address: string; lat: number; lng: number; contact_phone: string }>())
+      return row ? { address: row.address, location: { lat: row.lat, lng: row.lng }, contactPhone: row.contact_phone } : null
+    },
+    saveShopPickup: ({ address, location, contactPhone }) => rpc('save_shop_pickup', { p_address: address, p_lat: location.lat, p_lng: location.lng, p_phone: contactPhone }),
     setShopDeliveryArea: (area) => rpc('set_shop_delivery_area', { p_area: area }),
     passCollection: async (orderId, photos) => {
       await rpc('pass_collection', { p_order_id: orderId, p_photos: await uploadPhotos(`riders/${await requireId()}`, photos) })

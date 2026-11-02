@@ -10,6 +10,7 @@ import type { PinResult } from '@/domain/delivery'
 import type { SavedAddress, SavedAddressInput } from '@/domain/addresses'
 import type { CheckoutDetails } from '@/domain/cart'
 import type { DeliveryPricing } from '@/domain/deliveryFees'
+import type { ShopPickup } from '@/domain/shopPickup'
 import type { PayoutAccount, PayoutLine } from '@/domain/payouts'
 import type { NotificationPreference, PushPreferences, PushSubscriptionKeys } from '@/domain/push'
 import type { OrderError } from '@/domain/orders'
@@ -173,7 +174,8 @@ export interface DeliveryJob {
   deliveredAt: string | null
   /** This rider has taken it. The rest are in the pool for anyone to take. */
   mine: boolean
-  collectFrom: { name: string; area: string }
+  /** The address and number only reach the rider on the way there, or taking a refused item back. */
+  collectFrom: { name: string; area: string; address?: string; location?: GeoPoint; contactPhone?: string }
   pickupPoint: PickupPoint | null
   /** Only for the rider carrying it, once it's passed the check. Never in the pool, and gone once delivered. */
   dropOff: { buyerName: string; address: string; location: GeoPoint | null; contactPhone: string } | null
@@ -627,6 +629,10 @@ export interface DrawMartApi {
   /** A refused item is back with the seller. */
   completeReturn(orderId: string, photo: string): Promise<void>
   liftSuspension(merchantId: string): Promise<void>
+  /** Where riders collect from this seller. Null until they've said. */
+  getShopPickup(): Promise<ShopPickup | null>
+  /** Also sets the shop's delivery area from the pin. */
+  saveShopPickup(input: ShopPickup): Promise<void>
   /** What delivery costs, for checkout and the admin page. Public, since it's only prices. */
   getDeliveryPricing(): Promise<DeliveryPricing>
   setDeliveryPrice(areaA: string, areaB: string, priceKobo: Kobo): Promise<void>

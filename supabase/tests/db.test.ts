@@ -122,6 +122,8 @@ beforeAll(async () => {
   // Every migration, in order, like `supabase db push`.
   for (const f of readdirSync(new URL('../migrations', import.meta.url)).sort()) await db.exec(sql(`migrations/${f}`))
   await db.exec(sql('seed.sql'))
+  // Riders need somewhere to collect from, or no order can be made ready.
+  await db.exec(`insert into public.shop_pickups (merchant_id, address, lat, lng, contact_phone) select id, '12 Market Road, Lagos', 6.5, 3.37, '0803 000 0000' from public.merchants`)
 }, 60_000)
 
 describe('schema and seed', () => {
@@ -1162,6 +1164,7 @@ describe('individual sellers', () => {
     await asUser(shopper, `select public.top_up(1000000)`)
     const [{ order }] = await asUser<{ order: string }>(shopper, `select public.buy_now($1, '4 Admiralty Way, Lekki', '0803 765 4321', 6.44, 3.47) "order"`, [id])
     expect((await asUser(seller, `select id from public.orders`)).map((o) => o.id)).toEqual([order])
+    await asUser(seller, `select public.save_shop_pickup('12 Herbert Macaulay Way, Yaba', 6.5, 3.38, '0803 123 4567')`)
     await asUser(seller, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [order])
     await asUser(seller, `select public.dispatch_order($1)`, [order])
   })
@@ -2005,6 +2008,54 @@ describe('cart and checkout', () => {
         expect(await seen(shopper, ids[0])).toEqual([{ status: 'cancelled', cancel_reason: 'not_sent' }])
         expect(await admin(`select status, stock from public.listings where id = $1`, [listing])).toEqual([{ status: 'paused', stock: 2 }])
       })
+    })
+
+    it('gives the seller’s address only to the rider on the way there, and needs one first', async () => {
+      const shop = '11111111-1111-4111-8111-000000000002'
+      const seller = await newUser('pickup-store@example.com', { merchantId: shop })
+      const staffUser = await newUser('pickup-staff@example.com', { role: 'admin' })
+      const stranger = await newUser('pickup-stranger@example.com', { merchantId: IKEJA })
+      const shopper = await newUser('pickup-shopper@example.com')
+      await asUser(shopper, `select public.top_up(5000000)`)
+      await admin(`delete from public.shop_pickups where merchant_id = $1`, [shop])
+      const save = (who: string, ...args: unknown[]) => asUser(who, `select public.save_shop_pickup($1, $2, $3, $4)`, args)
+      const details = ['12 Admiralty Way, Lekki Phase 1', 6.44, 3.47, '0803 123 4567']
+      const [{ id: listing }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [{ title: 'Pickup lamp', description: '', category: 'Home', priceKobo: 500_000, stock: 2 }])
+      await asUser(staffUser, `select public.approve_listing($1)`, [listing])
+      const [{ ids }] = await asUser<{ ids: string[] }>(shopper, `select public.checkout($1) ids`, [{ listingIds: [listing], fulfilment: 'delivery', address: '15 Awolowo Road, Ikoyi', phone: '0803 123 4567', lat: 6.45, lng: 3.43 }])
+      const id = ids[0]
+      await asUser(seller, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+      const e = await expectFail(asUser(seller, `select public.dispatch_order($1)`, [id]), 'invalid_input')
+      expect(e.detail).toContain('where riders collect from')
+
+      await expectFail(save(shopper, ...details), 'forbidden')
+      await expectFail(save(seller, 'Lekki', 6.44, 3.47, '0803 123 4567'), 'invalid_input')
+      await expectFail(save(seller, details[0], 9.06, 7.49, details[3]), 'invalid_input')
+      await expectFail(save(seller, details[0], details[1], details[2], '123'), 'invalid_input')
+      await save(seller, ...details)
+      expect(await admin(`select delivery_area from public.merchants where id = $1`, [shop])).toEqual([{ delivery_area: 'lekki' }])
+
+      // Private: not to other shops, buyers or the public.
+      const read = `select address from public.shop_pickups where merchant_id = $1`
+      expect(await asUser(seller, read, [shop])).toHaveLength(1)
+      expect(await asUser(staffUser, read, [shop])).toHaveLength(1)
+      expect(await asUser(stranger, read, [shop])).toEqual([])
+      expect(await asUser(shopper, read, [shop])).toEqual([])
+      await expect(asUser(null, read, [shop])).rejects.toThrow()
+
+      await asUser(seller, `select public.dispatch_order($1)`, [id])
+      const from = async (who: string) => (await jobs(who)).find((j) => j.id === id) as unknown as { collectFrom: { address?: string; contactPhone?: string } } | undefined
+      expect((await from(rider))?.collectFrom.address).toBeUndefined() // still in the pool
+      await asUser(rider, `select public.take_delivery($1)`, [id])
+      expect((await from(rider))?.collectFrom).toMatchObject({ address: details[0], contactPhone: details[3] })
+      expect(await from(otherRider)).toBeUndefined()
+      await asUser(rider, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+      expect((await from(rider))?.collectFrom.address).toBeUndefined() // collected: no need any more
+
+      const pin = (await pinsOf(shopper))[id]
+      await asUser(rider, `select public.refuse_delivery($1, $2, 'refused_wrong', '', '/assets/x.jpg')`, [id, pin])
+      expect((await from(rider))?.collectFrom.address).toBe(details[0]) // taking it back
+      await asUser(rider, `select public.complete_return($1, '/assets/x.jpg')`, [id])
     })
 
     it('can’t be delivered before it’s dispatched', async () => {

@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router'
-import { useCancelOrder, useDispatchOrder, useSellerConfirmOrder } from '@/api/hooks'
+import { useCancelOrder, useDispatchOrder, useSellerConfirmOrder, useShopPickup } from '@/api/hooks'
+import { ShopPickupSheet } from './ShopPickup'
 import { needsConfirming } from '@/domain/orderConfirm'
 import { isPhoneOrTablet, thisDevice } from '@/lib/device'
 import type { OrderView } from '@/api/types'
@@ -48,6 +49,9 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
   const cancelled = o.status === 'cancelled'
   const [cancelling, setCancelling] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  const [addingPickup, setAddingPickup] = useState(false)
+  const pickupDetails = useShopPickup()
+  const needsPickupDetails = audience === 'store' && pickupDetails.data === null
   const waiting = needsConfirming(o)
   const failedOrRefused = o.cancelReason === 'failed_check' || o.cancelReason === 'refused_wrong' || o.cancelReason === 'refused_damaged'
 
@@ -172,7 +176,13 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
         </Button>
       ) : null}
       {confirming ? <ConfirmSheet order={o} onClose={() => setConfirming(false)} /> : null}
-      {sender && o.status === 'paid' && !waiting ? (
+      {addingPickup ? <ShopPickupSheet onClose={() => setAddingPickup(false)} /> : null}
+      {sender && o.status === 'paid' && !waiting && needsPickupDetails ? (
+        <Button onClick={() => setAddingPickup(true)}>
+          <MapPinIcon size={16} /> Add where riders collect from
+        </Button>
+      ) : null}
+      {sender && o.status === 'paid' && !waiting && !needsPickupDetails ? (
         <Button loading={dispatch.isPending} onClick={() => dispatch.mutate(o.id, { onSuccess: () => toast('A rider can now take it. They’ll confirm it with the buyer’s PIN.'), onError })}>
           <TruckIcon size={16} /> {pickup ? 'Ready to go to the pickup location' : 'Ready for a rider'}
         </Button>

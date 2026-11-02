@@ -32,7 +32,8 @@ import {
 } from '@/domain/listing'
 import { nairaToKobo } from '@/domain/money'
 import { canChangeInReview, withdrawalFees } from '@/domain/listingActions'
-import { checkoutDeliveryFees, deliveryPriceError, placeholderPricing, sizeExtraError, type DeliveryPricing } from '@/domain/deliveryFees'
+import { shopPickupErrorText, shopPickupErrors, type ShopPickup } from '@/domain/shopPickup'
+import { DELIVERY_AREAS, areaFromText, nearestArea, checkoutDeliveryFees, deliveryPriceError, placeholderPricing, sizeExtraError, type DeliveryPricing } from '@/domain/deliveryFees'
 import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO, REFUSAL_REASONS, SUSPEND_AFTER_FAILURES, collectionFailError, photosError } from '@/domain/deliveryChecks'
 import { CONFIRM_HOURS, addConfirmTime, confirmDeadline, confirmOverdue, confirmReminderDue, needsConfirming } from '@/domain/orderConfirm'
 import { canCancelOrder, cancelError, stockAfterCancel } from '@/domain/orderCancel'
@@ -90,7 +91,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v39' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v40' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -122,6 +123,7 @@ interface Db {
   addresses: Record<string, SavedAddress[]>
   /** Listing ids in each buyer's cart, oldest first. */
   carts: Record<string, string[]>
+  shopPickups: Record<string, ShopPickup>
   deliveryPricing: DeliveryPricing
   priceReviews: { listingId: string; newPriceKobo: Kobo; requestedAt: string }[]
   /** By buyer, then listing. Anything not in here is one. */
@@ -559,6 +561,11 @@ async function freshDb(): Promise<Db> {
     pendingLimits: {},
     orders: [],
     carts: {},
+    // The demo shops already have somewhere to collect from, near the middle of their area.
+    shopPickups: Object.fromEntries(MERCHANTS.map((m) => {
+      const a = DELIVERY_AREAS.find((x) => x.id === areaFromText(m.area))!
+      return [m.id, { address: `12 Market Road, ${m.area}, Lagos`, location: { lat: a.lat, lng: a.lng }, contactPhone: '0803 000 0000' }]
+    })),
     deliveryPricing: placeholderPricing(),
     priceReviews: [],
     cartQuantities: {},
@@ -1564,7 +1571,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
             return {
               id: o.id, quantity: o.quantity, confirmPhoto: o.confirmPhoto, collected: !!o.collectedAt, returning: o.returnState === 'returning', productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, fulfilment: o.fulfilment, status: o.status,
               dispatchedAt: o.dispatchedAt, deliveredAt: o.deliveredAt, mine: !!o.riderId,
-              collectFrom: o.handledBy === 'drawmart' ? { name: 'DrawMart escrow', area: 'Lagos' } : { name: merchant.name, area: merchant.area },
+              collectFrom: o.handledBy === 'drawmart' ? { name: 'DrawMart escrow', area: 'Lagos' } : { name: merchant.name, area: merchant.area, ...(o.riderId === me && ((o.status === 'dispatched' && !o.collectedAt) || o.returnState === 'returning') ? db.shopPickups[o.merchantId] : {}) },
               pickupPoint: o.pickupPoint,
               dropOff: carrying ? { buyerName: db.users.find((u) => u.id === o.buyerId)?.displayName ?? 'Buyer', address: o.delivery.address, location: o.delivery.location, contactPhone: o.delivery.contactPhone } : null,
               pinLockedUntil: o.status === 'dispatched' && o.pinState.lockedUntil && Date.parse(o.pinState.lockedUntil) > now() ? o.pinState.lockedUntil : null,
@@ -1893,6 +1900,17 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         db.deliveryPricing.sizeExtras[size] = extraKobo
       }),
 
+    getShopPickup: () => tx((db) => db.shopPickups[shopId(db)] ?? null),
+
+    saveShopPickup: (input) =>
+      tx((db) => {
+        const errors = shopPickupErrors(input)
+        if (errors.length) throw new ApiError('invalid_input', shopPickupErrorText(errors))
+        const shop = shopId(db)
+        db.shopPickups[shop] = { address: input.address.trim(), location: input.location, contactPhone: input.contactPhone.trim() }
+        db.merchants.find((m) => m.id === shop)!.deliveryArea = nearestArea(input.location, db.deliveryPricing.areas)
+      }),
+
     setShopDeliveryArea: (area) =>
       tx((db) => {
         if (!db.deliveryPricing.areas.some((a) => a.id === area)) throw new ApiError('invalid_input', 'Pick an area.')
@@ -2002,6 +2020,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const o = db.orders.find((x) => x.id === orderId && x.status === 'paid' && (x.handledBy === 'drawmart' ? admin : !admin && x.merchantId === shopId(db)))
         if (!o) throw new ApiError('invalid_input', 'Only paid orders you send yourself can be marked as sent.')
         if (needsConfirming(o)) throw new ApiError('invalid_input', 'Confirm it with a photo first.')
+        if (o.handledBy === 'store' && !db.shopPickups[o.merchantId]) throw new ApiError('invalid_input', 'Add where riders collect from first.')
         o.status = 'dispatched'
         o.dispatchedAt = iso(now())
       }),

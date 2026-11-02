@@ -691,6 +691,31 @@ describe('mock api', () => {
     })
   })
 
+  it('saves where riders collect from, sets the area from it, and only tells the rider on the way', async () => {
+    const api = make()
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    await expect(api.saveShopPickup({ address: 'Ikeja', location: { lat: 9, lng: 7 }, contactPhone: '1' })).rejects.toThrow('full address')
+    await api.saveShopPickup({ address: '12 Admiralty Way, Lekki Phase 1', location: { lat: 6.44, lng: 3.47 }, contactPhone: '0803 123 4567' })
+    expect((await api.getShopPickup())?.address).toBe('12 Admiralty Way, Lekki Phase 1')
+    expect((await api.getMyMerchant()).deliveryArea).toBe('lekki')
+    const p = await api.createProduct({ title: 'Pickup lamp', description: '', category: 'Home', priceKobo: k(5_000) })
+    await api.approveListing(p.id)
+    await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
+    await api.topUp(k(50_000))
+    const [order] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+    await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+    await api.sellerConfirmOrder(order.id, '/assets/a.jpg')
+    await api.dispatchOrder(order.id)
+    await api.auth.signInWithPassword('rider@drawmart.test', 'drawmart-demo')
+    const job = async () => (await api.listDeliveryJobs()).find((j) => j.id === order.id)!
+    expect((await job()).collectFrom.address).toBeUndefined()
+    await api.takeDelivery(order.id)
+    expect((await job()).collectFrom).toMatchObject({ address: '12 Admiralty Way, Lekki Phase 1', contactPhone: '0803 123 4567' })
+    await api.passCollection(order.id, ['/assets/a.jpg'])
+    expect((await job()).collectFrom.address).toBeUndefined()
+  })
+
   it('only marks an order delivered through a delivery account and the buyer’s PIN', async () => {
     let t = Date.now()
     const api = make(() => t)

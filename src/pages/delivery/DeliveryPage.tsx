@@ -143,7 +143,8 @@ export function DeliveryJobPage() {
 function JobDetails({ job: j }: { job: DeliveryJob }) {
   if (j.returning) return <ReturnLeg job={j} />
   const pickup = j.fulfilment === 'pickup'
-  const spot = pickup ? j.pickupPoint?.location : j.dropOff?.location
+  const atSeller = !j.collected
+  const spot = atSeller ? j.collectFrom.location : pickup ? j.pickupPoint?.location : j.dropOff?.location
   const address = pickup ? j.pickupPoint?.address : j.dropOff?.address
   return (
     <>
@@ -159,7 +160,7 @@ function JobDetails({ job: j }: { job: DeliveryJob }) {
       <Card className="flex flex-col gap-3 p-4 text-sm">
         <span className="flex items-start gap-2">
           <StoreIcon size={16} className="mt-0.5 shrink-0 text-brand" />
-          <span><strong>Collect from</strong> {j.collectFrom.name}, {j.collectFrom.area}</span>
+          <span><strong>Collect from</strong> {j.collectFrom.name}, {j.collectFrom.area}{j.collectFrom.address ? <span className="block text-muted">{j.collectFrom.address}</span> : null}</span>
         </span>
         <span className="flex items-start gap-2">
           <MapPinIcon size={16} className="mt-0.5 shrink-0 text-hot" />
@@ -169,21 +170,26 @@ function JobDetails({ job: j }: { job: DeliveryJob }) {
             <span className="text-muted">The address and the buyer’s number appear once the item passes your check.</span>
           )}
         </span>
-        {!pickup && !j.collected ? null : spot ? (
+        {spot ? (
           <>
             {/* isolate: Leaflet's own layers mustn't sit above the app's sticky headers. */}
             <div className="relative isolate h-72 overflow-hidden rounded-2xl border border-line bg-sunken">
               <Suspense fallback={<Skeleton className="size-full" />}>
-                <RouteMap point={spot} label={`Map of the drop-off: ${address ?? ''}`} />
+                <RouteMap point={spot} label={atSeller ? `Map of where to collect: ${j.collectFrom.address ?? ''}` : `Map of the drop-off: ${address ?? ''}`} />
               </Suspense>
             </div>
             <a href={directionsUrl(spot)} target="_blank" rel="noreferrer" className="flex min-h-11 w-fit items-center gap-2 font-bold">
               <MapPinIcon size={16} /> Get directions
             </a>
           </>
-        ) : (
+        ) : j.collected ? (
           <Notice tone="ticket">This order was placed before map pins, so go by the written address.</Notice>
-        )}
+        ) : null}
+        {atSeller && j.collectFrom.contactPhone ? (
+          <a href={`tel:${j.collectFrom.contactPhone.replace(/\s/g, '')}`} className="flex min-h-11 w-fit items-center gap-2 font-bold">
+            <PhoneIcon size={16} /> Call the seller on {j.collectFrom.contactPhone}
+          </a>
+        ) : null}
         {j.dropOff ? (
           <div className="flex flex-col gap-1 border-t border-line pt-3">
             <span className="flex items-center gap-2">
@@ -575,8 +581,18 @@ function ReturnLeg({ job: j }: { job: DeliveryJob }) {
       </div>
       <span className="flex items-start gap-2 text-sm">
         <StoreIcon size={16} className="mt-0.5 shrink-0 text-brand" />
-        <span><strong>Return to</strong> {j.collectFrom.name}, {j.collectFrom.area}</span>
+        <span><strong>Return to</strong> {j.collectFrom.name}, {j.collectFrom.area}{j.collectFrom.address ? <span className="block text-muted">{j.collectFrom.address}</span> : null}</span>
       </span>
+      {j.collectFrom.location ? (
+        <a href={directionsUrl(j.collectFrom.location)} target="_blank" rel="noreferrer" className="flex min-h-11 w-fit items-center gap-2 text-sm font-bold">
+          <MapPinIcon size={16} /> Get directions
+        </a>
+      ) : null}
+      {j.collectFrom.contactPhone ? (
+        <a href={`tel:${j.collectFrom.contactPhone.replace(/\s/g, '')}`} className="flex min-h-11 w-fit items-center gap-2 text-sm font-bold">
+          <PhoneIcon size={16} /> Call the seller on {j.collectFrom.contactPhone}
+        </a>
+      ) : null}
       <RiderPhotos photos={photos} onChange={setPhotos} max={1} label="Take a photo of the handover" />
       <Button size="lg" loading={finishReturn.isPending} onClick={onDone}>
         <CheckCircleIcon size={18} /> It’s back with the seller

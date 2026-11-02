@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
+import type { ShopPickup } from '@/domain/shopPickup'
 import type { CancelReason, CollectionProblem, Kobo, PackageSize, RefusalReason, RejectionReason } from '@/domain/types'
 import { api } from './index'
 import type { MetricRange } from '@/domain/metrics'
@@ -23,6 +24,7 @@ export const keys = {
   priceReviews: ['price-reviews'] as const,
   cancelRates: ['cancel-rates'] as const,
   deliveryPricing: ['delivery-pricing'] as const,
+  shopPickup: ['shop-pickup'] as const,
   pending: ['pending'] as const,
   myOrders: ['my-orders'] as const,
   merchantOrders: ['merchant-orders'] as const,
@@ -86,6 +88,7 @@ export function useHasShop() {
   const application = useMySellerApplication()
   return role === 'store' || (role === 'buyer' && application.data?.status === 'approved')
 }
+export const useShopPickup = () => useQuery({ queryKey: keys.shopPickup, queryFn: () => api.getShopPickup(), enabled: useHasShop() })
 export const useMerchant = () => useQuery({ queryKey: keys.merchant, queryFn: () => api.getMyMerchant(), enabled: useHasShop() })
 export const useMerchantListings = () =>
   useQuery({ queryKey: keys.merchantListings, queryFn: () => api.listMerchantListings(), enabled: useHasShop() })
@@ -388,9 +391,9 @@ export function useSetDeliverySizeExtra() {
   })
 }
 
-export function useSetShopDeliveryArea() {
+export function useSaveShopPickup() {
   const invalidate = useInvalidateAll()
-  return useMutation({ mutationFn: (area: string) => api.setShopDeliveryArea(area), onSettled: invalidate })
+  return useMutation({ mutationFn: (input: ShopPickup) => api.saveShopPickup(input), onSettled: invalidate })
 }
 
 export function useSellerConfirmOrder() {

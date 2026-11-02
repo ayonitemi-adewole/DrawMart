@@ -1,7 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
-import { useAccess, useDeliveryPricing, useMerchant, useSetShopDeliveryArea, useWithdrawListing } from '@/api/hooks'
-import { sellerAreaOf } from '@/domain/deliveryFees'
+import { useAccess, useWithdrawListing } from '@/api/hooks'
 import { Sheet } from '@/components/Sheet'
 import { canChangeInReview, hasLivePage } from '@/domain/listingActions'
 import { localDate } from '@/domain/listing'
@@ -9,7 +8,7 @@ import { formatNaira } from '@/domain/money'
 import { CATEGORY_STYLE } from '@/components/category'
 import { ClipboardIcon, CopyIcon, EyeIcon, PlusIcon, XIcon } from '@/components/icons'
 import { useToast } from '@/components/toast'
-import { Button, Card, Field, Notice, buttonClass, cx, errorMessage, inputCls } from '@/components/ui'
+import { Button, Card, Notice, buttonClass, cx, errorMessage } from '@/components/ui'
 import type { ListingView } from '@/api/types'
 import { rejectionReasonText } from '@/domain/rejection'
 import { CATEGORIES, type Category } from '@/domain/types'
@@ -128,32 +127,6 @@ export function RejectionNotice({ listing: l, onFix }: { listing: ListingView; o
         {l.kind === 'raffle' ? 'Change what’s needed and send it again. Your caution fee goes back on hold, so you don’t pay it twice.' : 'Change what’s needed and send it again.'}
       </span>
     </Notice>
-  )
-}
-
-/** Where this seller's items leave from, which sets what buyers pay for delivery. Saves as soon as it's picked. */
-export function ShopAreaPicker() {
-  const shop = useMerchant()
-  const pricing = useDeliveryPricing()
-  const set = useSetShopDeliveryArea()
-  const toast = useToast()
-  if (!shop.data || !pricing.data) return null
-  return (
-    <Field label="Where do your items leave from?" htmlFor="shop-area" hint="This applies to all your items. A rider collects from you, and buyers pay more for delivery the further it has to go.">
-      <select
-        id="shop-area"
-        className={inputCls}
-        value={sellerAreaOf(shop.data)}
-        disabled={set.isPending}
-        onChange={(e) => set.mutate(e.target.value, { onSuccess: () => toast('Saved.'), onError: (err) => toast(errorMessage(err), 'error') })}
-      >
-        {pricing.data.areas.map((a) => (
-          <option key={a.id} value={a.id}>
-            {a.name}
-          </option>
-        ))}
-      </select>
-    </Field>
   )
 }
 
