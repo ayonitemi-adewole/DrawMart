@@ -10,9 +10,10 @@ import { useToast } from '@/components/toast'
 import { Badge, Button, Card, EmptyState, ErrorState, Field, Notice, ProductImage, Skeleton, cx, errorMessage, inputCls } from '@/components/ui'
 import { directionsUrl } from '@/domain/location'
 import { CollectByLine, CollectByNotice } from './CollectBy'
+import { JobFacts, type PoolView } from './PoolControls'
 
 /** The Returns tab: items going from a buyer back to a seller. */
-export function ReturnJobList() {
+export function ReturnJobList({ view }: { view: PoolView }) {
   const q = useReturnJobs()
   const { take } = useReturnActions()
   const navigate = useNavigate()
@@ -20,9 +21,12 @@ export function ReturnJobList() {
   if (q.isPending) return <Skeleton className="h-40" />
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />
   if (!q.data.length) return <EmptyState icon={TruckIcon} title="No returns right now" body="Items going back from a buyer to a seller appear here." />
+  // Yours first, then the pool, filtered and sorted.
+  const shown = [...q.data.filter((j) => j.mine), ...view.apply(q.data.filter((j) => !j.mine))]
+  if (!shown.length) return <EmptyState icon={TruckIcon} title="No returns in this area" body="Try all areas." />
   return (
     <div className="grid gap-3 lg:grid-cols-2">
-      {q.data.map((j) => (
+      {shown.map((j) => (
         <Card key={j.id} className="flex min-w-0 flex-col gap-3 p-4">
           <div className="flex min-w-0 gap-3">
             <ProductImage category={j.category} src={j.listingImage ?? undefined} alt="" size="sm" className="size-16 shrink-0" />
@@ -30,6 +34,7 @@ export function ReturnJobList() {
               <strong className="leading-tight">{j.listingTitle}{j.quantity > 1 ? ` × ${j.quantity}` : ''}</strong>
               <ProductId code={j.productCode} />
               <span className="text-xs text-subtle">Buyer → {j.returnTo.name}, {j.returnTo.area}</span>
+              <JobFacts job={j} />
               {j.collectBy ? <CollectByLine at={j.collectBy} /> : null}
             </div>
           </div>

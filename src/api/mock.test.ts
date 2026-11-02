@@ -774,6 +774,38 @@ describe('mock api', () => {
     })
   })
 
+  describe('clearer job pool', () => {
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('shows each job’s areas, size and pay, and pays what it showed', async () => {
+      const api = make()
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Pool lamp', description: '', category: 'Home', priceKobo: k(20_000), stock: 2 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const lekki = { address: '5 Admiralty Way, Lekki', location: { lat: 6.45, lng: 3.49 }, contactPhone: '0803 123 4567' }
+      const [o] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery: lekki, pickupPointId: null })
+      const [toCounter] = await api.checkout({ listingIds: [p.id], fulfilment: 'pickup', delivery: { address: '', location: null, contactPhone: '0803 123 4567' }, pickupPointId: 'yaba' })
+      await as(api, 'store')
+      for (const x of [o, toCounter]) {
+        await api.sellerConfirmOrder(x.id, '/assets/c.jpg')
+        await api.dispatchOrder(x.id)
+      }
+      await as(api, 'rider')
+      const pool = await api.listDeliveryJobs()
+      const job = pool.find((j) => j.id === o.id)!
+      expect(job).toMatchObject({ mine: false, fromArea: 'ikeja', toArea: 'lekki', size: 'large', dropOff: null })
+      expect(JSON.stringify(job)).not.toContain('Admiralty')
+      expect(pool.find((j) => j.id === toCounter.id)).toMatchObject({ fromArea: 'ikeja', toArea: 'yaba' })
+
+      await api.takeDelivery(o.id)
+      await api.passCollection(o.id, ['/assets/a.jpg'])
+      await api.confirmDelivery(o.id, o.deliveryPin!)
+      expect((await api.listMyEarnings())[0].amountKobo).toBe(job.payKobo)
+    })
+  })
+
   describe('rider shown to the buyer', () => {
     const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
     const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }

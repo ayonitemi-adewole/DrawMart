@@ -339,6 +339,13 @@ export interface DeliveryJob {
   deliveredAt: string | null
   /** This rider has taken it. The rest are in the pool for anyone to take. */
   mine: boolean
+  /** Areas only, never an address (jobPool.ts). Null where it isn't known, e.g. DrawMart's escrow. */
+  fromArea: string | null
+  toArea: string | null
+  size: PackageSize
+  /** What it pays at today's rates, as the earning will be worked out. */
+  payKobo: Kobo
+  postedAt: string | null
   /** A pickup order counter staff have taken in: the rider's job is done. */
   atCounterAt: string | null
   /** An uncollected item going back to the seller, still at the counter until staff hand it over. */
@@ -658,6 +665,13 @@ export interface ReturnJob {
   kind: ClaimKind
   status: ClaimStatus
   mine: boolean
+  /** Areas only, never an address (jobPool.ts). Null where it isn't known, e.g. DrawMart's escrow. */
+  fromArea: string | null
+  toArea: string | null
+  size: PackageSize
+  /** What it pays at today's rates, as the earning will be worked out. */
+  payKobo: Kobo
+  postedAt: string | null
   /** Taken but not yet collected from the buyer: back to the pool at this time (riderLimits.ts). */
   collectBy: string | null
   productCode: string

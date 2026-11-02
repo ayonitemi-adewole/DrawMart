@@ -111,7 +111,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v54' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v55' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -148,7 +148,7 @@ interface Db {
   checkTickets: Record<string, { code: string; videoRequired: boolean; issuedAt: string }>
   listingChecks: Record<string, { code: string | null; videoKey: string | null; serial: string | null; proofKey: string | null }>
   /** The rest of each claim, by claim id: never sent to the buyer or seller. */
-  claimDetails: Record<string, { riderId: string | null; takenAt?: string | null; address: string; location: GeoPoint; phone: string; tripKobo: Kobo; sellerShareKobo: Kobo }>
+  claimDetails: Record<string, { riderId: string | null; takenAt?: string | null; openedAt?: string; address: string; location: GeoPoint; phone: string; tripKobo: Kobo; sellerShareKobo: Kobo }>
   shopPickups: Record<string, ShopPickup>
   excusedFailures: string[]
   deliveryPricing: DeliveryPricing
@@ -1032,6 +1032,16 @@ function earn(db: Db, riderId: string | null, kind: EarningKind, sourceKey: stri
 const sellerArea = (db: Db, o: MockOrder) => sellerAreaOf(db.merchants.find((m) => m.id === o.merchantId)!)
 const buyerArea = (o: MockOrder) => (o.delivery.location ? nearestArea(o.delivery.location, DELIVERY_AREAS) : o.delivery.address ? areaFromText(o.delivery.address) : null)
 const pointArea = (o: MockOrder) => (o.pickupPoint ? nearestArea(o.pickupPoint.location, DELIVERY_AREAS) : null)
+
+/** Where a job goes from and to, and what it pays, as private.earn will work it out (jobPool.ts). */
+function poolPay(db: Db, o: MockOrder, fromArea: string | null, toArea: string | null, postedAt: string | null) {
+  const size = packageSizeOf(db.listings.find((l) => l.id === o.listingId)!)
+  return { fromArea, toArea, size, payKobo: tripPay(db.riderPayRates, fromArea ?? toArea ?? DEFAULT_AREA, toArea ?? fromArea ?? DEFAULT_AREA, size), postedAt }
+}
+function poolFields(db: Db, o: MockOrder) {
+  if (o.returnState === 'returning') return poolPay(db, o, o.atCounterAt ? pointArea(o) : buyerArea(o), sellerArea(db, o), o.cancelledAt ?? o.dispatchedAt)
+  return poolPay(db, o, o.handledBy === 'drawmart' ? null : sellerArea(db, o), o.fulfilment === 'pickup' ? pointArea(o) : buyerArea(o), o.dispatchedAt)
+}
 
 /** Everything a rider is holding: deliveries, refused items going back, and returns (private.rider_jobs_held). */
 function riderJobsHeld(db: Db, riderId: string): number {
@@ -1976,6 +1986,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
               atCounterAt: o.status === 'dispatched' || o.status === 'delivered' ? o.atCounterAt : null, waitingAtCounter: waitingAtCounter(o),
               arrivedAt: o.arrivedAt ?? null, failedAttempts: o.failedAttempts, awaitingBuyer: o.status === 'dispatched' && o.failedAttempts === 1 && !o.redeliveryChoice,
               redeliverAt: o.redeliveryChoice === 'redeliver' ? o.redeliverAt : null,
+              ...poolFields(db, o),
               collectFrom: o.handledBy === 'drawmart' ? { name: 'DrawMart escrow', area: 'Lagos' } : { name: merchant.name, area: merchant.area, ...(o.riderId === me && ((o.status === 'dispatched' && !o.collectedAt) || o.returnState === 'returning') ? db.shopPickups[o.merchantId] : {}) },
               pickupPoint: o.pickupPoint,
               dropOff: carrying ? { buyerName: db.users.find((u) => u.id === o.buyerId)?.displayName ?? 'Buyer', address: o.delivery.address, location: o.delivery.location, contactPhone: o.delivery.contactPhone } : null,
@@ -2745,7 +2756,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const trip = change ? deliveryFeeKobo(db.deliveryPricing, sellerAreaOf(shop), location, packageSizeOf(l)) : 0
         const id = uid('Q')
         o.claim = { id, kind: input.kind, status: change ? 'awaiting_pickup' : 'open', description: input.description.trim(), photos: input.photos, returnFeeKobo: fee, reviewNote: null }
-        db.claimDetails[id] = { riderId: null, address, location, phone, tripKobo: trip, sellerShareKobo: sellerShareOfReturnFee(fee, trip) }
+        db.claimDetails[id] = { riderId: null, openedAt: iso(now()), address, location, phone, tripKobo: trip, sellerShareKobo: sellerShareOfReturnFee(fee, trip) }
         if (change) alertNewReturn(db, o, null, now())
         notifyShop(db, o.merchantId, 'store_order_claim', o.listingId, iso(now()))
       }),
@@ -2808,6 +2819,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           return [{
             id: o.claim.id, kind: o.claim.kind, status: o.claim.status, mine: !!d.riderId,
             collectBy: d.riderId === me && o.claim.status === 'awaiting_pickup' && d.takenAt ? collectBy(d.takenAt) : null,
+            ...poolPay(db, o, nearestArea(d.location, DELIVERY_AREAS), sellerArea(db, o), d.openedAt ?? null),
             productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, quantity: o.quantity, category: l.category,
             returnTo: { name: shop.name, area: shop.area, ...(d.riderId === me && o.claim.status === 'returning' ? db.shopPickups[o.merchantId] : {}) },
             pickupFrom: d.riderId === me && o.claim.status === 'awaiting_pickup' ? { buyerName: db.users.find((u) => u.id === o.buyerId)?.displayName ?? 'Buyer', address: d.address, location: d.location, contactPhone: d.phone } : null,

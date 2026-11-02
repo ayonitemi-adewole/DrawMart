@@ -15,6 +15,7 @@ import { CollectByLine, CollectByNotice } from './CollectBy'
 import { CounterPage } from './CounterPage'
 import { NotHome } from './NotHome'
 import { RiderPhoto } from './RiderPhoto'
+import { JobFacts, PoolControls, usePoolView } from './PoolControls'
 import { DeliveryChatSheet } from '@/components/DeliveryChat'
 import { firstName } from '@/domain/deliveryChat'
 import { ReturnJobList } from './ReturnJobs'
@@ -55,7 +56,10 @@ export function DeliveryPage() {
   // The server has the final say: admins can change the limit.
   const full = takeJobError(mineCount + (returns.data ?? []).filter((r) => r.mine).length)
   const tab = TABS.find((t) => t === params.get('tab')) ?? (q.data && !mineCount ? 'available' : 'mine')
-  const shown = jobs.filter((j) => inTab(j, tab) && matchesProductSearch(search, j.productCode, j.listingTitle, j.collectFrom.name, destination(j)))
+  const pool = usePoolView()
+  const matching = jobs.filter((j) => inTab(j, tab) && matchesProductSearch(search, j.productCode, j.listingTitle, j.collectFrom.name, destination(j)))
+  // Only the pool is filtered and sorted: your own jobs are always all there.
+  const shown = tab === 'available' ? pool.view.apply(matching) : matching
 
   return (
     <div className="flex flex-col gap-6">
@@ -75,7 +79,8 @@ export function DeliveryPage() {
           { value: 'done', label: 'Done' },
         ]}
       />
-      {tab === 'returns' ? <ReturnJobList /> : null}
+      {tab === 'available' || tab === 'returns' ? <PoolControls pool={pool} /> : null}
+      {tab === 'returns' ? <ReturnJobList view={pool.view} /> : null}
       {full && (tab === 'available' || tab === 'returns') ? <Notice tone="ticket">{full}</Notice> : null}
       {jobs.length && tab !== 'returns' ? <ProductSearch value={search} onChange={setSearch} /> : null}
       {tab === 'returns' ? null : q.isPending ? (
@@ -84,6 +89,8 @@ export function DeliveryPage() {
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
       ) : shown.length === 0 && search.trim() ? (
         <NoProductMatch query={search} />
+      ) : shown.length === 0 && tab === 'available' && pool.view.area ? (
+        <EmptyState icon={TruckIcon} title="Nothing in this area right now" body="Jobs collected in or going to this area appear here. Try all areas." />
       ) : shown.length === 0 ? (
         <EmptyState
           icon={TruckIcon}
@@ -113,6 +120,7 @@ function JobCard({ job: j, tab }: { job: DeliveryJob; tab: Tab }) {
         <ProductId code={j.productCode} />
         <span className="text-xs text-subtle">{route(j)}</span>
         {tab === 'mine' && j.collectBy ? <CollectByLine at={j.collectBy} /> : null}
+        {tab === 'available' || tab === 'mine' ? <JobFacts job={j} /> : null}
         {tab === 'done' && j.atCounterAt ? <span className="text-xs text-subtle">Handed to the counter {dateTime(j.atCounterAt)}</span> : tab === 'done' && j.deliveredAt ? <span className="text-xs text-subtle">Delivered {dateTime(j.deliveredAt)}</span> : null}
       </div>
     </div>

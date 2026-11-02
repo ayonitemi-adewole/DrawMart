@@ -2621,6 +2621,25 @@ describe('cart and checkout', () => {
       expect(pushes.map((p) => p.body).join(' ')).not.toMatch(/Awolowo|[0-9]{6}/)
     })
 
+    it('shows pool jobs by area, size and pay, never an address, and pays what it showed', async () => {
+      const poolRider = await newUser('pool-rider@example.com', { role: 'delivery' })
+      const { id } = await readyOrder('pool-buyer@example.com')
+      type PoolRow = { id: string; fromArea: string | null; toArea: string | null; size: string; payKobo: number; postedAt: string | null; dropOff: unknown }
+      const row = (await asUser<{ j: PoolRow[] }>(poolRider, `select public.delivery_jobs() j`))[0].j.find((j) => j.id === id)!
+      const [{ seller, buyer }] = await admin<{ seller: string; buyer: string }>(
+        `select m.delivery_area seller, private.nearest_area(o.delivery_lat, o.delivery_lng) buyer from public.orders o join public.merchants m on m.id = o.merchant_id where o.id = $1`, [id])
+      expect(row).toMatchObject({ fromArea: seller, toArea: buyer, size: 'large', dropOff: null })
+      expect(row.postedAt).toBeTruthy()
+      const [{ address }] = await admin<{ address: string }>(`select delivery_address address from public.orders where id = $1`, [id])
+      expect(JSON.stringify(row)).not.toContain(address)
+
+      await asUser(poolRider, `select public.take_delivery($1)`, [id])
+      await asUser(poolRider, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+      const [{ user_id: b }] = await admin<{ user_id: string }>(`select user_id from public.orders where id = $1`, [id])
+      await tryPin(poolRider, id, (await pinsOf(b))[id])
+      expect(await asUser(poolRider, `select amount_kobo from public.rider_earnings`)).toEqual([{ amount_kobo: row.payKobo }])
+    })
+
     it('shows the buyer their rider once collected, with a chat only the two of them can read', async () => {
       const carrier = await newUser('chat-rider@example.com', { role: 'delivery' })
       await admin(`update public.profiles set display_name = 'Bayo Adeyemi' where id = $1`, [carrier])
