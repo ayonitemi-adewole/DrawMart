@@ -9,7 +9,7 @@ import type { Discount } from '@/domain/discounts'
 import type { PricingStats } from '@/domain/drawPricing'
 import { STORE_APPLICATION_ERROR_TEXT, validateStoreApplication } from '@/domain/storeApplications'
 import type { PayoutAccount, PayoutKind, PayoutStatus } from '@/domain/payouts'
-import type { ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews, StoreApplicationView, SupportMessage, SupportThreadSummary, QuickReply } from './types'
+import type { ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews, StoreApplicationView, SupportMessage, SupportThreadSummary, QuickReply, BulkUploadResult } from './types'
 import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js'
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
@@ -1234,6 +1234,20 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     finishReturn: async (claimId, photo) => {
       const [url] = await uploadPhotos(`riders/${await requireId()}`, [photo])
       await rpc('finish_return', { p_claim_id: claimId, p_photo: url })
+    },
+    createProductsBulk: async (items, onProgress) => {
+      const merchantId = await myMerchantId()
+      const total = items.reduce((n, i) => n + (i.images?.length ?? 0), 0)
+      let done = 0
+      const uploaded: NewProductInput[] = []
+      // One product's photos at a time, so a slow connection still shows progress.
+      for (const item of items) {
+        const images = await uploadPhotos(merchantId, item.images ?? [])
+        done += images.length
+        onProgress?.(done, total)
+        uploaded.push({ ...item, images })
+      }
+      return rpc<BulkUploadResult>('create_products_bulk', { p: { items: uploaded } })
     },
     listDiscounts: async () => {
       const rows = unwrap(

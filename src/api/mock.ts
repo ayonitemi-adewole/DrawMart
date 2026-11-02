@@ -33,13 +33,14 @@ import {
 } from '@/domain/listing'
 import { nairaToKobo } from '@/domain/money'
 import { canChangeInReview, withdrawalFees } from '@/domain/listingActions'
-import { NEW_SELLER, newCheckCode, newSellerLimitError, proofErrors } from '@/domain/listingChecks'
+import { NEW_SELLER, newCheckCode, newSellerLimitError, proofErrors, serialError } from '@/domain/listingChecks'
 import { canClaim, canContest, claimError, contestError, returnFeeKobo, returnRefundSplit, sellerShareOfReturnFee } from '@/domain/claims'
 import { deliveryFeeKobo, packageSizeOf, sellerAreaOf } from '@/domain/deliveryFees'
 import { locationError } from '@/domain/location'
 import { shopProfileErrors } from '@/domain/shopProfile'
 import { quickReplyError } from '@/domain/quickReplies'
 import { pricingStats } from '@/domain/drawPricing'
+import { MAX_BULK_ROWS } from '@/domain/bulkUpload'
 import { MAX_OPEN_DISCOUNTS, bestPrice, discountActive, discountErrors, normalizeCode, type Discount, type ListingSale } from '@/domain/discounts'
 import { DUPLICATE_CAC_TEXT, STORE_APPLICATION_ERROR_TEXT, normalizeCac, storeAccountBlocker, validateStoreApplication } from '@/domain/storeApplications'
 import { REVIEWS_SHOWN_FROM, averageRating, canReview, hideReasonError, replyError, reviewError, reviewerName } from '@/domain/reviews'
@@ -102,7 +103,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v47' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v48' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -169,6 +170,8 @@ interface Db {
   discounts: (Discount & { merchantId: string })[]
   /** One use of a code per buyer. */
   discountRedemptions: { discountId: string; userId: string }[]
+  /** Spot checks a bulk upload picked, by shop id: its next listings need a video. */
+  owedChecks: Record<string, number>
   /** Not stored: the time the current call runs at, set by tx(). */
   clock?: number
   /** Not stored: the buyer the current call acts for, set by tx(). */
@@ -639,6 +642,7 @@ async function freshDb(): Promise<Db> {
     quickReplies: {},
     discounts: [],
     discountRedemptions: [],
+    owedChecks: {},
     conversations: [],
     messages: [],
     callPhones: { 'm-surulere': '0803 000 1234' },
@@ -1056,6 +1060,17 @@ function orderView(db: Db, order: MockOrder, forBuyer = false): OrderView {
  * They're gone after a reload; the record of what was sent isn't.
  */
 const checkFiles = new Map<string, string>()
+
+/**
+ * A bulk upload's photos, in memory for the same reason: 50 products' worth would fill
+ * localStorage. They show for the rest of the session and are blank after a reload.
+ */
+function keepBulkPhoto(src: string): string {
+  if (!src.startsWith('data:') || typeof URL.createObjectURL !== 'function') return src
+  const [head, body] = src.split(',')
+  const bytes = Uint8Array.from(atob(body), (c) => c.charCodeAt(0))
+  return URL.createObjectURL(new Blob([bytes], { type: /data:([^;]+)/.exec(head)?.[1] ?? 'image/jpeg' }))
+}
 function keepCheckFile(file: Blob | string | null): string | null {
   if (!file) return null
   const key = `check-${checkFiles.size + 1}-${Date.now()}`
@@ -1319,7 +1334,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
   const checkSettings = opts.listingChecks ?? { firstListings: 5, spotPercent: 10 }
   // listingChecks.ts: individuals always; stores for their first listings, or when the code came with a spot check.
   const videoRequired = (db: Db, shop: Merchant) =>
-    shop.kind === 'individual' || db.listings.filter((l) => l.merchantId === shop.id && l.kind === 'product').length < checkSettings.firstListings || !!db.checkTickets[shop.id]?.videoRequired
+    shop.kind === 'individual' || db.listings.filter((l) => l.merchantId === shop.id && l.kind === 'product').length < checkSettings.firstListings || !!db.checkTickets[shop.id]?.videoRequired || (db.owedChecks[shop.id] ?? 0) > 0
   const newSellerProgress = (db: Db, shop: Merchant) => ({
     individual: shop.kind === 'individual',
     deliveries: db.orders.filter((o) => o.merchantId === shop.id && o.status === 'delivered' && !o.refundedAt && !o.isPrize).length,
@@ -1999,7 +2014,40 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         db.listings.push(listing)
         db.listingChecks[listing.id] = { code: check?.code ?? null, videoKey: keepCheckFile(check?.video ?? null), serial: check?.serial?.trim() || null, proofKey: keepCheckFile(check?.proof ?? null) }
         delete db.checkTickets[shop.id]
+        if (check?.video && db.owedChecks[shop.id]) db.owedChecks[shop.id] -= 1
         return listingView(db, listing, 'full')
+      }),
+
+    createProductsBulk: (items, onProgress) =>
+      tx((db) => {
+        const shop = db.merchants.find((m) => m.id === readSession()?.userId && readSession()?.role === 'store')
+        if (!shop) throw new ApiError('forbidden', 'Bulk upload is for stores. Add your items one at a time.')
+        if (shop.suspendedAt) throw new ApiError('forbidden', 'Your shop is suspended. Contact DrawMart.')
+        if (!items.length) throw new ApiError('invalid_input', 'Add at least one product.')
+        if (items.length > MAX_BULK_ROWS) throw new ApiError('invalid_input', `Upload up to ${MAX_BULK_ROWS} products at a time.`)
+        if (videoRequired(db, shop)) throw new ApiError('invalid_input', 'Your next listing needs a short video. Add it with the form, then upload the rest.')
+        const picked = new Set(items.map((_, i) => i).filter(() => Math.random() * 100 < checkSettings.spotPercent))
+        const errors: string[] = []
+        items.forEach((item, i) => {
+          if (picked.has(i)) return
+          const problems = validateProduct(item).map((e) => PRODUCT_ERROR_TEXT[e])
+          const serial = serialError(item.category, item.priceKobo, item.check?.serial ?? '')
+          if (serial) problems.push(serial)
+          if ((item.images?.length ?? 0) > 4) problems.push('Upload up to 4 photos.')
+          if (problems.length) errors.push(`Row ${i + 2}: ${problems.join(' ')}`)
+        })
+        if (errors.length) throw new ApiError('invalid_input', errors.join(' '))
+        items.forEach((item, i) => {
+          if (picked.has(i)) return
+          const { check, ...details } = item
+          const listing = productListing({ ...details, images: (details.images ?? []).map(keepBulkPhoto), merchantId: shop.id, status: 'pending_review' }, now())
+          db.listings.push(listing)
+          db.listingChecks[listing.id] = { code: null, videoKey: null, serial: check?.serial?.trim() || null, proofKey: null }
+        })
+        if (picked.size) db.owedChecks[shop.id] = (db.owedChecks[shop.id] ?? 0) + picked.size
+        const photos = items.reduce((n, i) => n + (i.images?.length ?? 0), 0)
+        onProgress?.(photos, photos)
+        return { created: items.length - picked.size, checkTitles: [...picked].map((i) => items[i].title.trim()) }
       }),
 
     listPayouts: () =>

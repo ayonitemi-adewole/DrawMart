@@ -14,7 +14,7 @@ import { isProductCode } from '../../src/domain/productCode'
 import { readFileSync, readdirSync } from 'node:fs'
 import { PGlite } from '@electric-sql/pglite'
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto'
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, afterEach } from 'vitest'
 import { verifyDraw, winningTicketNumber, createSeed } from '@/domain/draw'
 import { computeListingEconomics, platformFeeBps } from '@/domain/fees'
 import { DELIVERY_AREAS, areaFromText, defaultSizeFor, deliveryFeeKobo, placeholderPriceKobo, placeholderPricing } from '@/domain/deliveryFees'
@@ -1692,6 +1692,58 @@ describe('delivery fees', () => {
     const anyone = await newUser('fee-nobody@example.com')
     await expectFail(asUser(anyone, `select public.set_shop_delivery_area('ikeja')`), 'forbidden')
     await expectFail(asUser(ikeja, `select public.create_product($1)`, [{ title: 'Bad', description: '', category: 'Home', priceKobo: 500_000, packageSize: 'huge' }]), 'invalid_input')
+  })
+})
+
+describe('bulk upload', () => {
+  const SHOP = '11111111-1111-4111-8111-000000000003'
+  let owner: string, seller: string
+  const item = (n: number, over: Record<string, unknown> = {}) => ({ title: `Bulk fan ${n}`, description: '', category: 'Home', priceKobo: 2_500_000, stock: 3, images: ['/assets/fan.jpg'], check: { code: '', serial: '' }, ...over })
+  const bulk = (who: string, items: unknown[]) => asUser<{ r: { created: number; checkTitles: string[] } }>(who, `select public.create_products_bulk($1) r`, [{ items }])
+  const count = async () => Number((await admin<{ n: string }>(`select count(*) n from public.listings where merchant_id = $1 and title like 'Bulk fan%'`, [SHOP]))[0].n)
+
+  beforeAll(async () => {
+    owner = await newUser('bulk-store@example.com', { merchantId: SHOP })
+    seller = await newUser('bulk-seller@example.com')
+    await asUser(seller, `select public.submit_seller_application($1)`, [{ shopName: 'Bulk Shop', legalName: 'Bulk Seller', nin: '123 4567 8901', phone: '0803 123 4567', address: '12 Herbert Macaulay Way, Yaba', area: 'Yaba', idPhoto: `${seller}/id.jpg`, selfie: `${seller}/selfie.jpg` }])
+    const staff = await newUser('bulk-staff@example.com', { role: 'admin' })
+    const [{ id: app }] = await admin<{ id: string }>(`select id from public.seller_applications where user_id = $1`, [seller])
+    await asUser(staff, `select public.approve_seller($1)`, [app])
+  })
+  afterEach(async () => {
+    await admin(`update public.app_settings set check_first_listings = 0, spot_check_percent = 0 where id`)
+  })
+
+  it('puts 50 rows into review in one go, or none if one is wrong', async () => {
+    await expectFail(bulk(owner, [item(1), item(2), item(3, { priceKobo: 50 })]), 'invalid_input')
+    expect(await count()).toBe(0)
+    expect(await bulk(owner, Array.from({ length: 50 }, (_, n) => item(n)))).toEqual([{ r: { created: 50, checkTitles: [] } }])
+    expect(await admin(`select distinct status, kind from public.listings where merchant_id = $1 and title like 'Bulk fan%'`, [SHOP])).toEqual([{ status: 'pending_review', kind: 'product' }])
+    await expectFail(bulk(owner, Array.from({ length: 101 }, (_, n) => item(n))), 'invalid_input')
+  })
+
+  it('says which rows are wrong', async () => {
+    const err = await expectFail(bulk(owner, [item(1), item(2, { category: 'Toys' }), item(3, { category: 'Phones', priceKobo: 9_000_000 })]), 'invalid_input')
+    expect(err.detail).toMatch(/Row 3: .*Pick a category.*Row 4: .*serial or IMEI/)
+  })
+
+  it('is for stores past their first listings, and keeps spot checks', async () => {
+    await expectFail(bulk(seller, [item(1)]), 'forbidden')
+    await admin(`update public.app_settings set check_first_listings = 1000 where id`)
+    await expectFail(bulk(owner, [item(1)]), 'invalid_input')
+    await admin(`update public.app_settings set check_first_listings = 0, spot_check_percent = 100 where id`)
+    const before = await count()
+    expect(await bulk(owner, [item(91), item(92)])).toEqual([{ r: { created: 0, checkTitles: ['Bulk fan 91', 'Bulk fan 92'] } }])
+    expect(await count()).toBe(before)
+    await admin(`update public.app_settings set spot_check_percent = 0 where id`)
+    // Owed: the next listings need a video, one each, until both are done.
+    await expectFail(bulk(owner, [item(93)]), 'invalid_input')
+    await expectFail(asUser(owner, `select public.create_product($1)`, [item(91)]), 'invalid_input')
+    for (const n of [91, 92]) {
+      const [{ plan }] = await asUser<{ plan: { code: string } }>(owner, `select public.listing_check_plan() plan`)
+      await asUser(owner, `select public.create_product($1)`, [item(n, { check: { code: plan.code, videoPath: `${SHOP}/v.webm` } })])
+    }
+    expect(await bulk(owner, [item(93)])).toEqual([{ r: { created: 1, checkTitles: [] } }])
   })
 })
 

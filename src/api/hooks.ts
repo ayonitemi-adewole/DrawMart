@@ -435,6 +435,14 @@ export function useSetDeliverySizeExtra() {
   })
 }
 
+export function useCreateProductsBulk() {
+  const invalidate = useInvalidateAll()
+  return useMutation({
+    mutationFn: ({ items, onProgress }: { items: NewProductInput[]; onProgress?: (done: number, total: number) => void }) => api.createProductsBulk(items, onProgress),
+    onSettled: invalidate,
+  })
+}
+
 export function useDiscountActions() {
   const invalidate = useInvalidateAll()
   return {

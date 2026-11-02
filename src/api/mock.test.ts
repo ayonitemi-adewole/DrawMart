@@ -2173,4 +2173,42 @@ describe('mock api', () => {
       expect((await api.getListing(p.id)).sale?.priceKobo).toBe(k(19_000)) // the sale still runs
     })
   })
+
+  describe('bulk upload', () => {
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+    const item = (n: number, over: Partial<NewProductInput> = {}): NewProductInput => ({
+      title: `Bulk fan ${n}`, description: '', category: 'Home', priceKobo: k(25_000), stock: 3, images: ['/assets/fan.jpg'], check: { code: '', serial: '' }, ...over,
+    })
+
+    it('puts every row into review, or none if one is wrong', async () => {
+      const api = make()
+      await as(api, 'store')
+      const before = (await api.listMerchantListings()).length
+      await expect(api.createProductsBulk([item(1), item(2), item(3, { priceKobo: k(50) })])).rejects.toThrow('Row 4')
+      expect((await api.listMerchantListings()).length).toBe(before)
+      const out = await api.createProductsBulk(Array.from({ length: 50 }, (_, n) => item(n)))
+      expect(out).toEqual({ created: 50, checkTitles: [] })
+      const added = (await api.listMerchantListings()).filter((l) => l.title.startsWith('Bulk fan'))
+      expect(added).toHaveLength(50)
+      expect(added.every((l) => l.status === 'pending_review' && l.kind === 'product' && l.images.length === 1)).toBe(true)
+    })
+
+    it('is for stores only', async () => {
+      const api = make()
+      await as(api, 'seller')
+      await expect(api.createProductsBulk([item(1)])).rejects.toMatchObject({ code: 'forbidden' })
+    })
+
+    it('holds back spot-checked rows, and the next listing needs a video', async () => {
+      const api = make(undefined, { firstListings: 0, spotPercent: 100 })
+      await as(api, 'store')
+      expect(await api.createProductsBulk([item(1), item(2)])).toEqual({ created: 0, checkTitles: ['Bulk fan 1', 'Bulk fan 2'] })
+      await expect(api.createProductsBulk([item(3)])).rejects.toThrow('needs a short video')
+      const plan = await api.getListingCheckPlan()
+      expect(plan.videoRequired).toBe(true)
+      await expect(api.createProduct(item(1))).rejects.toThrow('Record a short video')
+      await api.createProduct(item(1, { check: { code: plan.code, video: new Blob(['v'], { type: 'video/webm' }) } }))
+      await api.createProduct(item(2, { check: { code: (await api.getListingCheckPlan()).code, video: new Blob(['v'], { type: 'video/webm' }) } }))
+    })
+  })
 })

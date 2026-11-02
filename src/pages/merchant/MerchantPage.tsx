@@ -28,7 +28,7 @@ import {
 import { BoostRow } from '@/components/BoostControl'
 import { AddressPicker } from '@/components/AddressPicker'
 import { useToast } from '@/components/toast'
-import { Badge, Button, Card, EmptyState, ErrorState, Field, Notice, ProductImage, ProgressBar, Segmented, Skeleton, StatTile, cx, errorMessage, inputCls, type Tone } from '@/components/ui'
+import { Badge, Button, Card, EmptyState, ErrorState, Field, Notice, ProductImage, ProgressBar, Segmented, Skeleton, StatTile, cx, errorMessage, inputCls, type Tone, buttonClass } from '@/components/ui'
 import { LISTING_ERROR_TEXT, computeListingEconomics, platformFeeBps, validateListingEconomics, type ListingValidationError } from '@/domain/fees'
 import {
   HANDOVER_ERROR_TEXT,
@@ -122,9 +122,14 @@ export function MerchantPage() {
           ) : null}
         </div>
         {tab !== 'new' ? (
-          <Button onClick={() => setTab('new')}>
-            <PlusIcon size={18} /> New listing
-          </Button>
+          <span className="flex flex-wrap gap-2">
+            <Link to="/store/bulk" className={buttonClass('outline')}>
+              Upload many
+            </Link>
+            <Button onClick={() => setTab('new')}>
+              <PlusIcon size={18} /> New listing
+            </Button>
+          </span>
         ) : null}
       </div>
 

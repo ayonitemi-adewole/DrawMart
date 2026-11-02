@@ -155,6 +155,13 @@ export interface NewProductInput {
   priceKobo: Kobo
 }
 
+/** What a bulk upload did (bulkUpload.ts). */
+export interface BulkUploadResult {
+  created: number
+  /** Picked for a spot check: not created. The store adds each with the form and a video. */
+  checkTitles: string[]
+}
+
 export type SupportSender = 'shop' | 'drawmart'
 
 /** A seller's saved chat answer (quickReplies.ts). Only the shop sees them. */
@@ -841,6 +848,8 @@ export interface DrawMartApi {
   /** Issues the code to show in the video, and says what the listing form must ask for. */
   getListingCheckPlan(): Promise<ListingCheckPlan>
   getListingCheck(listingId: string): Promise<ListingCheckView | null>
+  /** Stores only: up to 100 products, all or nothing. Photos go up first; `onProgress` counts them. */
+  createProductsBulk(items: NewProductInput[], onProgress?: (done: number, total: number) => void): Promise<BulkUploadResult>
   /** The signed-in shop's discounts, newest first. */
   listDiscounts(): Promise<Discount[]>
   createDiscount(input: DiscountInput): Promise<void>
