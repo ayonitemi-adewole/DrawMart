@@ -2621,6 +2621,84 @@ describe('cart and checkout', () => {
       expect(pushes.map((p) => p.body).join(' ')).not.toMatch(/Awolowo|[0-9]{6}/)
     })
 
+    it('records a missed buyer after the wait, rebooks once, then sends it back less delivery', async () => {
+      const carrier = await newUser('missed-rider@example.com', { role: 'delivery' })
+      const b = await newUser('missed-buyer@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const [{ id: listing }] = await asUser<{ id: string }>(store, `select public.create_product($1) id`, [{ title: 'Missed lamp', category: 'Home', priceKobo: 500_000, stock: 3 }])
+      await asUser(staff, `select public.approve_listing($1)`, [listing])
+      const order = async () => {
+        await add(b, listing)
+        const [id] = await checkout(b, details([listing]))
+        await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+        await asUser(store, `select public.dispatch_order($1)`, [id])
+        await asUser(carrier, `select public.take_delivery($1)`, [id])
+        await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+        return id
+      }
+      const fail = (id: string, lat = 6.45, lng = 3.43) => asUser(carrier, `select public.fail_delivery_attempt($1, '/assets/door.jpg', $2, $3)`, [id, lat, lng])
+      const arrive = (id: string) => asUser(carrier, `select public.mark_arrived($1)`, [id])
+      const waited = (id: string) => admin(`update public.orders set arrived_at = now() - interval '11 minutes' where id = $1`, [id])
+      const row = async (id: string) => (await admin<{ status: string; cancel_reason: string | null; failed_attempts: number; return_state: string | null; fulfilment: string; delivery_address: string | null; price_kobo: string }>(
+        `select status, cancel_reason, failed_attempts, return_state, fulfilment, delivery_address, price_kobo from public.orders where id = $1`, [id]))[0]
+      const total = async () => Object.values(await balance(b)).reduce((n, v) => n + Number(v), 0)
+      const choose = (id: string, start: string | null, point: string | null) => asUser(b, `select public.choose_redelivery($1, $2, $3)`, [id, start, point])
+
+      const id = await order()
+      await expectFail(fail(id), 'invalid_input') // not arrived
+      await arrive(id)
+      await expectFail(fail(id), 'invalid_input') // not waited
+      await waited(id)
+      await expectFail(fail(id, 6.47), 'invalid_input') // not there
+      await expectFail(asUser(store, `select public.fail_delivery_attempt($1, '/assets/door.jpg', 6.45, 3.43)`, [id]), 'forbidden')
+      await fail(id)
+      expect(await row(id)).toMatchObject({ status: 'dispatched', failed_attempts: 1 })
+      expect(await admin(`select count(*)::int n from private.delivery_attempts where order_id = $1`, [id])).toEqual([{ n: 1 }])
+      expect(await asUser(b, `select kind from public.notifications where kind = 'order_delivery_failed'`)).toHaveLength(1)
+      await expectFail(arrive(id), 'invalid_input') // waiting for the buyer
+      expect((await jobs(carrier)).find((j) => j.id === id)).toMatchObject({ awaitingBuyer: true })
+
+      // A window: an odd hour, too soon or too late are refused.
+      await expectFail(choose(id, null, null), 'invalid_input')
+      const [{ ok, odd, late }] = await admin<{ ok: string; odd: string; late: string }>(`
+        select (date_trunc('day', now() at time zone 'Africa/Lagos') + interval '1 day 11 hours') at time zone 'Africa/Lagos' ok,
+               (date_trunc('day', now() at time zone 'Africa/Lagos') + interval '1 day 12 hours') at time zone 'Africa/Lagos' odd,
+               (date_trunc('day', now() at time zone 'Africa/Lagos') + interval '3 days 11 hours') at time zone 'Africa/Lagos' late`)
+      await expectFail(choose(id, odd, null), 'invalid_input')
+      await expectFail(choose(id, late, null), 'invalid_input')
+      await expectFail(asUser(store, `select public.choose_redelivery($1, $2, null)`, [id, ok]), 'not_found')
+      await choose(id, ok, null)
+      await expectFail(choose(id, ok, null), 'invalid_input')
+      expect(await asUser(carrier, `select kind from public.notifications where kind = 'rider_redelivery_chosen'`)).toHaveLength(1)
+
+      // Second miss: refunded the price, not delivery, and not the seller's cancellation.
+      const cancelled = async () => (await asUser<{ r: { merchantId: string; cancelled: number }[] }>(staff, `select public.merchant_cancel_rates() r`))[0].r.find((x) => x.merchantId === IKEJA)?.cancelled ?? 0
+      const [start, cancelledBefore] = [await total(), await cancelled()]
+      await arrive(id)
+      await waited(id)
+      await fail(id)
+      expect(await row(id)).toMatchObject({ status: 'cancelled', cancel_reason: 'not_delivered', failed_attempts: 2, return_state: 'returning' })
+      expect((await total()) - start).toBe(Number((await row(id)).price_kobo))
+      expect(await cancelled()).toBe(cancelledBefore)
+      await asUser(carrier, `select public.complete_return($1, '/assets/back.jpg')`, [id])
+
+      // No choice within 24 hours: the same. Or a pickup location instead.
+      const silent = await order()
+      const switched = await order()
+      for (const x of [silent, switched]) {
+        await arrive(x)
+        await waited(x)
+        await fail(x)
+      }
+      await choose(switched, null, 'ikeja')
+      expect(await row(switched)).toMatchObject({ fulfilment: 'pickup', delivery_address: null })
+      await admin(`update public.orders set last_failed_at = now() - interval '25 hours' where id = any($1)`, [[silent, switched]])
+      await admin(`select private.process_deadlines()`)
+      expect(await row(silent)).toMatchObject({ status: 'cancelled', cancel_reason: 'not_delivered' })
+      expect(await row(switched)).toMatchObject({ status: 'dispatched' })
+      await expectFail(tryPin(carrier, switched, (await pinsOf(b))[switched]), 'invalid_input')
+    })
+
     it('closes pickup orders at the counter, and sends uncollected ones back less delivery', async () => {
       const counter = await newUser('counter-ikeja@example.com', { role: 'delivery' })
       await admin(`update public.profiles set pickup_point_id = 'ikeja' where id = $1`, [counter])

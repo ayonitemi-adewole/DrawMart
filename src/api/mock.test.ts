@@ -1,4 +1,5 @@
 import type { NewProductInput } from './types'
+import { redeliveryWindows } from '@/domain/deliveryAttempts'
 import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO } from '@/domain/deliveryChecks'
 import { returnFeeKobo, sellerShareOfReturnFee } from '@/domain/claims'
 import { areaPairPrice, deliveryFeeKobo, placeholderPricing } from '@/domain/deliveryFees'
@@ -769,6 +770,105 @@ describe('mock api', () => {
       await api.reviewClaim(c.id, true, '')
       await as(api, 'store')
       expect((await api.listPayouts()).filter((l) => l.orderId === order.id)).toEqual([])
+    })
+  })
+
+  describe('buyer not available', () => {
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    /** n orders, each in its own checkout, with the rider carrying them. Leaves the rider signed in. */
+    const carrying = async (api: ReturnType<typeof make>, n: number) => {
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Missed lamp', description: '', category: 'Home', priceKobo: k(20_000), stock: n })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(200_000))
+      const orders = []
+      for (let i = 0; i < n; i++) orders.push((await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null }))[0])
+      await as(api, 'store')
+      for (const o of orders) {
+        await api.sellerConfirmOrder(o.id, '/assets/c.jpg')
+        await api.dispatchOrder(o.id)
+      }
+      await as(api, 'rider')
+      for (const o of orders) {
+        await api.takeDelivery(o.id)
+        await api.passCollection(o.id, ['/assets/a.jpg'])
+      }
+      return orders
+    }
+    const total = async (api: ReturnType<typeof make>) => {
+      const b = (await api.getWallet()).balance
+      return b.cashKobo + b.creditKobo
+    }
+
+    it('records a failed attempt after the wait, lets the buyer rebook, and sends it back after a second', async () => {
+      const c = { t: Date.parse('2026-11-02T10:00:00+01:00') }
+      const api = make(() => c.t)
+      const [o] = await carrying(api, 1)
+      const fail = (at = delivery.location) => api.failDeliveryAttempt(o.id, '/assets/door.jpg', at)
+      await expect(fail()).rejects.toThrow('arrived')
+      await api.markArrived(o.id)
+      await expect(fail()).rejects.toThrow('Wait 10 minutes')
+      c.t += 10 * 60_000
+      await expect(fail({ lat: 6.47, lng: 3.43 })).rejects.toThrow('buyer’s address')
+      await fail()
+      expect((await api.listDeliveryJobs()).find((j) => j.id === o.id)).toMatchObject({ mine: true, awaitingBuyer: true, failedAttempts: 1, arrivedAt: null })
+      await expect(api.markArrived(o.id)).rejects.toThrow('hasn’t chosen')
+
+      await as(api, 'funke')
+      expect((await api.listNotifications()).some((n) => n.kind === 'order_delivery_failed')).toBe(true)
+      const mine = (await api.listMyOrders()).find((x) => x.id === o.id)!
+      expect(mine).toMatchObject({ failedAttempts: 1, redeliveryChoice: null })
+      await expect(api.chooseRedelivery(o.id, { windowStart: new Date(c.t + 30 * 60_000).toISOString() })).rejects.toThrow('Pick one')
+      const [window] = redeliveryWindows(mine.lastFailedAt!, c.t)
+      await api.chooseRedelivery(o.id, { windowStart: window })
+      await expect(api.chooseRedelivery(o.id, { windowStart: window })).rejects.toThrow('doesn’t need')
+
+      await as(api, 'rider')
+      expect((await api.listNotifications()).some((n) => n.kind === 'rider_redelivery_chosen')).toBe(true)
+      expect((await api.listDeliveryJobs()).find((j) => j.id === o.id)).toMatchObject({ awaitingBuyer: false, redeliverAt: window })
+      c.t = Date.parse(window)
+      await api.markArrived(o.id)
+      c.t += 10 * 60_000
+      await as(api, 'funke')
+      const before = await total(api)
+      await as(api, 'rider')
+      await fail()
+
+      // Second time: back to the seller, the price refunded but not delivery, and not the seller's cancellation.
+      await as(api, 'funke')
+      expect((await total(api)) - before).toBe(k(20_000))
+      expect((await api.listMyOrders()).find((x) => x.id === o.id)).toMatchObject({ status: 'cancelled', cancelReason: 'not_delivered', failedAttempts: 2 })
+      await as(api, 'store')
+      expect((await api.listNotifications()).some((n) => n.kind === 'store_order_undelivered')).toBe(true)
+      await as(api, 'admin')
+      expect((await api.listCancelRates()).find((r) => r.merchantId === 'm-ikeja')?.cancelled).toBe(0)
+      await as(api, 'rider')
+      expect((await api.listDeliveryJobs()).find((j) => j.id === o.id)).toMatchObject({ mine: true, returning: true })
+      await api.completeReturn(o.id, '/assets/back.jpg')
+    })
+
+    it('sends it back if the buyer doesn’t choose in 24 hours, and can switch to a pickup location', async () => {
+      const c = { t: Date.parse('2026-11-02T10:00:00+01:00') }
+      const api = make(() => c.t)
+      const [silent, switched] = await carrying(api, 2)
+      for (const o of [silent, switched]) await api.markArrived(o.id)
+      c.t += 10 * 60_000
+      for (const o of [silent, switched]) await api.failDeliveryAttempt(o.id, '/assets/door.jpg', delivery.location)
+
+      await as(api, 'funke')
+      await api.chooseRedelivery(switched.id, { pickupPointId: 'ikeja' })
+      expect((await api.listMyOrders()).find((x) => x.id === switched.id)).toMatchObject({ fulfilment: 'pickup', pickupPoint: { id: 'ikeja' }, redeliveryChoice: 'pickup' })
+      c.t += 24 * 3_600_000
+      expect((await api.listMyOrders()).find((x) => x.id === silent.id)).toMatchObject({ status: 'cancelled', cancelReason: 'not_delivered' })
+      expect((await api.listMyOrders()).find((x) => x.id === switched.id)?.status).toBe('dispatched')
+
+      // Now it goes through the counter like any pickup order.
+      await as(api, 'rider')
+      await expect(api.confirmDelivery(switched.id, switched.deliveryPin!)).rejects.toThrow('counter staff')
+      await as(api, 'counter')
+      expect((await api.listCounterItems()).map((i) => i.id)).toContain(switched.id)
     })
   })
 

@@ -223,7 +223,7 @@ export interface OrderClaim {
 /** Why a seller cancelled an order (orderCancel.ts). */
 export type RefusalReason = 'refused_wrong' | 'refused_damaged'
 export type CollectionProblem = 'wrong_item' | 'wrong_quantity' | 'damaged' | 'wont_power_on' | 'no_item'
-export type CancelReason = 'out_of_stock' | 'damaged' | 'cant_send' | 'other' | 'not_confirmed' | 'not_sent' | 'failed_check' | 'not_collected' | RefusalReason
+export type CancelReason = 'out_of_stock' | 'damaged' | 'cant_send' | 'other' | 'not_confirmed' | 'not_sent' | 'failed_check' | 'not_collected' | 'not_delivered' | RefusalReason
 
 /** Where the buyer wants a fixed-price item sent. Seen only by the buyer, the store and admins. */
 export interface Delivery {
@@ -280,6 +280,13 @@ export interface Order {
   returnedAt: ISODate | null
   /** A pickup order counter staff have taken in: ready to collect (counter.ts). */
   atCounterAt: ISODate | null
+  /** Times the rider couldn't reach the buyer (deliveryAttempts.ts). */
+  failedAttempts: number
+  lastFailedAt: ISODate | null
+  /** What the buyer chose after a failed attempt. */
+  redeliveryChoice: 'redeliver' | 'pickup' | null
+  /** The start of the new two-hour window. */
+  redeliverAt: ISODate | null
   cancelledAt: ISODate | null
   cancelReason: CancelReason | null
   cancelNote: string | null
@@ -303,6 +310,7 @@ export type NotificationKind =
   | 'store_winner_picked' | 'store_draw_closing' | 'store_pickup_tomorrow' | 'store_new_message'
   | 'store_payout_sent' | 'store_bank_changed'
   | 'order_ready_to_collect' | 'order_collect_reminder' | 'store_order_uncollected'
+  | 'order_delivery_failed' | 'store_order_undelivered' | 'rider_redelivery_chosen'
   | 'rider_new_job' | 'rider_new_return' | 'rider_collect_soon' | 'rider_job_released' | 'rider_pin_unlocked'
   | 'draw_sold_out' | 'draw_won' | 'draw_lost' | 'saved_almost_sold' | 'saved_closing_soon' | 'saved_relisted' | 'saved_back_on_sale' | 'saved_price_drop'
 

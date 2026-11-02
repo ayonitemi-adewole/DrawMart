@@ -14,6 +14,12 @@ import { dateTime, ticketNo } from '@/lib/time'
 function describe(n: NotificationView, store: boolean): { icon: IconComponent; title: string; body: string; to: string } {
   const home = store ? '/store' : '/sell'
   switch (n.kind) {
+    case 'order_delivery_failed':
+      return { icon: AlertIcon, title: `We missed you: ${n.listingTitle}`, body: 'Your rider couldn’t reach you. Choose a new time or a pickup location within 24 hours.', to: '/tickets?view=orders' }
+    case 'store_order_undelivered':
+      return { icon: TruckIcon, title: `Not delivered: ${n.listingTitle}`, body: 'The rider couldn’t reach the buyer, so it’s coming back to you. Add it to your stock again once you have it.', to: `${home}?tab=orders` }
+    case 'rider_redelivery_chosen':
+      return { icon: ClockIcon, title: `Rebooked: ${n.listingTitle}`, body: 'The buyer you missed chose a new time or a pickup location.', to: '/delivery?tab=mine' }
     case 'order_ready_to_collect':
       return { icon: StoreIcon, title: `Ready to collect: ${n.listingTitle}`, body: 'It’s at the pickup location. Bring your PIN.', to: '/tickets?view=orders' }
     case 'order_collect_reminder':

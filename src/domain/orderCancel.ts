@@ -22,6 +22,7 @@ export const CANCEL_REASON_TEXT: Record<CancelReason, string> = {
   refused_wrong: 'The buyer refused it: wrong item',
   refused_damaged: 'The buyer refused it: damaged',
   not_collected: 'The buyer didn’t collect it from the pickup location',
+  not_delivered: 'The rider couldn’t reach the buyer',
 }
 
 /** What the buyer is told. */
@@ -36,6 +37,7 @@ export const CANCEL_REASON_FOR_BUYER: Record<CancelReason, string> = {
   refused_wrong: 'You refused it because it was the wrong item.',
   refused_damaged: 'You refused it because it was damaged.',
   not_collected: 'You didn’t collect it from the pickup location in time, so it’s going back to the seller. The delivery fee isn’t refunded.',
+  not_delivered: 'Our rider couldn’t reach you, so it’s going back to the seller. The delivery fee isn’t refunded.',
 }
 
 /** What it does to the listing's stock, so a seller doesn't have to fix it afterwards. */
@@ -50,6 +52,7 @@ export const CANCEL_STOCK_TEXT: Record<CancelReason, string> = {
   refused_wrong: 'It doesn’t go back into your stock.',
   refused_damaged: 'It doesn’t go back into your stock.',
   not_collected: 'It’s coming back to you. Add it to your stock again once you have it.',
+  not_delivered: 'It’s coming back to you. Add it to your stock again once you have it.',
 }
 
 export function cancelError(input: { reason: CancelReason | null; note: string }): string | null {
@@ -65,7 +68,7 @@ export function canCancelOrder(o: Pick<Order, 'status' | 'isPrize' | 'handledBy'
 }
 
 export function stockAfterCancel(reason: CancelReason, l: { stock: number; status: ListingStatus; kind?: ListingKind }, quantity: number): { stock: number; status: ListingStatus } {
-  const keeps = reason === 'damaged' || reason === 'failed_check' || reason === 'refused_wrong' || reason === 'refused_damaged' || reason === 'not_collected'
+  const keeps = reason === 'damaged' || reason === 'failed_check' || reason === 'refused_wrong' || reason === 'refused_damaged' || reason === 'not_collected' || reason === 'not_delivered'
   const stock = reason === 'out_of_stock' ? 0 : keeps ? l.stock : l.stock + quantity
   // A seller who isn't responding shouldn't get the next order too.
   if ((reason === 'not_confirmed' || reason === 'not_sent') && l.kind === 'product' && (l.status === 'for_sale' || l.status === 'sold')) return { stock, status: 'paused' }

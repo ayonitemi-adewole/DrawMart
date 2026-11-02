@@ -272,6 +272,10 @@ interface OrderRow {
   return_state: 'returning' | 'returned' | null
   returned_at: string | null
   counter_at: string | null
+  failed_attempts: number
+  last_failed_at: string | null
+  redelivery_choice: 'redeliver' | 'pickup' | null
+  redeliver_at: string | null
   delivery_fee_kobo: number
   discount_kobo?: number
   cancelled_at: string | null
@@ -477,6 +481,10 @@ function toOrderView(o: OrderRow): OrderView {
     returnState: o.return_state,
     returnedAt: o.returned_at,
     atCounterAt: o.counter_at,
+    failedAttempts: o.failed_attempts ?? 0,
+    lastFailedAt: o.last_failed_at ?? null,
+    redeliveryChoice: o.redelivery_choice ?? null,
+    redeliverAt: o.redeliver_at ?? null,
     deliveryFeeKobo: num(o.delivery_fee_kobo),
     discountKobo: num(o.discount_kobo ?? 0),
     cancelledAt: o.cancelled_at,
@@ -1219,6 +1227,8 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     },
     setDeliveryPrice: (areaA, areaB, priceKobo) => rpc('set_delivery_price', { p_area_a: areaA, p_area_b: areaB, p_price_kobo: priceKobo }),
     setDeliverySizeExtra: (size, extraKobo) => rpc('set_delivery_size_extra', { p_size: size, p_extra_kobo: extraKobo }),
+    chooseRedelivery: (orderId, choice) =>
+      rpc('choose_redelivery', { p_order_id: orderId, p_window_start: 'windowStart' in choice ? choice.windowStart : null, p_pickup_point_id: 'pickupPointId' in choice ? choice.pickupPointId : null }),
     openClaim: async (orderId, input) => {
       const photos = await uploadPhotos(`claims/${await requireId()}`, input.photos)
       await rpc('open_claim', { p_order_id: orderId, p_kind: input.kind, p_description: input.description, p_photos: photos, p_address: input.address ?? null, p_lat: input.location?.lat ?? null, p_lng: input.location?.lng ?? null, p_phone: input.phone ?? null })
@@ -1400,6 +1410,8 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     takeDelivery: (orderId) => rpc('take_delivery', { p_order_id: orderId }),
     releaseDelivery: (orderId) => rpc('release_delivery', { p_order_id: orderId }),
     confirmDelivery: (orderId, pin) => rpc<PinResult>('confirm_delivery', { p_order_id: orderId, p_pin: pin }),
+    markArrived: (orderId) => rpc<string>('mark_arrived', { p_order_id: orderId }),
+    failDeliveryAttempt: (orderId, photo, at) => rpc('fail_delivery_attempt', { p_order_id: orderId, p_photo: photo, p_lat: at.lat, p_lng: at.lng }),
     getMyCounter: () => rpc<PickupPoint | null>('my_counter'),
     listCounterItems: () => rpc<CounterItem[]>('counter_items'),
     receiveAtCounter: (orderId, productCode) => rpc('receive_at_counter', { p_order_id: orderId, p_product_code: productCode }),

@@ -319,6 +319,13 @@ export interface DeliveryJob {
   atCounterAt: string | null
   /** An uncollected item going back to the seller, still at the counter until staff hand it over. */
   waitingAtCounter: boolean
+  /** The rider said they're at the door: the wait before a failed attempt (deliveryAttempts.ts). */
+  arrivedAt: string | null
+  failedAttempts: number
+  /** Failed once: the rider keeps it while the buyer picks a new time or a pickup location. */
+  awaitingBuyer: boolean
+  /** The new window's start, once the buyer has picked one. */
+  redeliverAt: string | null
   /** Taken but not yet collected: back to the pool at this time (riderLimits.ts). */
   collectBy: string | null
   /** The address and number only reach the rider on the way there, or taking a refused item back. */
@@ -899,6 +906,8 @@ export interface DrawMartApi {
   liftSuspension(merchantId: string): Promise<void>
   /** A fault report or a return, within 48 hours of delivery. Only needs an address if it was collected from a pickup location. */
   openClaim(orderId: string, input: ClaimInput): Promise<void>
+  /** After a failed attempt: a new two-hour window, or a pickup location instead. */
+  chooseRedelivery(orderId: string, choice: { windowStart: string } | { pickupPointId: string }): Promise<void>
   /** A seller who thinks a failed check or refusal was wrong. */
   contestFailure(orderId: string, note: string): Promise<void>
   /** Fault reports and contests waiting for an admin. */
@@ -998,6 +1007,10 @@ export interface DrawMartApi {
   releaseDelivery(orderId: string): Promise<void>
   /** The only way an order becomes delivered. A wrong PIN isn't an error: see the result. */
   confirmDelivery(orderId: string, pin: string): Promise<PinResult>
+  /** The rider is at the door: starts the wait. Returns when it started. */
+  markArrived(orderId: string): Promise<string>
+  /** The buyer couldn't be reached, with a photo and where the rider is. */
+  failDeliveryAttempt(orderId: string, photo: string, at: GeoPoint): Promise<void>
   /** The pickup location this account works at, or null for a rider. */
   getMyCounter(): Promise<PickupPoint | null>
   listCounterItems(): Promise<CounterItem[]>

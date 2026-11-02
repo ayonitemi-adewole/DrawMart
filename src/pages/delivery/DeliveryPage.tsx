@@ -13,6 +13,7 @@ import type { CollectionProblem, RefusalReason } from '@/domain/types'
 import { RiderPhotos } from '@/components/RiderPhotos'
 import { CollectByLine, CollectByNotice } from './CollectBy'
 import { CounterPage } from './CounterPage'
+import { NotHome } from './NotHome'
 import { ReturnJobList } from './ReturnJobs'
 import { directionsUrl } from '@/domain/location'
 import { matchesProductSearch } from '@/domain/productCode'
@@ -230,6 +231,7 @@ function JobDetails({ job: j }: { job: DeliveryJob }) {
       ) : j.collected ? (
         <>
           <PinForm job={j} />
+          <NotHome job={j} />
           <RefuseAtDoor job={j} />
         </>
       ) : (
@@ -563,7 +565,7 @@ function ReturnLeg({ job: j }: { job: DeliveryJob }) {
         <div className="flex min-w-0 flex-col gap-1">
           <h1 className="font-display text-xl leading-tight font-extrabold">{j.listingTitle}{j.quantity > 1 ? ` × ${j.quantity}` : ''}</h1>
           <ProductId code={j.productCode} copy />
-          <Badge tone="hot" className="w-fit">{j.fulfilment === 'pickup' ? 'Not collected: take it back' : 'Refused: take it back'}</Badge>
+          <Badge tone="hot" className="w-fit">{j.fulfilment === 'pickup' ? 'Not collected: take it back' : j.failedAttempts ? 'Not delivered: take it back' : 'Refused: take it back'}</Badge>
         </div>
       </div>
       <span className="flex items-start gap-2 text-sm">

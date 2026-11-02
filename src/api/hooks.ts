@@ -6,7 +6,7 @@ import { useEffect } from 'react'
 import type { ShopPickup } from '@/domain/shopPickup'
 import type { ShopProfileInput } from '@/domain/shopProfile'
 import type { ReviewInput } from '@/domain/reviews'
-import type { CancelReason, CollectionProblem, Kobo, PackageSize, RefusalReason, RejectionReason, Category } from '@/domain/types'
+import type { CancelReason, CollectionProblem, GeoPoint, Kobo, PackageSize, RefusalReason, RejectionReason, Category } from '@/domain/types'
 import { api } from './index'
 import type { MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput } from '@/domain/sellers'
@@ -448,6 +448,8 @@ export function useDeliveryActions() {
     take: useMutation({ mutationFn: (orderId: string) => api.takeDelivery(orderId), onSettled: invalidate }),
     release: useMutation({ mutationFn: (orderId: string) => api.releaseDelivery(orderId), onSettled: invalidate }),
     confirm: useMutation({ mutationFn: ({ id, pin }: { id: string; pin: string }) => api.confirmDelivery(id, pin), onSettled: invalidate }),
+    arrived: useMutation({ mutationFn: (orderId: string) => api.markArrived(orderId), onSettled: invalidate }),
+    failAttempt: useMutation({ mutationFn: ({ id, photo, at }: { id: string; photo: string; at: GeoPoint }) => api.failDeliveryAttempt(id, photo, at), onSettled: invalidate }),
     pass: useMutation({ mutationFn: ({ id, photos }: { id: string; photos: string[] }) => api.passCollection(id, photos), onSettled: invalidate }),
     fail: useMutation({ mutationFn: ({ id, problems, note, photos }: { id: string; problems: CollectionProblem[]; note: string; photos: string[] }) => api.failCollection(id, problems, note, photos), onSettled: invalidate }),
     refuse: useMutation({ mutationFn: ({ id, pin, reason, note, photo }: { id: string; pin: string; reason: RefusalReason; note: string; photo: string }) => api.refuseDelivery(id, pin, reason, note, photo), onSettled: invalidate }),
@@ -572,6 +574,7 @@ export function useClaimActions() {
   const invalidate = useInvalidateAll()
   return {
     open: useMutation({ mutationFn: ({ id, input }: { id: string; input: ClaimInput }) => api.openClaim(id, input), onSettled: invalidate }),
+    rebook: useMutation({ mutationFn: ({ id, choice }: { id: string; choice: { windowStart: string } | { pickupPointId: string } }) => api.chooseRedelivery(id, choice), onSettled: invalidate }),
     contest: useMutation({ mutationFn: ({ id, note }: { id: string; note: string }) => api.contestFailure(id, note), onSettled: invalidate }),
     review: useMutation({ mutationFn: ({ id, approve, note }: { id: string; approve: boolean; note: string }) => api.reviewClaim(id, approve, note), onSettled: invalidate }),
   }

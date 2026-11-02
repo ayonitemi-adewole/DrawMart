@@ -19,6 +19,7 @@ import { formatNaira } from '@/domain/money'
 import { dateTime } from '@/lib/time'
 import { ProductId } from './ProductId'
 import { DeliveryPin } from './DeliveryPin'
+import { Rebook } from './Rebook'
 import { CameraCapture } from './CameraCapture'
 import { ReviewSheet } from './ReviewSheet'
 import { Stars } from './Stars'
@@ -192,6 +193,7 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
           {o.isPrize ? '' : ` Collect it by ${dateTime(collectFromCounterBy(o.atCounterAt))}, or it goes back to the seller and you’re refunded, less delivery.`}
         </Notice>
       ) : null}
+      {audience === 'buyer' ? <Rebook order={o} /> : null}
       {audience === 'buyer' && o.deliveryPin ? <DeliveryPin pin={o.deliveryPin} pickup={pickup} /> : null}
       {sender && waiting ? (
         <Button onClick={() => setConfirming(true)}>

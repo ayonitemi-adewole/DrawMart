@@ -70,6 +70,7 @@ import { checkPin, isDeliveryPin, newDeliveryPin, type PinState } from '@/domain
 import { COLLECT_WARNING_MINUTES, collectBy, collectionOverdue, takeJobError } from '@/domain/riderLimits'
 import { riderAreasError, riderJobAlertAllowed } from '@/domain/riderAlerts'
 import { counterCodeError, counterReminderDue, counterReturnDue } from '@/domain/counter'
+import { CHOOSE_WITHIN_HOURS, attemptError, redeliveryWindowError } from '@/domain/deliveryAttempts'
 import { newProductCode } from '@/domain/productCode'
 import { MAX_SAVED_ADDRESSES, SAVED_ADDRESS_ERROR_TEXT, sortAddresses, validateSavedAddress, type SavedAddress, type SavedAddressInput } from '@/domain/addresses'
 import { CART_ERROR_TEXT, CHECKOUT_ERROR_TEXT, cartError, checkoutTotalKobo, isCar, isWonPrize, lineAmountKobo, validateCheckout } from '@/domain/cart'
@@ -108,7 +109,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v51' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v52' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -120,7 +121,7 @@ const TOLU_SHOP = 'm-tolu'
 const DAY = 24 * 60 * 60 * 1000
 
 /** The PIN and who's carrying it stay out of the order everyone else sees. */
-type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState; paidCashKobo: Kobo; paidCreditKobo: Kobo; paidFeeCashKobo: Kobo; paidFeeCreditKobo: Kobo; checkoutId: string; confirmRemindedAt: string | null; riderTakenAt?: string | null; counterRemindedAt?: string | null; counterOutAt?: string | null }
+type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState; paidCashKobo: Kobo; paidCreditKobo: Kobo; paidFeeCashKobo: Kobo; paidFeeCreditKobo: Kobo; checkoutId: string; confirmRemindedAt: string | null; riderTakenAt?: string | null; counterRemindedAt?: string | null; counterOutAt?: string | null; arrivedAt?: string | null }
 
 interface Db {
   users: User[]
@@ -890,7 +891,7 @@ function cancelOrderNow(db: Db, o: MockOrder, reason: CancelReason, note: string
   db.ledger.push({ id: uid('E'), userId: o.buyerId, kind: 'order_refund', cashKobo: o.paidCashKobo, creditKobo: o.paidCreditKobo, memo: `Refund · ${l.title}`, listingId: l.id, createdAt: at })
   // One fee covers everything from this seller in this checkout: it moves to what's still coming, or comes back with the last.
   // Not collected from a counter: the trip happened, so the fee stays paid.
-  if (o.deliveryFeeKobo > 0 && reason !== 'not_collected') {
+  if (o.deliveryFeeKobo > 0 && reason !== 'not_collected' && reason !== 'not_delivered') {
     const other = db.orders.find((x) => x.checkoutId === o.checkoutId && x.merchantId === o.merchantId && x.id !== o.id && x.status !== 'cancelled' && !x.isPrize)
     if (other) {
       other.deliveryFeeKobo += o.deliveryFeeKobo
@@ -959,6 +960,10 @@ function processDeadlines(db: Db, now: number): boolean {
     const lock = o.pinState.lockedUntil
     if (o.status === 'dispatched' && o.riderId && !o.atCounterAt && lock && Date.parse(lock) <= now && Date.parse(lock) > now - 3_600_000 && !notifiedSince(db, o.riderId, 'rider_pin_unlocked', o.listingId, lock)) notify(db, o.riderId, 'rider_pin_unlocked', o.listingId, iso(now))
   }
+  // No new time chosen after a failed attempt (deliveryAttempts.ts).
+  for (const o of db.orders) {
+    if (o.status === 'dispatched' && o.failedAttempts === 1 && !o.redeliveryChoice && o.lastFailedAt && Date.parse(o.lastFailedAt) + CHOOSE_WITHIN_HOURS * 3_600_000 <= now) returnUndelivered(db, o, now)
+  }
   for (const o of db.orders) {
     if (o.status !== 'dispatched' || !o.atCounterAt) continue
     if (!o.counterRemindedAt && counterReminderDue(o.atCounterAt, now)) {
@@ -989,6 +994,13 @@ function processDeadlines(db: Db, now: number): boolean {
     }
   }
   return changed
+}
+
+/** Back to the seller with the rider: refunded the price, not delivery, and not the seller's fault. */
+function returnUndelivered(db: Db, o: MockOrder, now: number) {
+  cancelOrderNow(db, o, 'not_delivered', '', now)
+  Object.assign(o, { returnState: 'returning', arrivedAt: null })
+  notifyShop(db, o.merchantId, 'store_order_undelivered', o.listingId, iso(now))
 }
 
 /** Everything a rider is holding: deliveries, refused items going back, and returns (private.rider_jobs_held). */
@@ -1165,7 +1177,7 @@ function accountFacts(db: Db, userId: string) {
 }
 
 function orderView(db: Db, order: MockOrder, forBuyer = false): OrderView {
-  const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, paidFeeCashKobo: _feeCash, paidFeeCreditKobo: _feeCredit, checkoutId: _checkoutId, confirmRemindedAt: _reminded, riderTakenAt: _taken, counterRemindedAt: _counterReminded, counterOutAt: _counterOut, ...o } = order
+  const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, paidFeeCashKobo: _feeCash, paidFeeCreditKobo: _feeCredit, checkoutId: _checkoutId, confirmRemindedAt: _reminded, riderTakenAt: _taken, counterRemindedAt: _counterReminded, counterOutAt: _counterOut, arrivedAt: _arrived, ...o } = order
   const l = db.listings.find((x) => x.id === o.listingId)!
   const merchant = db.merchants.find((m) => m.id === o.merchantId)!
   const r = db.reviews.find((x) => x.orderId === o.id)
@@ -1331,6 +1343,15 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     const point = counterPoint()
     if (!point) throw new ApiError('forbidden', 'Only pickup counter staff can do this.')
     return point
+  }
+  /** The order this rider is at the door with (private.door_order). */
+  function doorOrder(db: Db, orderId: string): MockOrder {
+    const o = db.orders.find((x) => x.id === orderId && x.riderId === rider() && x.status === 'dispatched' && x.collectedAt)
+    if (!o) throw new ApiError('invalid_input', 'Only deliveries you’re carrying can be marked.')
+    if (o.fulfilment !== 'delivery') throw new ApiError('invalid_input', 'Hand pickup orders to the counter staff.')
+    if (o.isPrize) throw new ApiError('invalid_input', 'Won items can’t be marked as not delivered. Contact DrawMart.')
+    if (o.failedAttempts === 1 && o.redeliveryChoice !== 'redeliver') throw new ApiError('invalid_input', 'The buyer hasn’t chosen a new time yet.')
+    return o
   }
   function rider(): string {
     const s = readSession()
@@ -1850,7 +1871,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           }
           const order: MockOrder = {
             pin: newDeliveryPin(), riderId: null, pinState: { attempts: 0, lockedUntil: null }, paidCashKobo: paid.fromCash, paidCreditKobo: paid.fromCredit, paidFeeCashKobo: paidFee.fromCash, paidFeeCreditKobo: paidFee.fromCredit, checkoutId, deliveryFeeKobo,
-            cancelledAt: null, cancelReason: null, cancelNote: null, confirmRemindedAt: null, atCounterAt: null,
+            cancelledAt: null, cancelReason: null, cancelNote: null, confirmRemindedAt: null, atCounterAt: null, failedAttempts: 0, lastFailedAt: null, redeliveryChoice: null, redeliverAt: null,
             confirmBy: prize ? null : confirmDeadline(now()), confirmedAt: null, confirmPhoto: null,
             refundedAt: null, claim: null, readyBy: null, collectedAt: null, collectionPhotos: null, collectionProblems: null, refusalPhoto: null, returnState: null, returnedAt: null,
             discountKobo: used ? quantity * l.priceKobo - price : 0,
@@ -1900,6 +1921,8 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
               dispatchedAt: o.dispatchedAt, deliveredAt: o.deliveredAt, mine: !!o.riderId,
               collectBy: o.riderId === me && o.status === 'dispatched' && !o.collectedAt && o.riderTakenAt ? collectBy(o.riderTakenAt) : null,
               atCounterAt: o.status === 'dispatched' || o.status === 'delivered' ? o.atCounterAt : null, waitingAtCounter: waitingAtCounter(o),
+              arrivedAt: o.arrivedAt ?? null, failedAttempts: o.failedAttempts, awaitingBuyer: o.status === 'dispatched' && o.failedAttempts === 1 && !o.redeliveryChoice,
+              redeliverAt: o.redeliveryChoice === 'redeliver' ? o.redeliverAt : null,
               collectFrom: o.handledBy === 'drawmart' ? { name: 'DrawMart escrow', area: 'Lagos' } : { name: merchant.name, area: merchant.area, ...(o.riderId === me && ((o.status === 'dispatched' && !o.collectedAt) || o.returnState === 'returning') ? db.shopPickups[o.merchantId] : {}) },
               pickupPoint: o.pickupPoint,
               dropOff: carrying ? { buyerName: db.users.find((u) => u.id === o.buyerId)?.displayName ?? 'Buyer', address: o.delivery.address, location: o.delivery.location, contactPhone: o.delivery.contactPhone } : null,
@@ -1952,6 +1975,45 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           o.deliveredAt = iso(now())
         }
         return result
+      }),
+
+    markArrived: (orderId) =>
+      tx((db) => {
+        const o = doorOrder(db, orderId)
+        o.arrivedAt ??= iso(now())
+        return o.arrivedAt
+      }),
+
+    failDeliveryAttempt: (orderId, photo, at) =>
+      tx((db) => {
+        const o = doorOrder(db, orderId)
+        const problem = attemptError({ arrivedAt: o.arrivedAt ?? null, nowMs: now(), photos: [photo], at, dropOff: o.delivery.location }) ?? photosError([photo])
+        if (problem) throw new ApiError('invalid_input', problem)
+        if (o.failedAttempts === 0) {
+          Object.assign(o, { failedAttempts: 1, lastFailedAt: iso(now()), arrivedAt: null, redeliveryChoice: null, redeliverAt: null })
+          notify(db, o.buyerId, 'order_delivery_failed', o.listingId, iso(now()))
+        } else {
+          Object.assign(o, { failedAttempts: 2, lastFailedAt: iso(now()) })
+          returnUndelivered(db, o, now())
+        }
+      }),
+
+    chooseRedelivery: (orderId, choice) =>
+      tx((db) => {
+        const o = db.orders.find((x) => x.id === orderId && x.buyerId === buyer())
+        if (!o) throw new ApiError('not_found', 'That order doesn’t exist.')
+        if (o.status !== 'dispatched' || o.failedAttempts !== 1 || o.redeliveryChoice) throw new ApiError('invalid_input', 'This order doesn’t need a new time.')
+        if (Date.parse(o.lastFailedAt!) + CHOOSE_WITHIN_HOURS * 3_600_000 <= now()) throw new ApiError('invalid_input', 'The time to choose has passed.')
+        if ('pickupPointId' in choice) {
+          const point = PICKUP_POINTS.find((pp) => pp.id === choice.pickupPointId)
+          if (!point) throw new ApiError('invalid_input', 'Choose a pickup location.')
+          Object.assign(o, { fulfilment: 'pickup', pickupPoint: point, delivery: { ...o.delivery, address: '', location: null }, redeliveryChoice: 'pickup' })
+        } else {
+          const problem = redeliveryWindowError(choice.windowStart, o.lastFailedAt!, now())
+          if (problem) throw new ApiError('invalid_input', problem)
+          Object.assign(o, { redeliveryChoice: 'redeliver', redeliverAt: new Date(choice.windowStart).toISOString() })
+        }
+        if (o.riderId) notify(db, o.riderId, 'rider_redelivery_chosen', o.listingId, iso(now()))
       }),
 
     getMyCounter: () =>
@@ -3049,7 +3111,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         return db.merchants.flatMap((m) => {
           const mine = recent.filter((o) => o.merchantId === m.id)
           const failed = mine.filter((o) => o.cancelReason === 'failed_check' || o.cancelReason === 'refused_wrong' || o.cancelReason === 'refused_damaged').length
-          return mine.length || m.suspendedAt ? [{ merchantId: m.id, merchantName: m.name, orders: mine.length, cancelled: mine.filter((o) => o.status === 'cancelled' && o.cancelReason !== 'not_collected').length, failed, suspended: !!m.suspendedAt }] : []
+          return mine.length || m.suspendedAt ? [{ merchantId: m.id, merchantName: m.name, orders: mine.length, cancelled: mine.filter((o) => o.status === 'cancelled' && o.cancelReason !== 'not_collected' && o.cancelReason !== 'not_delivered').length, failed, suspended: !!m.suspendedAt }] : []
         })
       }),
 
