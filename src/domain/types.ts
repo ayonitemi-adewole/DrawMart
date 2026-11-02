@@ -83,9 +83,19 @@ export interface Merchant {
   deliveryArea?: string | null
   /** Set after too many failed orders (deliveryChecks.ts). Its products are paused and it can't list. */
   suspendedAt?: ISODate | null
-  /** Empty for individual sellers. */
+  /** Empty for individual sellers, and for any store that hasn't chosen to show it, except to itself and admins. */
   cacNumber: string
   verified: boolean
+  verifiedAt?: ISODate | null
+  /** The public profile (shopProfile.ts). */
+  about?: string | null
+  logoUrl?: string | null
+  coverUrl?: string | null
+  openingHours?: string | null
+  shopNote?: string | null
+  /** Only when the seller chose to show it. */
+  publicPhone?: string | null
+  showCac?: boolean
 }
 
 /** Why an admin turned a listing down (rejection.ts). */

@@ -2,6 +2,7 @@ import type { ClaimInput } from './types'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import type { ShopPickup } from '@/domain/shopPickup'
+import type { ShopProfileInput } from '@/domain/shopProfile'
 import type { CancelReason, CollectionProblem, Kobo, PackageSize, RefusalReason, RejectionReason } from '@/domain/types'
 import { api } from './index'
 import type { MetricRange } from '@/domain/metrics'
@@ -26,6 +27,8 @@ export const keys = {
   cancelRates: ['cancel-rates'] as const,
   deliveryPricing: ['delivery-pricing'] as const,
   shopPickup: ['shop-pickup'] as const,
+  shop: (id: string) => ['shop', id] as const,
+  cacNumber: (id: string) => ['cac-number', id] as const,
   openClaims: ['open-claims'] as const,
   listingCheckPlan: ['listing-check-plan'] as const,
   listingCheck: (id: string) => ['listing-check', id] as const,
@@ -98,6 +101,8 @@ export const useListingCheckPlan = (enabled: boolean) => useQuery({ queryKey: ke
 export const useListingCheck = (id: string | null) => useQuery({ queryKey: keys.listingCheck(id ?? ''), queryFn: () => api.getListingCheck(id!), enabled: !!id, staleTime: 5 * 60_000 })
 export const useOpenClaims = () => useQuery({ queryKey: keys.openClaims, queryFn: () => api.listOpenClaims(), enabled: useIs('admin') })
 export const useReturnJobs = () => useQuery({ queryKey: keys.returnJobs, queryFn: () => api.listReturnJobs(), enabled: useIs('delivery'), refetchInterval: 30_000 })
+export const useShop = (id: string) => useQuery({ queryKey: keys.shop(id), queryFn: () => api.getShop(id), enabled: !!id })
+export const useMerchantCacNumber = (id: string | null) => useQuery({ queryKey: keys.cacNumber(id ?? ''), queryFn: () => api.getMerchantCacNumber(id!), enabled: !!id, staleTime: Infinity })
 export const useMerchant = () => useQuery({ queryKey: keys.merchant, queryFn: () => api.getMyMerchant(), enabled: useHasShop() })
 export const useMerchantListings = () =>
   useQuery({ queryKey: keys.merchantListings, queryFn: () => api.listMerchantListings(), enabled: useHasShop() })
@@ -398,6 +403,11 @@ export function useSetDeliverySizeExtra() {
     mutationFn: ({ size, extraKobo }: { size: PackageSize; extraKobo: Kobo }) => api.setDeliverySizeExtra(size, extraKobo),
     onSettled: () => qc.invalidateQueries({ queryKey: keys.deliveryPricing }),
   })
+}
+
+export function useUpdateShopProfile() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: (input: ShopProfileInput) => api.updateShopProfile(input), onSettled: invalidate })
 }
 
 export function useSaveShopPickup() {

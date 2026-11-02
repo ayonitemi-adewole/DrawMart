@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { useListingCheck, usePendingListings, usePriceReviews, useReviewListing, useReviewPriceChange } from '@/api/hooks'
+import { useMerchantCacNumber, useListingCheck, usePendingListings, usePriceReviews, useReviewListing, useReviewPriceChange } from '@/api/hooks'
 import type { ListingView } from '@/api/types'
 import { CalendarIcon, CarIcon, CheckIcon, ClipboardIcon, LockIcon, MapPinIcon, TruckIcon, XIcon } from '@/components/icons'
 import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
@@ -134,6 +134,7 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
   const [showRejectError, setShowRejectError] = useState(false)
   const rejectProblem = rejectionError(l.kind, { reason, note })
   const proof = useListingCheck(product ? l.id : null)
+  const cac = useMerchantCacNumber(l.merchant.kind === 'individual' ? null : l.merchantId)
   const [videoOk, setVideoOk] = useState(false)
   // Locked whenever a video was sent, even if it won't play: nobody approves one they haven't watched.
   const ready = checked.every(Boolean) && (!proof.data?.hasVideo || videoOk)
@@ -171,7 +172,7 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
             <strong className="text-lg leading-tight">{l.title}</strong>
             <ProductId code={l.productCode} copy />
             <span className="text-sm text-subtle">
-              {l.merchant.name} · {l.merchant.area} · {l.merchant.cacNumber}
+              {l.merchant.name} · {l.merchant.area}{cac.data ? ` · ${cac.data}` : ''}
             </span>
             <div className="flex flex-wrap gap-1.5">
               <Badge tone="neutral">{l.category}</Badge>

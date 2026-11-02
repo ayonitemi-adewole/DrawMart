@@ -1695,6 +1695,41 @@ describe('delivery fees', () => {
   })
 })
 
+describe('shop profiles', () => {
+  const VI = '11111111-1111-4111-8111-000000000005'
+  let owner: string, buyer: string, staff: string
+  const profile = { about: 'Cars and more.', openingHours: 'Mon–Sat, 9am–6pm', shopNote: '', publicPhone: '', logoUrl: null, coverUrl: null, showCac: false }
+
+  beforeAll(async () => {
+    owner = await newUser('profile-store@example.com', { merchantId: VI })
+    buyer = await newUser('profile-buyer@example.com')
+    staff = await newUser('profile-staff@example.com', { role: 'admin' })
+  })
+
+  it('keeps the CAC number from everyone but the store and admins', async () => {
+    await expect(asUser(null, `select cac_number from public.merchants`)).rejects.toThrow(/permission denied/)
+    await expect(asUser(buyer, `select * from public.merchants`)).rejects.toThrow(/permission denied/)
+    expect(await asUser(null, `select name, public_cac from public.merchants where id = $1`, [VI])).toEqual([{ name: expect.any(String), public_cac: '' }])
+    await expectFail(asUser(buyer, `select public.merchant_cac_number($1)`, [VI]), 'forbidden')
+    const [{ c }] = await asUser<{ c: string }>(owner, `select public.merchant_cac_number($1) c`, [VI])
+    expect(c).not.toBe('')
+    expect(await asUser(staff, `select public.merchant_cac_number($1) c`, [VI])).toEqual([{ c }])
+
+    await asUser(owner, `select public.update_shop_profile($1)`, [{ ...profile, showCac: true }])
+    expect(await asUser(buyer, `select about, public_cac from public.merchants where id = $1`, [VI])).toEqual([{ about: 'Cars and more.', public_cac: c }])
+    await asUser(owner, `select public.update_shop_profile($1)`, [profile])
+    expect(await asUser(null, `select verified_at is not null v from public.merchants where id = $1`, [VI])).toEqual([{ v: true }])
+  })
+
+  it('checks what the store writes, and only lets its own shop change', async () => {
+    await expectFail(asUser(owner, `select public.update_shop_profile($1)`, [{ ...profile, publicPhone: '12345' }]), 'invalid_input')
+    await expectFail(asUser(owner, `select public.update_shop_profile($1)`, [{ ...profile, about: 'x'.repeat(301) }]), 'invalid_input')
+    await expectFail(asUser(owner, `select public.update_shop_profile($1)`, [{ ...profile, logoUrl: 'javascript:alert(1)' }]), 'invalid_input')
+    await expectFail(asUser(buyer, `select public.update_shop_profile($1)`, [profile]), 'forbidden')
+    await expect(asUser(buyer, `update public.merchants set about = 'x' where id = $1`, [VI])).rejects.toThrow(/permission denied/)
+  })
+})
+
 describe('listing checks', () => {
   const VI = '11111111-1111-4111-8111-000000000005'
   let individual: string, shop: string, store: string, staff: string

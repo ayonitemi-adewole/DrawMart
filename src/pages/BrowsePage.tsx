@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Link, useSearchParams } from 'react-router'
+import { Link, Navigate, useSearchParams } from 'react-router'
 import { useListings } from '@/api/hooks'
 import type { ListingView } from '@/api/types'
 import { BackIcon, SearchIcon } from '@/components/icons'
@@ -49,6 +49,13 @@ export function browseHref(f: { category?: Category; seller?: string; type?: Kin
 
 /** /browse: every live draw and item on sale, filtered by category, seller or search, a page at a time. */
 export function BrowsePage() {
+  const [params] = useSearchParams()
+  const seller = params.get('seller')
+  if (seller) return <Navigate to={`/stores/${seller}`} replace />
+  return <Browse />
+}
+
+function Browse() {
   const [params, setParams] = useSearchParams()
   const raw = params.get('category')
   const category = CATEGORIES.includes(raw as Category) ? (raw as Category) : undefined

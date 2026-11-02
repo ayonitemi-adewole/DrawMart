@@ -37,6 +37,8 @@ import { ConversationPage, MessagesPage, NewConversationPage } from '@/pages/Mes
 import { NotificationsPage } from '@/pages/NotificationsPage'
 import { ReturnJobPage } from '@/pages/delivery/ReturnJobs'
 import { AdminClaimsPage } from '@/pages/admin/AdminClaimsPage'
+import { StorePage } from '@/pages/StorePage'
+import { StoreProfileSettingsPage, StoreShopPreviewPage } from '@/pages/merchant/StoreProfilePages'
 import { AdminDeliveryPage } from '@/pages/admin/AdminDeliveryPage'
 import { AdminCancellationsPage } from '@/pages/admin/AdminCancellationsPage'
 import { AdminPayoutsPage } from '@/pages/admin/AdminPayoutsPage'
@@ -143,6 +145,7 @@ const router = createBrowserRouter([
       { path: 'listings/:id', element: <ListingPage /> },
       { path: 'tickets', element: <RequireSignIn role="buyer"><TicketsPage /></RequireSignIn> },
       { path: 'browse', element: <BrowsePage /> },
+      { path: 'stores/:id', element: <StorePage /> },
       { path: 'credits', element: <CreditsPage /> },
       { path: 'practice', element: <PracticePage /> },
       { path: 'winners', element: <WinnersPage /> },
@@ -170,6 +173,8 @@ const router = createBrowserRouter([
       { path: 'listings/:id', element: <ListingPage /> },
       { path: 'notifications', element: <NotificationsPage /> },
       { path: 'payouts', element: <StorePayoutsPage /> },
+      { path: 'profile', element: <StoreProfileSettingsPage /> },
+      { path: 'shop', element: <StoreShopPreviewPage /> },
       { path: 'insights', element: <InsightsPage /> },
       { path: 'messages', element: <MessagesPage basePath="/store/messages" /> },
       { path: 'messages/:id', element: <ConversationPage basePath="/store/messages" /> },

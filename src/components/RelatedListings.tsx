@@ -24,7 +24,7 @@ export function RelatedListings({ listing }: { listing: ListingView }) {
           eyebrow="Same seller"
           title={`More from ${listing.merchant.name}`}
           listings={fromSeller}
-          seeAll={{ to: browseHref({ seller: listing.merchant.id }), label: `All from ${listing.merchant.name}` }}
+          seeAll={{ to: `/stores/${listing.merchant.id}`, label: `All from ${listing.merchant.name}` }}
         />
       ) : null}
       {similar.length ? (

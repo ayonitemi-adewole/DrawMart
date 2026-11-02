@@ -155,7 +155,9 @@ function ProductDetail({ listing: l }: { listing: ListingView }) {
                 {l.merchant.name.charAt(0)}
               </span>
               <div className="flex flex-col text-sm leading-tight">
-                <strong>{l.merchant.name}</strong>
+                <Link to={storeView ? "/store/shop" : `/stores/${l.merchant.id}`} className="font-bold text-ink">
+                  {l.merchant.name}
+                </Link>
                 <span className="flex items-center gap-1 text-xs text-subtle">
                   <MapPinIcon size={12} /> {l.merchant.area}, Lagos
                 </span>
@@ -168,7 +170,7 @@ function ProductDetail({ listing: l }: { listing: ListingView }) {
             <p className="text-xs text-subtle">
               {l.merchant.kind === "individual"
                 ? `Listed by ${l.merchant.name}, an individual seller whose ID DrawMart has checked. Reviewed by DrawMart before going on sale.`
-                : `Listed by ${l.merchant.name} (${l.merchant.cacNumber}) and reviewed by DrawMart before going on sale.`}
+                : `Listed by ${l.merchant.name}${l.merchant.cacNumber ? ` (${l.merchant.cacNumber})` : ''} and reviewed by DrawMart before going on sale.`}
             </p>
           </Card>
           <Card className="p-5 text-sm text-muted">
@@ -267,7 +269,9 @@ function ListingDetail({ listing: l }: { listing: ListingView }) {
                 {l.merchant.name.charAt(0)}
               </span>
               <div className="flex flex-col text-sm leading-tight">
-                <strong>{l.merchant.name}</strong>
+                <Link to={storeView ? "/store/shop" : `/stores/${l.merchant.id}`} className="font-bold text-ink">
+                  {l.merchant.name}
+                </Link>
                 <span className="flex items-center gap-1 text-xs text-subtle">
                   <MapPinIcon size={12} /> {l.merchant.area}, Lagos
                 </span>
@@ -599,7 +603,7 @@ function InfoTabs({ listing: l }: { listing: ListingView }) {
           <div className="flex flex-col gap-3">
             <p>{l.description || "No description from the store yet."}</p>
             <p className="text-xs text-subtle">
-              Listed by {l.merchant.name} ({l.merchant.cacNumber}).{" "}
+              Listed by {l.merchant.name}{l.merchant.cacNumber ? ` (${l.merchant.cacNumber})` : ""}.{" "}
               {handoverMethodFor(l.category) === "inspection"
                 ? "A DrawMart inspector has checked the vehicle and its papers and confirmed they match this listing."
                 : "DrawMart has checked the item into escrow and confirmed it matches this listing."}

@@ -1828,4 +1828,33 @@ describe('mock api', () => {
     await api.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
     await expect(api.saveAddress(home)).rejects.toMatchObject({ code: 'forbidden' })
   })
+
+  describe('shop pages', () => {
+    const profile = { about: 'Phones with warranty.', openingHours: 'Mon–Sat, 9am–6pm', shopNote: '', publicPhone: '', logoUrl: null, coverUrl: null, showCac: false }
+
+    it('shows the profile and listings, and the CAC number only once the store chooses', async () => {
+      const api = make()
+      await signInAs(api, 'store')
+      const mine = await api.getMyMerchant()
+      expect(mine.cacNumber).not.toBe('')
+      await api.updateShopProfile(profile)
+      await api.auth.signOut()
+      const shop = await api.getShop(mine.id)
+      expect(shop).toMatchObject({ about: 'Phones with warranty.', openingHours: 'Mon–Sat, 9am–6pm', cacNumber: '' })
+      expect((await api.listListings({ merchantId: mine.id })).every((l) => l.merchant.id === mine.id && l.merchant.cacNumber === '')).toBe(true)
+      await expect(api.getMerchantCacNumber(mine.id)).rejects.toMatchObject({ code: 'forbidden' })
+
+      await signInAs(api, 'store')
+      await expect(api.updateShopProfile({ ...profile, publicPhone: '123' })).rejects.toMatchObject({ code: 'invalid_input' })
+      await api.updateShopProfile({ ...profile, showCac: true })
+      await api.auth.signOut()
+      expect((await api.getShop(mine.id)).cacNumber).toBe(mine.cacNumber)
+    })
+
+    it('doesn’t let an individual seller show a CAC number', async () => {
+      const api = make()
+      await signInAs(api, 'seller')
+      await expect(api.updateShopProfile({ ...profile, showCac: true })).rejects.toMatchObject({ code: 'invalid_input' })
+    })
+  })
 })

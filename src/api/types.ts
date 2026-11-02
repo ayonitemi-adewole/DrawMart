@@ -11,6 +11,7 @@ import type { SavedAddress, SavedAddressInput } from '@/domain/addresses'
 import type { CheckoutDetails } from '@/domain/cart'
 import type { DeliveryPricing } from '@/domain/deliveryFees'
 import type { ShopPickup } from '@/domain/shopPickup'
+import type { ShopProfileInput } from '@/domain/shopProfile'
 import type { PayoutAccount, PayoutLine } from '@/domain/payouts'
 import type { NotificationPreference, PushPreferences, PushSubscriptionKeys } from '@/domain/push'
 import type { OrderError } from '@/domain/orders'
@@ -473,6 +474,7 @@ export interface CheckoutInput extends CheckoutDetails {
 export interface ListingFilter {
   category?: Category
   status?: ListingStatus[]
+  merchantId?: string
 }
 
 export type ApiErrorCode = PurchaseError | OrderError | 'not_found' | 'invalid_input' | 'forbidden'
@@ -720,6 +722,11 @@ export interface DrawMartApi {
   /** Issues the code to show in the video, and says what the listing form must ask for. */
   getListingCheckPlan(): Promise<ListingCheckPlan>
   getListingCheck(listingId: string): Promise<ListingCheckView | null>
+  /** A shop's public page. */
+  getShop(merchantId: string): Promise<Merchant>
+  updateShopProfile(input: ShopProfileInput): Promise<void>
+  /** The shop's own, or any for admins. */
+  getMerchantCacNumber(merchantId: string): Promise<string>
   /** Where riders collect from this seller. Null until they've said. */
   getShopPickup(): Promise<ShopPickup | null>
   /** Also sets the shop's delivery area from the pin. */

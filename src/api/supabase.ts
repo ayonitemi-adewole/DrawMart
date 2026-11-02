@@ -63,8 +63,16 @@ interface MerchantRow {
   kind: Merchant['kind']
   name: string
   area: string
-  cac_number: string
+  public_cac: string
+  show_cac: boolean
   verified: boolean
+  verified_at: string | null
+  about: string | null
+  logo_url: string | null
+  cover_url: string | null
+  opening_hours: string | null
+  shop_note: string | null
+  public_phone: string | null
   delivery_area: string | null
   suspended_at: string | null
 }
@@ -250,7 +258,9 @@ interface LedgerRow {
 
 // draw_results.winner_user_id isn't readable by clients, so name the columns.
 const RESULT_COLUMNS = 'listing_id, commitment, seed, closing_ref, winning_number, drawn_at'
-const LISTING_SELECT = `*, merchant:merchants(*), result:draw_results(${RESULT_COLUMNS}), handover:listing_handovers(*)`
+// Named, because the CAC number column isn't readable: `*` would fail.
+const MERCHANT_COLUMNS = 'id, kind, name, area, public_cac, show_cac, verified, verified_at, delivery_area, suspended_at, about, logo_url, cover_url, opening_hours, shop_note, public_phone'
+const LISTING_SELECT = `*, merchant:merchants(${MERCHANT_COLUMNS}), result:draw_results(${RESULT_COLUMNS}), handover:listing_handovers(*)`
 const ORDER_SELECT = '*, claim:order_claims(id, kind, status, description, photos, return_fee_kobo, review_note), listing:listings(product_code, title, images, category), merchant:merchants(name), pickup_point:pickup_points(*)'
 const PHOTO_BUCKET = 'listing-photos'
 const CHECK_BUCKET = 'listing-checks'
@@ -288,7 +298,7 @@ const num = (v: number | string | null | undefined) => Number(v ?? 0)
 const toPoint = (lat: number | null, lng: number | null) => (lat === null || lng === null ? null : { lat, lng })
 
 function toMerchant(m: MerchantRow): Merchant {
-  return { id: m.id, kind: m.kind, name: m.name, area: m.area, deliveryArea: m.delivery_area, suspendedAt: m.suspended_at, cacNumber: m.cac_number, verified: m.verified }
+  return { id: m.id, kind: m.kind, name: m.name, area: m.area, deliveryArea: m.delivery_area, suspendedAt: m.suspended_at, cacNumber: m.public_cac ?? '', showCac: m.show_cac, verifiedAt: m.verified_at, about: m.about, logoUrl: m.logo_url, coverUrl: m.cover_url, openingHours: m.opening_hours, shopNote: m.shop_note, publicPhone: m.public_phone, verified: m.verified }
 }
 
 function toUser(p: ProfileRow): User {
@@ -707,6 +717,7 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     listListings: async (filter: ListingFilter = {}) => {
       let q = client.from('listings').select(LISTING_SELECT).in('status', filter.status ?? ['live'])
       if (filter.category) q = q.eq('category', filter.category)
+      if (filter.merchantId) q = q.eq('merchant_id', filter.merchantId)
       const rows = unwrap(await q.returns<ListingRow[]>())
       return (await views(rows)).sort(sortForBrowsing)
     },
@@ -984,7 +995,8 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     // Merchant
     getMyMerchant: async () => {
       const id = await myMerchantId()
-      return toMerchant(unwrap(await client.from('merchants').select('*').eq('id', id).single<MerchantRow>()))
+      const [row, cac] = await Promise.all([client.from('merchants').select(MERCHANT_COLUMNS).eq('id', id).single<MerchantRow>(), rpc<string>('merchant_cac_number', { p_merchant: id })])
+      return { ...toMerchant(unwrap(row)), cacNumber: cac }
     },
 
     listMerchantListings: async () => {
@@ -1136,6 +1148,17 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       const [url] = await uploadPhotos(`riders/${await requireId()}`, [photo])
       await rpc('finish_return', { p_claim_id: claimId, p_photo: url })
     },
+    getShop: async (merchantId) => {
+      const row = unwrap(await client.from('merchants').select(MERCHANT_COLUMNS).eq('id', merchantId).maybeSingle<MerchantRow>())
+      if (!row) throw new ApiError('not_found', 'That shop doesn’t exist.')
+      return toMerchant(row)
+    },
+    updateShopProfile: async (input) => {
+      const merchantId = await myMerchantId()
+      const [logoUrl, coverUrl] = await uploadPhotos(merchantId, [input.logoUrl ?? '', input.coverUrl ?? ''])
+      await rpc('update_shop_profile', { p: { ...input, logoUrl: logoUrl || null, coverUrl: coverUrl || null } })
+    },
+    getMerchantCacNumber: (merchantId) => rpc<string>('merchant_cac_number', { p_merchant: merchantId }),
     getShopPickup: async () => {
       const row = unwrap(await client.from('shop_pickups').select('address, lat, lng, contact_phone').eq('merchant_id', await myMerchantId()).maybeSingle<{ address: string; lat: number; lng: number; contact_phone: string }>())
       return row ? { address: row.address, location: { lat: row.lat, lng: row.lng }, contactPhone: row.contact_phone } : null

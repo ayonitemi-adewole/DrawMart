@@ -37,6 +37,7 @@ import { NEW_SELLER, newCheckCode, newSellerLimitError, proofErrors } from '@/do
 import { canClaim, canContest, claimError, contestError, returnFeeKobo, returnRefundSplit, sellerShareOfReturnFee } from '@/domain/claims'
 import { deliveryFeeKobo, packageSizeOf, sellerAreaOf } from '@/domain/deliveryFees'
 import { locationError } from '@/domain/location'
+import { shopProfileErrors } from '@/domain/shopProfile'
 import { shopPickupErrorText, shopPickupErrors, type ShopPickup } from '@/domain/shopPickup'
 import { DELIVERY_AREAS, areaFromText, nearestArea, checkoutDeliveryFees, deliveryPriceError, placeholderPricing, sizeExtraError, type DeliveryPricing } from '@/domain/deliveryFees'
 import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO, REFUSAL_REASONS, SUSPEND_AFTER_FAILURES, collectionFailError, photosError } from '@/domain/deliveryChecks'
@@ -96,7 +97,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v41' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v42' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -192,11 +193,11 @@ const iso = (ms: number) => new Date(ms).toISOString()
 // ---------------------------------------------------------------- seed data
 
 const MERCHANTS: Merchant[] = [
-  { id: MY_MERCHANT, kind: 'store', name: 'Ikeja Partner Store', area: 'Ikeja', cacNumber: 'RC [NUMBER]', verified: true },
-  { id: 'm-lekki', kind: 'store', name: 'Lekki Partner Store', area: 'Lekki', cacNumber: 'RC [NUMBER]', verified: true },
-  { id: 'm-surulere', kind: 'store', name: 'Surulere Partner Store', area: 'Surulere', cacNumber: 'RC [NUMBER]', verified: true },
-  { id: 'm-yaba', kind: 'store', name: 'Yaba Partner Store', area: 'Yaba', cacNumber: 'RC [NUMBER]', verified: true },
-  { id: 'm-vi', kind: 'store', name: 'Victoria Island Partner Dealer', area: 'Victoria Island', cacNumber: 'RC [NUMBER]', verified: true },
+  { id: MY_MERCHANT, kind: 'store', name: 'Ikeja Partner Store', area: 'Ikeja', cacNumber: 'RC [NUMBER]', verified: true, verifiedAt: '2026-03-02T09:00:00.000Z' },
+  { id: 'm-lekki', kind: 'store', name: 'Lekki Partner Store', area: 'Lekki', cacNumber: 'RC [NUMBER]', verified: true, verifiedAt: '2026-03-02T09:00:00.000Z' },
+  { id: 'm-surulere', kind: 'store', name: 'Surulere Partner Store', area: 'Surulere', cacNumber: 'RC [NUMBER]', verified: true, verifiedAt: '2026-03-02T09:00:00.000Z' },
+  { id: 'm-yaba', kind: 'store', name: 'Yaba Partner Store', area: 'Yaba', cacNumber: 'RC [NUMBER]', verified: true, verifiedAt: '2026-03-02T09:00:00.000Z' },
+  { id: 'm-vi', kind: 'store', name: 'Victoria Island Partner Dealer', area: 'Victoria Island', cacNumber: 'RC [NUMBER]', verified: true, verifiedAt: '2026-03-02T09:00:00.000Z' },
 ]
 
 interface SeedListing {
@@ -543,7 +544,7 @@ const WELCOME_KOBO = nairaToKobo(25_000)
 
 /** seller@drawmart.test already passed the ID check and has a shop. */
 function seedSellerShop(db: Db, now: number) {
-  db.merchants.push({ id: TOLU_SHOP, kind: 'individual', name: 'Tolu’s Gadgets', area: 'Yaba', cacNumber: '', verified: true })
+  db.merchants.push({ id: TOLU_SHOP, kind: 'individual', name: 'Tolu’s Gadgets', area: 'Yaba', cacNumber: '', verified: true, verifiedAt: '2026-09-14T09:00:00.000Z' })
   db.sellerShops[TOLU] = TOLU_SHOP
   const at = iso(now - 10 * DAY)
   db.sellerApplications[TOLU] = {
@@ -915,11 +916,14 @@ function resultView(db: Db, r: DrawResult): DrawResultView {
  * `full` is for the listing's own store and for admins. Buyers never see the
  * store's pickup address or phone number.
  */
+/** A CAC number only shows if the store chose to (shopProfile.ts). */
+const publicMerchant = (m: Merchant): Merchant => ({ ...m, cacNumber: m.showCac ? m.cacNumber : '' })
+
 function listingView(db: Db, l: Listing, audience: 'buyer' | 'full' = 'buyer'): ListingView {
   const merchant = db.merchants.find((m) => m.id === l.merchantId)!
   const myNumbers = db.tickets.filter((t) => t.listingId === l.id && t.userId === (db.viewer ?? ME)).map((t) => t.number)
   const r = db.results.find((x) => x.listingId === l.id)
-  return { ...l, handover: audience === 'full' ? l.handover : null, rejection: audience === 'full' ? l.rejection : null, pendingPriceKobo: audience === 'full' ? (db.priceReviews.find((r) => r.listingId === l.id)?.newPriceKobo ?? null) : null, merchant, myNumbers, result: r ? resultView(db, r) : null }
+  return { ...l, merchant: publicMerchant(merchant), handover: audience === 'full' ? l.handover : null, rejection: audience === 'full' ? l.rejection : null, pendingPriceKobo: audience === 'full' ? (db.priceReviews.find((r) => r.listingId === l.id)?.newPriceKobo ?? null) : null, myNumbers, result: r ? resultView(db, r) : null }
 }
 
 function conversationView(db: Db, c: MockConversation, me: ChatSide): ConversationView {
@@ -1335,7 +1339,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       tx((db) => {
         const statuses = filter.status ?? ['live']
         return db.listings
-          .filter((l) => statuses.includes(l.status) && (!filter.category || l.category === filter.category))
+          .filter((l) => statuses.includes(l.status) && (!filter.category || l.category === filter.category) && (!filter.merchantId || l.merchantId === filter.merchantId))
           .map((l) => listingView(db, l))
           .sort((a, b) => {
             if (a.status !== b.status) return a.status === 'live' ? -1 : 1
@@ -2135,6 +2139,31 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         return c ? { code: c.code, hasVideo: !!c.videoKey, serial: c.serial, videoUrl: c.videoKey ? (checkFiles.get(c.videoKey) ?? null) : null, proofUrl: c.proofKey ? (checkFiles.get(c.proofKey) ?? null) : null } : null
       }),
 
+    getShop: (merchantId) =>
+      tx((db) => {
+        const m = db.merchants.find((x) => x.id === merchantId)
+        if (!m) throw new ApiError('not_found', 'That shop doesn’t exist.')
+        return publicMerchant(m)
+      }),
+
+    updateShopProfile: (input) =>
+      tx((db) => {
+        const m = db.merchants.find((x) => x.id === shopId(db))!
+        const problems = shopProfileErrors(input, m.kind)
+        if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+        Object.assign(m, {
+          about: input.about.trim() || null, openingHours: input.openingHours.trim() || null, shopNote: input.shopNote.trim() || null,
+          publicPhone: input.publicPhone.trim() || null, logoUrl: input.logoUrl, coverUrl: input.coverUrl, showCac: input.showCac,
+        })
+      }),
+
+    getMerchantCacNumber: (merchantId) =>
+      tx((db) => {
+        const role = readSession()?.role
+        if (!role || (role !== 'admin' && merchantId !== shopId(db))) throw new ApiError('forbidden', 'Only the shop and DrawMart can see this.')
+        return db.merchants.find((m) => m.id === merchantId)?.cacNumber ?? ''
+      }),
+
     getShopPickup: () => tx((db) => db.shopPickups[shopId(db)] ?? null),
 
     saveShopPickup: (input) =>
@@ -2456,7 +2485,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       tx((db) => {
         const [userId, a] = Object.entries(db.sellerApplications).find(([, x]) => x.id === applicationId) ?? []
         if (!userId || !a || a.status !== 'pending') throw new ApiError('invalid_input', 'Only applications waiting for review can be approved.')
-        const shop: Merchant = { id: uid('M'), kind: 'individual', name: a.shopName, area: a.area, cacNumber: '', verified: true }
+        const shop: Merchant = { id: uid('M'), kind: 'individual', name: a.shopName, area: a.area, cacNumber: '', verified: true, verifiedAt: iso(now()) }
         db.merchants.push(shop)
         db.sellerShops[userId] = shop.id
         Object.assign(a, { status: 'approved', reviewedAt: iso(now()) })
