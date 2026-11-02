@@ -13,6 +13,7 @@ import { NairaIcon, StarIcon } from '@/components/icons'
 import { Payouts } from './merchant/Payouts'
 import { MerchantListings } from './merchant/MerchantPage'
 import { ShopProfile } from './merchant/ShopProfile'
+import { GettingStarted } from './merchant/GettingStarted'
 import { SellerReviews } from './merchant/SellerReviews'
 import { listingFormFrom } from './merchant/parts'
 import { localDate } from '@/domain/listing'
@@ -316,6 +317,7 @@ function SellerDashboard() {
         </span>
       </PageTitle>
       <PushPrompt seller />
+      {tab === 'items' && !form ? <GettingStarted app="sell" onNewListing={() => setTab('new')} /> : null}
       {shop.data?.suspendedAt ? (
         <Notice tone="hot" icon={AlertIcon} title="Your shop is suspended">
           Too many orders have failed a check or been refused, so your products are paused and you can’t list new ones. Orders already placed still need sending. Contact DrawMart to sort this out.

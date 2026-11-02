@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { GettingStarted } from './GettingStarted'
 import { Link, useSearchParams } from 'react-router'
 import { payoutTotals } from '@/domain/payouts'
 import { api } from '@/api'
@@ -132,6 +133,8 @@ export function MerchantPage() {
       ) : null}
 
       <PushPrompt seller />
+
+      {tab !== 'new' ? <GettingStarted app="store" onNewListing={() => setTab('new')} /> : null}
 
       {!form && !(tab === 'new' && kind === 'raffle') ? <SavedPickupReminder onContinue={() => setTab('new', 'raffle')} /> : null}
 
