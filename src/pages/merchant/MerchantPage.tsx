@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { pricingTip, ticketBand } from '@/domain/drawPricing'
 import { GettingStarted } from './GettingStarted'
 import { Link, useSearchParams } from 'react-router'
 import { payoutTotals } from '@/domain/payouts'
 import { api } from '@/api'
-import { useCreateListing, useCreateListingBatch, usePayouts, useResubmitListing, useUpdateListing, useSavePickupItems, useSavedPickup, useMerchant, useMerchantListings, useMerchantOrders } from '@/api/hooks'
+import { useCreateListing, useCreateListingBatch, usePayouts, useResubmitListing, useUpdateListing, useSavePickupItems, useSavedPickup, useMerchant, useMerchantListings, useMerchantOrders, useDrawPriceStats } from '@/api/hooks'
 import type { ListingView, PickupItemInput } from '@/api/types'
 import { Countdown } from '@/components/Countdown'
 import {
@@ -22,6 +23,7 @@ import {
   StoreIcon,
   TicketIcon,
   TruckIcon,
+  ChartIcon,
 } from '@/components/icons'
 import { BoostRow } from '@/components/BoostControl'
 import { AddressPicker } from '@/components/AddressPicker'
@@ -49,7 +51,7 @@ import { directionsUrl } from '@/domain/location'
 import { formatNaira, nairaToKobo, parseNairaInput } from '@/domain/money'
 import { saleEconomics, salePriceKobo } from '@/domain/orders'
 import { RULES } from '@/domain/rules'
-import { type Category, type GeoPoint, type FeeMode, type TimeSlot, type UnsoldPolicy } from '@/domain/types'
+import { type Category, type GeoPoint, type FeeMode, type Kobo, type TimeSlot, type UnsoldPolicy } from '@/domain/types'
 import { calendarDay, dateTime } from '@/lib/time'
 import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
 import { listingMatchesSearch } from '@/domain/productCode'
@@ -484,6 +486,7 @@ function NewListing({ onDone, form }: { onDone: () => void; form?: ListingForm |
                     <input id="ticket" inputMode="numeric" value={ticket} onChange={(e) => setTicket(e.target.value)} className={inputCls} placeholder="5,000" />
                   </Field>
                 </div>
+                <PricingTip category={category} ticketKobo={economics.ticketPriceKobo} />
                 {uniqueSuggestions.length ? (
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-xs font-bold text-subtle">Try:</span>
@@ -1251,3 +1254,16 @@ function ProductCard({ listing: l, onOpen }: { listing: ListingView; onOpen: (mo
     </Card>
   )
 }
+
+/** How similar finished draws did, under the ticket price. Nothing until there are enough of them. */
+function PricingTip({ category, ticketKobo }: { category: Category; ticketKobo: Kobo }) {
+  const q = useDrawPriceStats(category, ticketKobo >= 100_00 ? ticketBand(ticketKobo) : null)
+  const tip = q.data ? pricingTip(q.data) : null
+  if (!tip) return null
+  return (
+    <p className="flex items-start gap-2 rounded-xl bg-sky-soft p-3 text-xs text-sky">
+      <ChartIcon size={14} className="mt-px shrink-0" /> {tip}
+    </p>
+  )
+}
+

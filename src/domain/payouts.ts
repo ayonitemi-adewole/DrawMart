@@ -139,13 +139,13 @@ export function statementMonths(lines: readonly Pick<PayoutLine, 'paidAt'>[]): s
 }
 
 /** Plain digits, for a spreadsheet: formatNaira's symbol and commas would make it text. */
-const nairaCell = (kobo: Kobo) => `${Math.floor(kobo / 100)}.${String(kobo % 100).padStart(2, '0')}`
+export const nairaCell = (kobo: Kobo) => `${Math.floor(kobo / 100)}.${String(kobo % 100).padStart(2, '0')}`
 
 /**
  * Quoted, and a leading = + - @ neutralised: a title or reference is free text, and a
  * spreadsheet would otherwise run it as a formula.
  */
-function textCell(value: string): string {
+export function textCell(value: string): string {
   const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value
   return `"${safe.replace(/"/g, '""')}"`
 }

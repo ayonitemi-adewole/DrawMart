@@ -5,6 +5,7 @@
  * A view is one visitor opening a listing page, counted at most once per
  * visitor per listing per day. The seller's own visits don't count.
  */
+import { nairaCell, textCell } from './payouts'
 import type { Kobo } from './types'
 
 export const METRIC_RANGES = [7, 30] as const
@@ -94,3 +95,15 @@ export const INSIGHT_TIP_TEXT: Record<InsightTip, string> = {
   chats_not_bought: 'Buyers are asking questions but not buying yet. Answer quickly, and add those answers to the description.',
   converting: 'This one sells well for the attention it gets.',
 }
+
+/** The insights table as a spreadsheet: one row per listing, then the totals. */
+export function insightsCsv(listings: readonly (ListingMetricsInput & { productCode: string; title: string; kind: string; category: string })[]): string {
+  const row = (m: ListingMetricsInput) => [m.views, m.visitors, m.chats, m.units, m.buyers, nairaCell(m.salesKobo)].join(',')
+  const t = sumMetrics([...listings])
+  return [
+    'Product ID,Item,Type,Category,Views,Visitors,Chats,Sold,Buyers,Sales (NGN)',
+    ...listings.map((l) => [textCell(l.productCode), textCell(l.title), l.kind === 'raffle' ? 'Draw' : 'Product', l.category, row(l)].join(',')),
+    `Total,,,,${row(t)}`,
+  ].join('\r\n')
+}
+

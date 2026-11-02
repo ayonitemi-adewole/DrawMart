@@ -5,9 +5,9 @@ import { ProductId, ProductSearch } from './ProductId'
 import { BoostHistory } from './BoostControl'
 import type { ListingMetrics } from '@/api/types'
 import { formatNaira } from '@/domain/money'
-import { INSIGHT_TIP_TEXT, conversionBps, formatRate, insightTip, sumMetrics, type DayMetrics, type MetricRange } from '@/domain/metrics'
-import { ChartIcon, ChatIcon, NairaIcon, EyeIcon, SparklesIcon, UsersIcon } from './icons'
-import { Badge, Card, EmptyState, ErrorState, ProductImage, Segmented, Skeleton, StatTile, cx } from './ui'
+import { INSIGHT_TIP_TEXT, conversionBps, formatRate, insightTip, insightsCsv, lagosDay, sumMetrics, type DayMetrics, type MetricRange } from '@/domain/metrics'
+import { ChartIcon, ChatIcon, DownloadIcon, NairaIcon, EyeIcon, SparklesIcon, UsersIcon } from './icons'
+import { Badge, Button, Card, EmptyState, ErrorState, ProductImage, Segmented, Skeleton, StatTile, cx } from './ui'
 
 const STATUS_TEXT: Partial<Record<ListingMetrics['status'], string>> = {
   live: 'Live',
@@ -20,6 +20,15 @@ const STATUS_TEXT: Partial<Record<ListingMetrics['status'], string>> = {
 }
 
 /** Views and sales of the signed-in shop's listings. Used by the store app and by individual sellers. */
+function download(listings: ListingMetrics[], days: MetricRange) {
+  const url = URL.createObjectURL(new Blob([insightsCsv(listings)], { type: 'text/csv;charset=utf-8' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `drawmart-insights-last-${days}-days-${lagosDay(Date.now())}.csv`
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
 export function SellerInsights() {
   const [days, setDays] = useState<MetricRange>(30)
   const q = useMerchantMetrics(days)
@@ -28,6 +37,11 @@ export function SellerInsights() {
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted">A view is one person opening a listing, counted once a day. Your own visits don’t count.</p>
+        {q.data?.listings.length ? (
+          <Button variant="outline" size="sm" className="min-h-11" onClick={() => download(q.data.listings, days)}>
+            <DownloadIcon size={16} /> Download CSV
+          </Button>
+        ) : null}
         <Segmented<string>
           label="Time range"
           size="sm"

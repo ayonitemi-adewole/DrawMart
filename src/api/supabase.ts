@@ -5,6 +5,7 @@
  * sees). Every write is an RPC to a database function in
  * supabase/migrations, which enforces the same rules as src/domain.
  */
+import type { PricingStats } from '@/domain/drawPricing'
 import { STORE_APPLICATION_ERROR_TEXT, validateStoreApplication } from '@/domain/storeApplications'
 import type { PayoutAccount, PayoutKind, PayoutStatus } from '@/domain/payouts'
 import type { ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews, StoreApplicationView, SupportMessage, SupportThreadSummary, QuickReply } from './types'
@@ -1212,8 +1213,10 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       const [url] = await uploadPhotos(`riders/${await requireId()}`, [photo])
       await rpc('finish_return', { p_claim_id: claimId, p_photo: url })
     },
+    getDrawPriceStats: (category, band) => rpc<PricingStats>('draw_price_stats', { p_category: category, p_band: band }),
     listQuickReplies: async () =>
-      unwrap(await client.from('quick_replies').select('id, body').eq('merchant_id', await myMerchantId()).order('created_at').returns<QuickReply[]>()),
+      // Only the shop's own come back (RLS). Don't filter by merchant_id: clients can't read that column.
+      unwrap(await client.from('quick_replies').select('id, body').order('created_at').returns<QuickReply[]>()),
     saveQuickReply: async ({ id, body }) => {
       await rpc('save_quick_reply', { p_id: id ?? null, p_body: body })
     },

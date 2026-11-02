@@ -13,6 +13,7 @@ import type { DeliveryPricing } from '@/domain/deliveryFees'
 import type { ShopPickup } from '@/domain/shopPickup'
 import type { ShopProfileInput } from '@/domain/shopProfile'
 import type { ReviewInput } from '@/domain/reviews'
+import type { PricingStats } from '@/domain/drawPricing'
 import type { PayoutAccount, PayoutLine } from '@/domain/payouts'
 import type { NotificationPreference, PushPreferences, PushSubscriptionKeys } from '@/domain/push'
 import type { OrderError } from '@/domain/orders'
@@ -835,6 +836,8 @@ export interface DrawMartApi {
   /** Issues the code to show in the video, and says what the listing form must ask for. */
   getListingCheckPlan(): Promise<ListingCheckPlan>
   getListingCheck(listingId: string): Promise<ListingCheckView | null>
+  /** How finished draws did in this category and ticket band (drawPricing.ts). Stores and admins. */
+  getDrawPriceStats(category: Category, band: number): Promise<PricingStats>
   /** The signed-in shop's saved chat answers, oldest first. */
   listQuickReplies(): Promise<QuickReply[]>
   /** Without an id it adds one; with one it changes it. */

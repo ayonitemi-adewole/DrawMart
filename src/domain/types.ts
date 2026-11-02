@@ -156,6 +156,8 @@ export interface Listing {
   boostedUntil: ISODate | null
   /** When the last ticket sold. */
   soldOutAt: ISODate | null
+  /** When a draw went on sale (drawPricing.ts). Not on older ones. */
+  liveAt?: ISODate | null
   /** When a sold-out draw's winner is announced (draw.ts announcementDate). */
   drawAt: ISODate | null
 }

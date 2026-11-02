@@ -39,6 +39,7 @@ import { deliveryFeeKobo, packageSizeOf, sellerAreaOf } from '@/domain/deliveryF
 import { locationError } from '@/domain/location'
 import { shopProfileErrors } from '@/domain/shopProfile'
 import { quickReplyError } from '@/domain/quickReplies'
+import { pricingStats } from '@/domain/drawPricing'
 import { DUPLICATE_CAC_TEXT, STORE_APPLICATION_ERROR_TEXT, normalizeCac, storeAccountBlocker, validateStoreApplication } from '@/domain/storeApplications'
 import { REVIEWS_SHOWN_FROM, averageRating, canReview, hideReasonError, replyError, reviewError, reviewerName } from '@/domain/reviews'
 import { shopPickupErrorText, shopPickupErrors, type ShopPickup } from '@/domain/shopPickup'
@@ -2202,6 +2203,13 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         return c ? { code: c.code, hasVideo: !!c.videoKey, serial: c.serial, videoUrl: c.videoKey ? (checkFiles.get(c.videoKey) ?? null) : null, proofUrl: c.proofKey ? (checkFiles.get(c.proofKey) ?? null) : null } : null
       }),
 
+    getDrawPriceStats: (category, band) =>
+      tx((db) => {
+        const role = readSession()?.role
+        if (role && role !== 'store' && role !== 'admin') throw new ApiError('forbidden', 'Only stores run draws.')
+        return pricingStats(db.listings.filter((l) => l.kind === 'raffle'), category, band)
+      }),
+
     listQuickReplies: () =>
       tx((db) => {
         const shop = myShop(db)
@@ -2818,6 +2826,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           return
         }
         l.status = 'live'
+        l.liveAt = iso(now())
         l.closesAt = iso(now() + l.durationDays * DAY) // the clock starts when it goes live
         alertRelists(db, l, now())
       }),

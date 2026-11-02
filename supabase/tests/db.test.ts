@@ -1695,6 +1695,60 @@ describe('delivery fees', () => {
   })
 })
 
+describe('draw pricing tips', () => {
+  let store: string, staff: string, buyer: string
+  type Stats = { draws: number | null; soldOut: number | null; avgDaysToSellOut: number | null }
+  const stats = async (who: string) => (await asUser<{ s: Stats }>(who, `select public.draw_price_stats('Fashion', 5) s`))[0].s
+  /** Marks seeded draws as finished Fashion draws with ₦20,000 tickets, without running the triggers a real draw would. */
+  const finish = async (ids: string[], soldOutDays: number | null) => {
+    await admin(`set session_replication_role = replica`)
+    try {
+      await admin(
+        `update public.listings set category = 'Fashion', ticket_price_kobo = 2000000, status = $2, live_at = now() - interval '10 days',
+                sold_out_at = case when $3::int is null then null else now() - interval '10 days' + make_interval(days => $3::int) end
+          where id = any($1)`,
+        [ids, soldOutDays === null ? 'refunded' : 'drawn', soldOutDays],
+      )
+    } finally {
+      await admin(`set session_replication_role = origin`)
+    }
+  }
+
+  beforeAll(async () => {
+    store = await newUser('pricing-store@example.com', { merchantId: '11111111-1111-4111-8111-000000000001' })
+    staff = await newUser('pricing-staff@example.com', { role: 'admin' })
+    buyer = await newUser('pricing-buyer@example.com')
+  })
+
+  it('has the same price bands as src/domain', async () => {
+    for (const [kobo, band] of [[10_000, 0], [50_000, 0], [50_100, 1], [500_000, 3], [1_000_000, 4], [1_000_100, 5]])
+      expect(await admin(`select private.ticket_band($1) b`, [kobo])).toEqual([{ b: band }])
+  })
+
+  it('shows averages only over 5 finished draws from 3 stores', async () => {
+    await expectFail(asUser(buyer, `select public.draw_price_stats('Fashion', 5)`), 'forbidden')
+    const raffles = await admin<{ id: string; merchant_id: string }>(`select id, merchant_id from public.listings where kind = 'raffle' and status = 'live' order by merchant_id, id`)
+    const byShop = new Map<string, string[]>()
+    for (const r of raffles) byShop.set(r.merchant_id, [...(byShop.get(r.merchant_id) ?? []), r.id])
+    const [a, b, c] = [...byShop.values()]
+    await finish([a[0], a[1], b[0], b[1]], 6)
+    expect(await stats(store)).toMatchObject({ draws: null, soldOut: null, avgDaysToSellOut: null }) // 4 draws
+    await finish([a[2]], null)
+    expect((await stats(store)).draws).toBeNull() // 5 draws, but only 2 stores
+    await finish([c[0]], 3)
+    expect(await stats(store)).toMatchObject({ draws: 6, soldOut: 5, avgDaysToSellOut: 5.4 })
+    expect((await stats(staff)).draws).toBe(6)
+  })
+
+  it('records when a draw goes on sale', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
+    expect(await admin(`select live_at from public.listings where id = $1`, [id])).toEqual([{ live_at: null }])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    const [{ fresh }] = await admin<{ fresh: boolean }>(`select live_at > now() - interval '1 minute' fresh from public.listings where id = $1`, [id])
+    expect(fresh).toBe(true)
+  })
+})
+
 describe('quick replies', () => {
   const SHOP = '11111111-1111-4111-8111-000000000002'
   let owner: string, other: string, buyer: string
@@ -1725,6 +1779,9 @@ describe('quick replies', () => {
     await expect(asUser(owner, `select merchant_id from public.quick_replies`)).rejects.toThrow(/permission denied/)
     await expect(asUser(owner, `insert into public.quick_replies (merchant_id, body) values ($1, 'x')`, [SHOP])).rejects.toThrow(/permission denied/)
 
+    // What the app sends: the shop's own come back without naming the shop.
+    expect(await asUser(owner, `select id, body from public.quick_replies order by created_at`)).toHaveLength(20)
+    await expect(asUser(owner, `select id, body from public.quick_replies where merchant_id = $1`, [SHOP])).rejects.toThrow(/permission denied/)
     await asUser(owner, `select public.delete_quick_reply($1)`, [id])
     expect(await list(owner)).toHaveLength(19)
   })

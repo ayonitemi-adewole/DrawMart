@@ -4,7 +4,7 @@ import { useEffect } from 'react'
 import type { ShopPickup } from '@/domain/shopPickup'
 import type { ShopProfileInput } from '@/domain/shopProfile'
 import type { ReviewInput } from '@/domain/reviews'
-import type { CancelReason, CollectionProblem, Kobo, PackageSize, RefusalReason, RejectionReason } from '@/domain/types'
+import type { CancelReason, CollectionProblem, Kobo, PackageSize, RefusalReason, RejectionReason, Category } from '@/domain/types'
 import { api } from './index'
 import type { MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput } from '@/domain/sellers'
@@ -34,6 +34,7 @@ export const keys = {
   adminReviews: ['admin-reviews'] as const,
   supportThread: ['support-thread'] as const,
   quickReplies: ['quick-replies'] as const,
+  drawPriceStats: (category: string, band: number) => ['draw-price-stats', category, band] as const,
   supportInbox: ['support-inbox'] as const,
   supportMessages: (merchantId: string) => ['support-messages', merchantId] as const,
   cacNumber: (id: string) => ['cac-number', id] as const,
@@ -111,6 +112,9 @@ export const useListingCheckPlan = (enabled: boolean) => useQuery({ queryKey: ke
 export const useListingCheck = (id: string | null) => useQuery({ queryKey: keys.listingCheck(id ?? ''), queryFn: () => api.getListingCheck(id!), enabled: !!id, staleTime: 5 * 60_000 })
 export const useOpenClaims = () => useQuery({ queryKey: keys.openClaims, queryFn: () => api.listOpenClaims(), enabled: useIs('admin') })
 export const useReturnJobs = () => useQuery({ queryKey: keys.returnJobs, queryFn: () => api.listReturnJobs(), enabled: useIs('delivery'), refetchInterval: 30_000 })
+/** Cached per band, so typing a price doesn't ask again on every key. */
+export const useDrawPriceStats = (category: Category, band: number | null) =>
+  useQuery({ queryKey: keys.drawPriceStats(category, band ?? -1), queryFn: () => api.getDrawPriceStats(category, band!), enabled: useIs('store') && band !== null, staleTime: 10 * 60_000 })
 export const useQuickReplies = () => useQuery({ queryKey: keys.quickReplies, queryFn: () => api.listQuickReplies(), enabled: useHasShop() })
 export const useSupportThread = () => useQuery({ queryKey: keys.supportThread, queryFn: () => api.getSupportThread(), enabled: useHasShop(), refetchInterval: 10_000 })
 export const useSupportUnread = () => useSupportThread().data?.unread ?? 0

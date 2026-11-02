@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { conversionBps, fillDays, formatRate, insightTip, lagosDay, sumMetrics } from './metrics'
+import { conversionBps, fillDays, formatRate, insightTip, lagosDay, sumMetrics, insightsCsv } from './metrics'
 
 const row = (patch: Partial<Parameters<typeof insightTip>[0]> = {}) => ({ views: 0, visitors: 0, chats: 0, units: 0, buyers: 0, salesKobo: 0, ...patch })
 
@@ -41,3 +41,20 @@ describe('seller metrics', () => {
     expect(insightTip(row({ visitors: 100, buyers: 2 }))).toBeNull()
   })
 })
+
+describe('insights CSV', () => {
+  it('has one row per listing, then totals', () => {
+    const row = { views: 10, visitors: 8, chats: 1, units: 2, buyers: 2, salesKobo: 1_000_050 }
+    const csv = insightsCsv([
+      { ...row, productCode: 'PRD-AAAAAA', title: 'Lamp, "warm"', kind: 'product', category: 'Home' },
+      { ...row, productCode: 'PRD-BBBBBB', title: '=SUM(1)', kind: 'raffle', category: 'Phones' },
+    ])
+    expect(csv.split('\r\n')).toEqual([
+      'Product ID,Item,Type,Category,Views,Visitors,Chats,Sold,Buyers,Sales (NGN)',
+      '"PRD-AAAAAA","Lamp, ""warm""",Product,Home,10,8,1,2,2,10000.50',
+      `"PRD-BBBBBB","'=SUM(1)",Draw,Phones,10,8,1,2,2,10000.50`,
+      'Total,,,,20,16,2,4,4,20001.00',
+    ])
+  })
+})
+

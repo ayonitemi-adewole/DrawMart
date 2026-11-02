@@ -2084,4 +2084,25 @@ describe('mock api', () => {
       expect(await api.listQuickReplies()).toHaveLength(19)
     })
   })
+
+  describe('draw pricing tips', () => {
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('is for stores, and says nothing without enough finished draws', async () => {
+      const api = make()
+      await as(api, 'buyer')
+      await expect(api.getDrawPriceStats('Phones', 3)).rejects.toMatchObject({ code: 'forbidden' })
+      await as(api, 'store')
+      expect(await api.getDrawPriceStats('Phones', 3)).toEqual({ category: 'Phones', band: 3, draws: null, soldOut: null, avgDaysToSellOut: null })
+    })
+
+    it('records when a draw goes on sale', async () => {
+      const api = make()
+      await as(api, 'store')
+      const l = await api.createListing(newListing())
+      await as(api, 'admin')
+      await api.approveListing(l.id)
+      expect((await api.getListing(l.id))?.liveAt).toBeTruthy()
+    })
+  })
 })
