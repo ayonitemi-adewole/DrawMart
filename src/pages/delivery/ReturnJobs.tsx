@@ -11,6 +11,7 @@ import { Badge, Button, Card, EmptyState, ErrorState, Field, Notice, ProductImag
 import { directionsUrl } from '@/domain/location'
 import { CollectByLine, CollectByNotice } from './CollectBy'
 import { JobFacts, type PoolView } from './PoolControls'
+import { LockedText } from './NewRider'
 
 /** The Returns tab: items going from a buyer back to a seller. */
 export function ReturnJobList({ view }: { view: PoolView }) {
@@ -35,6 +36,7 @@ export function ReturnJobList({ view }: { view: PoolView }) {
               <ProductId code={j.productCode} />
               <span className="text-xs text-subtle">Buyer → {j.returnTo.name}, {j.returnTo.area}</span>
               <JobFacts job={j} />
+              {j.locked && !j.mine ? <span className="text-xs text-subtle"><LockedText /></span> : null}
               {j.collectBy ? <CollectByLine at={j.collectBy} /> : null}
             </div>
           </div>
@@ -43,7 +45,7 @@ export function ReturnJobList({ view }: { view: PoolView }) {
               {j.status === 'returning' ? 'Take it to the seller' : 'Collect it from the buyer'} <ChevronRightIcon className="shrink-0 text-subtle" />
             </Link>
           ) : (
-            <Button loading={take.isPending && take.variables === j.id} disabled={take.isPending} onClick={() => take.mutate(j.id, { onSuccess: () => navigate(`/delivery/returns/${j.id}`), onError: (e) => toast(errorMessage(e), 'error') })}>
+            <Button loading={take.isPending && take.variables === j.id} disabled={take.isPending || j.locked} onClick={() => take.mutate(j.id, { onSuccess: () => navigate(`/delivery/returns/${j.id}`), onError: (e) => toast(errorMessage(e), 'error') })}>
               <TruckIcon size={16} /> Take this return
             </Button>
           )}

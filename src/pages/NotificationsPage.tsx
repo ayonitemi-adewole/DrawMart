@@ -14,6 +14,8 @@ import { dateTime, ticketNo } from '@/lib/time'
 function describe(n: NotificationView, store: boolean): { icon: IconComponent; title: string; body: string; to: string } {
   const home = store ? '/store' : '/sell'
   switch (n.kind) {
+    case 'rider_approved':
+      return { icon: TruckIcon, title: 'You’re approved to ride', body: 'Add your photo and bank account, then take your first job.', to: '/delivery' }
     case 'rider_paid':
       return { icon: NairaIcon, title: 'Pay sent', body: 'We’ve sent your pay to your bank account. See which jobs it covered.', to: '/delivery/earnings' }
     case 'rider_bank_changed':

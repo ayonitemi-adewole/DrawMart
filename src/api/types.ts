@@ -25,6 +25,7 @@ import type { BoostPackage, BoostWindow } from '@/domain/boosts'
 import type { DayMetrics, ListingMetricsInput, MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput, SellerApplicationStatus } from '@/domain/sellers'
 import type { StoreApplicationInput, StoreApplicationStatus } from '@/domain/storeApplications'
+import type { RiderApplicationInput, RiderApplicationStatus, VehicleType } from '@/domain/riderApplications'
 import type {
   CancelReason,
   Category,
@@ -346,6 +347,8 @@ export interface DeliveryJob {
   /** What it pays at today's rates, as the earning will be worked out. */
   payKobo: Kobo
   postedAt: string | null
+  /** A new rider can't take this yet (riderApplications.ts newRiderLimitError). */
+  locked: boolean
   /** A pickup order counter staff have taken in: the rider's job is done. */
   atCounterAt: string | null
   /** An uncollected item going back to the seller, still at the counter until staff hand it over. */
@@ -392,6 +395,57 @@ export interface CounterItem {
   /** Send back: a rider has taken the job. */
   riderAssigned: boolean
   pinLockedUntil: string | null
+}
+
+/** Someone's request to ride. Only the applicant and admins ever see it. */
+export interface RiderApplicationView {
+  id: string
+  status: RiderApplicationStatus
+  fullName: string
+  nin: string
+  phone: string
+  address: string
+  area: string
+  vehicle: VehicleType
+  plate: string | null
+  guarantorName: string
+  guarantorPhone: string
+  guarantorRelationship: string
+  /** Short-lived signed URLs on Supabase. */
+  idPhotoUrl: string | null
+  selfieUrl: string | null
+  reviewNote: string | null
+  createdAt: string
+  updatedAt: string
+  reviewedAt: string | null
+}
+
+/** A group of riders, e.g. a partner company's. Admins only. */
+export interface RiderFleet {
+  id: string
+  name: string
+  contactPhone: string
+  /** Its riders skip the new-rider limits. */
+  trusted: boolean
+}
+
+export interface AdminRider {
+  id: string
+  name: string
+  photo: string | null
+  fleetId: string | null
+  trusted: boolean
+  completed: number
+  holding: number
+  joinedAt: string
+}
+
+/** A rider's own standing: what's still locked for a new rider. */
+export interface RiderLevel {
+  completed: number
+  trusted: boolean
+  jobsToUnlock: number
+  maxKobo: Kobo
 }
 
 /** A business's request for a store. Only the applicant and admins ever see it. */
@@ -672,6 +726,8 @@ export interface ReturnJob {
   /** What it pays at today's rates, as the earning will be worked out. */
   payKobo: Kobo
   postedAt: string | null
+  /** A new rider can't take this yet (riderApplications.ts newRiderLimitError). */
+  locked: boolean
   /** Taken but not yet collected from the buyer: back to the pool at this time (riderLimits.ts). */
   collectBy: string | null
   productCode: string
@@ -874,6 +930,10 @@ export interface DrawMartApi {
   // Individual sellers (buyer accounts that sell regular products)
   getMySellerApplication(): Promise<SellerApplicationView | null>
   /** A business applying for a store, from the account that will become the store's. */
+  /** Whether rider sign-up is open. Anyone can ask. */
+  getRiderSignupsOpen(): Promise<boolean>
+  getMyRiderApplication(): Promise<RiderApplicationView | null>
+  submitRiderApplication(input: RiderApplicationInput): Promise<RiderApplicationView>
   getMyStoreApplication(): Promise<StoreApplicationView | null>
   submitStoreApplication(input: StoreApplicationInput): Promise<StoreApplicationView>
   /** Uploads the ID photos and queues the application for an admin. Also used to resubmit after a rejection. */
@@ -1064,6 +1124,7 @@ export interface DrawMartApi {
   releaseDelivery(orderId: string): Promise<void>
   /** The only way an order becomes delivered. A wrong PIN isn't an error: see the result. */
   confirmDelivery(orderId: string, pin: string): Promise<PinResult>
+  getRiderLevel(): Promise<RiderLevel>
   /** The rider's own first name and photo, as buyers see them. */
   getRiderProfile(): Promise<RiderCard>
   /** A photo of the rider, from the camera. */
@@ -1087,6 +1148,18 @@ export interface DrawMartApi {
   /** Applications waiting for an ID check, oldest first. */
   listSellerApplications(): Promise<SellerApplicationView[]>
   listStoreApplications(): Promise<StoreApplicationView[]>
+  /** Rider sign-up, for admins (riderApplications.ts). */
+  setRiderSignupsOpen(open: boolean): Promise<void>
+  listRiderApplications(): Promise<RiderApplicationView[]>
+  /** Turns the applicant's account into a delivery account. */
+  approveRiderApplication(applicationId: string): Promise<void>
+  rejectRiderApplication(applicationId: string, note: string): Promise<void>
+  listRiderFleets(): Promise<RiderFleet[]>
+  createRiderFleet(name: string, contactPhone: string): Promise<void>
+  setFleetTrusted(fleetId: string, trusted: boolean): Promise<void>
+  listRiders(): Promise<AdminRider[]>
+  setRiderFleet(riderId: string, fleetId: string | null): Promise<void>
+  setRiderTrusted(riderId: string, trusted: boolean): Promise<void>
   /** Creates the store and turns the applicant's account into its account. */
   approveStoreApplication(applicationId: string): Promise<void>
   rejectStoreApplication(applicationId: string, note: string): Promise<void>

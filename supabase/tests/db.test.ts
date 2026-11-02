@@ -2421,6 +2421,7 @@ describe('cart and checkout', () => {
     await expectFail(asUser(store, `select public.dispatch_order($1)`, [row.id]), 'invalid_input')
     await asUser(staff, `select public.dispatch_order($1)`, [row.id])
     const prizeRider = await newUser('prizerider@example.com', { role: 'delivery' })
+    await admin(`update public.profiles set rider_trusted = true where id = $1`, [prizeRider]) // new riders can't carry won items
     await asUser(prizeRider, `select public.take_delivery($1)`, [row.id])
     const [{ pins }] = await asUser<{ pins: Record<string, string> }>(winner, `select public.my_delivery_pins() pins`)
     await asUser(prizeRider, `select public.confirm_delivery($1, $2)`, [row.id, pins[row.id]])
@@ -2619,6 +2620,68 @@ describe('cart and checkout', () => {
       expect(await alerts(near, 'rider_pin_unlocked')).toHaveLength(1)
       const pushes = await admin<{ body: string }>(`select body from private.push_outbox where user_id = $1`, [near])
       expect(pushes.map((p) => p.body).join(' ')).not.toMatch(/Awolowo|[0-9]{6}/)
+    })
+
+    it('signs riders up only while open, approves them into delivery accounts, and starts them on smaller jobs', async () => {
+      const applicant = await newUser('new-rider@example.com')
+      const app = (patch: Record<string, unknown> = {}) => ({
+        fullName: 'Emeka Nwosu', nin: '12345678901', phone: '0803 222 3333', address: '12 Allen Avenue, Ikeja', area: 'ikeja', vehicle: 'motorcycle', plate: 'LND 123 AB',
+        guarantorName: 'Ada Nwosu', guarantorPhone: '0805 765 4321', guarantorRelationship: 'Sister',
+        idPhoto: `${applicant}/rider-id.jpg`, selfiePhoto: `${applicant}/rider-selfie.jpg`, quizAnswers: [1, 1, 0, 2, 1, 1], ...patch,
+      })
+      const submit = (patch: Record<string, unknown> = {}) => asUser(applicant, `select public.submit_rider_application($1)`, [app(patch)])
+      const fail = async (patch: Record<string, unknown>, text: string) => expect((await expectFail(submit(patch), 'invalid_input')).detail).toContain(text)
+
+      await fail({}, 'isn’t open')
+      await expectFail(asUser(applicant, `select public.set_rider_signups_open(true)`), 'forbidden')
+      await asUser(staff, `select public.set_rider_signups_open(true)`)
+      await fail({ quizAnswers: [0, 0, 0, 0, 0, 0] }, 'quiz')
+      await fail({ nin: '123' }, '11-digit NIN')
+      await fail({ guarantorPhone: '+234 803 222 3333' }, 'own phone number')
+      await fail({ idPhoto: `${staff}/someone-else.jpg` }, 'photo of your ID')
+      await submit()
+      await expectFail(submit(), 'invalid_input') // already being reviewed
+      // Only the applicant and admins see it.
+      expect(await asUser(rider, `select id from public.rider_applications`)).toEqual([])
+      const [{ id: appId, plate }] = await asUser<{ id: string; plate: string }>(applicant, `select id, plate from public.rider_applications`)
+      expect(plate).toBe('LND123AB')
+      // Someone who has bought can't apply, and an account applying to ride can't become a store.
+      expect(await admin(`select private.rider_account_blocker($1) b`, [(await readyOrder('rider-shopper@example.com')).b])).toEqual([{ b: 'This account has already bought on DrawMart. Sign up with a new account to ride.' }])
+      expect(await admin(`select private.store_account_blocker($1) b`, [applicant])).toEqual([{ b: 'This account has applied to ride. Sign up with a new account for your business.' }])
+
+      await expectFail(asUser(staff, `select public.reject_rider_application($1, 'no')`, [appId]), 'invalid_input')
+      await asUser(staff, `select public.reject_rider_application($1, 'The selfie is blurry.')`, [appId])
+      await submit()
+      await expectFail(asUser(store, `select public.approve_rider_application($1)`, [appId]), 'forbidden')
+      await asUser(staff, `select public.approve_rider_application($1)`, [appId])
+      expect(await admin(`select role, display_name from public.profiles where id = $1`, [applicant])).toEqual([{ role: 'delivery', display_name: 'Emeka Nwosu' }])
+      expect(await asUser(applicant, `select kind from public.notifications where kind = 'rider_approved'`)).toHaveLength(1)
+      expect(await asUser(applicant, `select public.my_rider_level() l`)).toEqual([{ l: { completed: 0, trusted: false, jobsToUnlock: 20, maxKobo: 5000000 } }])
+
+      // A new rider can't take an order worth more than ₦50,000, or a won item.
+      const { id: small } = await readyOrder('rider-small@example.com') // ₦5,000
+      const [{ id: dearListing }] = await asUser<{ id: string }>(store, `select public.create_product($1) id`, [{ title: 'Dear lamp', category: 'Home', priceKobo: 6_000_000 }])
+      await asUser(staff, `select public.approve_listing($1)`, [dearListing])
+      const buyerOfDear = await newUser('rider-dear@example.com')
+      await asUser(buyerOfDear, `select public.top_up(9000000)`)
+      await add(buyerOfDear, dearListing)
+      const [big] = await checkout(buyerOfDear, details([dearListing]))
+      await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [big])
+      await asUser(store, `select public.dispatch_order($1)`, [big])
+      const pool = (await asUser<{ j: { id: string; locked: boolean }[] }>(applicant, `select public.delivery_jobs() j`))[0].j
+      expect(pool.find((j) => j.id === small)?.locked).toBe(false)
+      expect(pool.find((j) => j.id === big)?.locked).toBe(true)
+      expect((await expectFail(asUser(applicant, `select public.take_delivery($1)`, [big]), 'invalid_input')).detail).toContain('20 completed')
+
+      // A trusted fleet vouches for its riders.
+      const [{ fleet }] = await asUser<{ fleet: string }>(staff, `select public.create_rider_fleet('Partner Riders', '0803 444 5555') fleet`)
+      expect(await asUser(applicant, `select id from public.rider_fleets`)).toEqual([])
+      await asUser(staff, `select public.set_rider_fleet($1, $2)`, [applicant, fleet])
+      await asUser(staff, `select public.set_fleet_trusted($1, true)`, [fleet])
+      await asUser(applicant, `select public.take_delivery($1)`, [big])
+      const [{ riders }] = await asUser<{ riders: { id: string; fleetId: string; holding: number }[] }>(staff, `select public.admin_riders() riders`)
+      expect(riders.find((r) => r.id === applicant)).toMatchObject({ fleetId: fleet, holding: 1 })
+      await asUser(staff, `select public.set_rider_signups_open(false)`)
     })
 
     it('shows pool jobs by area, size and pay, never an address, and pays what it showed', async () => {

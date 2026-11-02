@@ -15,6 +15,7 @@ import { CollectByLine, CollectByNotice } from './CollectBy'
 import { CounterPage } from './CounterPage'
 import { NotHome } from './NotHome'
 import { RiderPhoto } from './RiderPhoto'
+import { LockedText, NewRiderProgress } from './NewRider'
 import { JobFacts, PoolControls, usePoolView } from './PoolControls'
 import { DeliveryChatSheet } from '@/components/DeliveryChat'
 import { firstName } from '@/domain/deliveryChat'
@@ -67,6 +68,7 @@ export function DeliveryPage() {
         Deliveries
       </PageTitle>
       <RiderPhoto />
+      <NewRiderProgress />
       <Segmented<Tab>
         label="Show"
         value={tab}
@@ -138,10 +140,10 @@ function JobCard({ job: j, tab }: { job: DeliveryJob; tab: Tab }) {
       {summary}
       {tab === 'available' ? (
         <>
-          <span className="text-xs text-subtle">The address and map appear once you take it.</span>
+          <span className="text-xs text-subtle">{j.locked ? <LockedText /> : 'The address and map appear once you take it.'}</span>
           <Button
             loading={take.isPending && take.variables === j.id}
-            disabled={take.isPending}
+            disabled={take.isPending || j.locked}
             onClick={() => take.mutate(j.id, { onSuccess: () => navigate(`/delivery/${j.id}`), onError: (e) => toast(errorMessage(e), 'error') })}
           >
             <TruckIcon size={16} /> Take this delivery

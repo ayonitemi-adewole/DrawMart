@@ -1,6 +1,7 @@
 import type { NewProductInput } from './types'
 import { redeliveryWindows } from '@/domain/deliveryAttempts'
 import { areaPairPay, tripPay } from '@/domain/riderPay'
+import { RIDER_QUIZ, type RiderApplicationInput } from '@/domain/riderApplications'
 import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO } from '@/domain/deliveryChecks'
 import { returnFeeKobo, sellerShareOfReturnFee } from '@/domain/claims'
 import { areaPairPrice, deliveryFeeKobo, placeholderPricing } from '@/domain/deliveryFees'
@@ -771,6 +772,82 @@ describe('mock api', () => {
       await api.reviewClaim(c.id, true, '')
       await as(api, 'store')
       expect((await api.listPayouts()).filter((l) => l.orderId === order.id)).toEqual([])
+    })
+  })
+
+  describe('rider sign-up', () => {
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const application = (): RiderApplicationInput => ({
+      fullName: 'Emeka Nwosu', nin: '12345678901', phone: '0803 222 3333', address: '12 Allen Avenue, Ikeja', area: 'ikeja', vehicle: 'motorcycle', plate: 'LND 123 AB',
+      guarantorName: 'Ada Nwosu', guarantorPhone: '0805 765 4321', guarantorRelationship: 'Sister', idPhoto: 'data:image/png;base64,a', selfiePhoto: 'data:image/png;base64,b',
+      quizAnswers: RIDER_QUIZ.map((q) => q.answer),
+    })
+
+    it('takes applications only while open, and approval makes a new rider who starts on smaller jobs', async () => {
+      const api = make()
+      await as(api, 'emeka')
+      expect(await api.getRiderSignupsOpen()).toBe(false)
+      await expect(api.submitRiderApplication(application())).rejects.toThrow('isn’t open')
+      await as(api, 'admin')
+      await api.setRiderSignupsOpen(true)
+
+      await as(api, 'emeka')
+      await expect(api.submitRiderApplication({ ...application(), quizAnswers: [0, 0, 0, 0, 0, 0] })).rejects.toThrow('quiz')
+      expect(await api.submitRiderApplication(application())).toMatchObject({ status: 'pending', plate: 'LND123AB' })
+      await expect(api.submitRiderApplication(application())).rejects.toThrow('already being reviewed')
+
+      await as(api, 'admin')
+      const [a] = await api.listRiderApplications()
+      await expect(api.rejectRiderApplication(a.id, 'no')).rejects.toThrow('what to fix')
+      await api.rejectRiderApplication(a.id, 'The selfie is blurry.')
+      await as(api, 'emeka')
+      expect(await api.getMyRiderApplication()).toMatchObject({ status: 'rejected', reviewNote: 'The selfie is blurry.' })
+      await api.submitRiderApplication(application())
+      await as(api, 'store')
+      await expect(api.approveRiderApplication(a.id)).rejects.toMatchObject({ code: 'forbidden' })
+      await as(api, 'admin')
+      await api.approveRiderApplication(a.id)
+
+      // The same account now opens the delivery app.
+      await as(api, 'emeka')
+      expect(await api.auth.getSession()).toMatchObject({ role: 'delivery' })
+      expect(await api.getRiderLevel()).toMatchObject({ completed: 0, trusted: false })
+      expect((await api.listNotifications()).some((n) => n.kind === 'rider_approved')).toBe(true)
+
+      // New riders: up to ₦50,000, until 20 deliveries or a trusted fleet.
+      await as(api, 'store')
+      const cheap = await api.createProduct({ title: 'Cheap lamp', description: '', category: 'Home', priceKobo: k(20_000), stock: 1 })
+      const dear = await api.createProduct({ title: 'Dear lamp', description: '', category: 'Home', priceKobo: k(60_000), stock: 1 })
+      await api.approveListing(cheap.id)
+      await api.approveListing(dear.id)
+      await as(api, 'funke')
+      await api.topUp(k(200_000))
+      const [small] = await api.checkout({ listingIds: [cheap.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      const [big] = await api.checkout({ listingIds: [dear.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      // An account that has bought can't become a rider's.
+      await expect(api.submitRiderApplication(application())).rejects.toThrow('already bought')
+      await as(api, 'store')
+      for (const o of [small, big]) {
+        await api.sellerConfirmOrder(o.id, '/assets/c.jpg')
+        await api.dispatchOrder(o.id)
+      }
+      await as(api, 'emeka')
+      const pool = await api.listDeliveryJobs()
+      expect(pool.find((j) => j.id === small.id)?.locked).toBe(false)
+      expect(pool.find((j) => j.id === big.id)?.locked).toBe(true)
+      await expect(api.takeDelivery(big.id)).rejects.toThrow('20 completed')
+      await api.takeDelivery(small.id)
+
+      await as(api, 'admin')
+      await api.createRiderFleet('Partner Riders', '0803 444 5555')
+      const [fleet] = await api.listRiderFleets()
+      await api.setRiderFleet('u-emeka', fleet.id)
+      await api.setFleetTrusted(fleet.id, true)
+      expect((await api.listRiders()).find((r) => r.id === 'u-emeka')).toMatchObject({ name: 'Emeka Nwosu', fleetId: fleet.id, holding: 1 })
+      await as(api, 'emeka')
+      expect((await api.listDeliveryJobs()).find((j) => j.id === big.id)?.locked).toBe(false)
+      await api.takeDelivery(big.id)
     })
   })
 

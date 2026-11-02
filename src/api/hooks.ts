@@ -11,6 +11,7 @@ import { api } from './index'
 import type { MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput } from '@/domain/sellers'
 import type { StoreApplicationInput } from '@/domain/storeApplications'
+import type { RiderApplicationInput } from '@/domain/riderApplications'
 import { visitorId } from '@/lib/visitor'
 import { pushDeviceState, subscribeThisDevice, unsubscribeThisDevice } from '@/lib/push'
 import type { NotificationPreference } from '@/domain/push'
@@ -51,6 +52,12 @@ export const keys = {
   returnJobs: ['return-jobs'] as const,
   riderAreas: ['rider-areas'] as const,
   myCounter: ['my-counter'] as const,
+  riderSignupsOpen: ['rider-signups-open'] as const,
+  myRiderApplication: ['my-rider-application'] as const,
+  riderApplications: ['rider-applications'] as const,
+  riderFleets: ['rider-fleets'] as const,
+  adminRiders: ['admin-riders'] as const,
+  riderLevel: ['rider-level'] as const,
   riderProfile: ['rider-profile'] as const,
   deliveryChat: (orderId: string) => ['delivery-chat', orderId] as const,
   riderPayRates: ['rider-pay-rates'] as const,
@@ -453,6 +460,30 @@ export const useDeliveryChat = (orderId: string) => useQuery({ queryKey: keys.de
 export function useSendDeliveryMessage(orderId: string) {
   const qc = useQueryClient()
   return useMutation({ mutationFn: (body: string) => api.sendDeliveryMessage(orderId, body), onSettled: () => qc.invalidateQueries({ queryKey: keys.deliveryChat(orderId) }) })
+}
+
+export const useRiderSignupsOpen = () => useQuery({ queryKey: keys.riderSignupsOpen, queryFn: () => api.getRiderSignupsOpen(), staleTime: 5 * 60_000 })
+export const useMyRiderApplication = () => useQuery({ queryKey: keys.myRiderApplication, queryFn: () => api.getMyRiderApplication(), enabled: useIs('buyer') })
+export const useRiderApplications = () => useQuery({ queryKey: keys.riderApplications, queryFn: () => api.listRiderApplications(), enabled: useIs('admin') })
+export const useRiderFleets = () => useQuery({ queryKey: keys.riderFleets, queryFn: () => api.listRiderFleets(), enabled: useIs('admin') })
+export const useAdminRiders = () => useQuery({ queryKey: keys.adminRiders, queryFn: () => api.listRiders(), enabled: useIs('admin') })
+export const useRiderLevel = () => useQuery({ queryKey: keys.riderLevel, queryFn: () => api.getRiderLevel(), enabled: useIs('delivery') })
+
+export function useSubmitRiderApplication() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: (input: RiderApplicationInput) => api.submitRiderApplication(input), onSettled: invalidate })
+}
+
+export function useRiderAdminActions() {
+  const invalidate = useInvalidateAll()
+  return {
+    setOpen: useMutation({ mutationFn: (open: boolean) => api.setRiderSignupsOpen(open), onSettled: invalidate }),
+    review: useMutation({ mutationFn: ({ id, approve, note }: { id: string; approve: boolean; note?: string }) => (approve ? api.approveRiderApplication(id) : api.rejectRiderApplication(id, note ?? '')), onSettled: invalidate }),
+    createFleet: useMutation({ mutationFn: ({ name, phone }: { name: string; phone: string }) => api.createRiderFleet(name, phone), onSettled: invalidate }),
+    setFleetTrusted: useMutation({ mutationFn: ({ id, trusted }: { id: string; trusted: boolean }) => api.setFleetTrusted(id, trusted), onSettled: invalidate }),
+    setFleet: useMutation({ mutationFn: ({ riderId, fleetId }: { riderId: string; fleetId: string | null }) => api.setRiderFleet(riderId, fleetId), onSettled: invalidate }),
+    setTrusted: useMutation({ mutationFn: ({ riderId, trusted }: { riderId: string; trusted: boolean }) => api.setRiderTrusted(riderId, trusted), onSettled: invalidate }),
+  }
 }
 
 export const useRiderAreas = () => useQuery({ queryKey: keys.riderAreas, queryFn: () => api.getRiderAreas(), enabled: useIs('delivery') })

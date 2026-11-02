@@ -7,6 +7,8 @@ import {
   useAddresses,
   useDemoActions,
   useMe,
+  useMyRiderApplication,
+  useRiderSignupsOpen,
   useSignOut,
   useUpdateProfile,
 } from "@/api/hooks";
@@ -23,6 +25,7 @@ import {
   PlusIcon,
   SettingsIcon,
   StoreIcon,
+  TruckIcon,
   UserIcon,
   WalletIcon,
   type IconComponent,
@@ -40,6 +43,7 @@ import {
   Notice,
   PageTitle,
   Skeleton,
+  buttonClass,
   errorMessage,
   inputCls,
 } from "@/components/ui";
@@ -78,6 +82,7 @@ export function AccountPage() {
             <Profile key={me.data.id} user={me.data} />
           )}
           <Addresses />
+          <RideWithUs />
           <MyWinnerStoriesSection />
         </div>
         <div className="flex min-w-0 flex-col gap-5 lg:sticky lg:top-24">
@@ -631,6 +636,29 @@ function Settings() {
           </div>
         </Sheet>
       ) : null}
+    </Card>
+  );
+}
+
+/** Only while rider sign-up is open, or once someone has applied. */
+function RideWithUs() {
+  const open = useRiderSignupsOpen();
+  const application = useMyRiderApplication();
+  if (!open.data && !application.data) return null;
+  return (
+    <Card className="flex items-center gap-3 p-4">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-sunken text-muted">
+        <TruckIcon size={18} />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col text-sm">
+        <strong>Ride with DrawMart</strong>
+        <span className="text-xs text-subtle">
+          {application.data ? "See where your application is." : "Deliver across Lagos and get paid weekly."}
+        </span>
+      </span>
+      <Link to="/ride" className={buttonClass("outline")}>
+        {application.data ? "View" : "Apply"}
+      </Link>
     </Card>
   );
 }

@@ -5,6 +5,7 @@
  * sees). Every write is an RPC to a database function in
  * supabase/migrations, which enforces the same rules as src/domain.
  */
+import { RIDER_APPLICATION_ERROR_TEXT, validateRiderApplication, type RiderApplicationStatus, type VehicleType } from '@/domain/riderApplications'
 import type { StoreRole } from '@/domain/team'
 import type { Discount } from '@/domain/discounts'
 import type { PricingStats } from '@/domain/drawPricing'
@@ -41,6 +42,9 @@ import {
   type NewPickupInput,
   type DeliveryJob,
   type CounterItem,
+  type AdminRider,
+  type RiderApplicationView,
+  type RiderLevel,
   type DeliveryChatView,
   type RiderCard,
   type RiderPayDue,
@@ -146,6 +150,27 @@ interface ListingRow {
   merchant: MerchantRow
   result: DrawResultRow | null
   handover: HandoverRow | null
+}
+
+interface RiderApplicationRow {
+  id: string
+  status: RiderApplicationStatus
+  full_name: string
+  nin: string
+  phone: string
+  address: string
+  area: string
+  vehicle: VehicleType
+  plate: string | null
+  guarantor_name: string
+  guarantor_phone: string
+  guarantor_relationship: string
+  id_photo_path: string
+  selfie_path: string
+  review_note: string | null
+  created_at: string
+  updated_at: string
+  reviewed_at: string | null
 }
 
 interface PayoutAccountRow {
@@ -655,6 +680,16 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     }
   }
 
+  async function toRiderApplicationView(a: RiderApplicationRow): Promise<RiderApplicationView> {
+    const { data } = await client.storage.from(ID_BUCKET).createSignedUrls([a.id_photo_path, a.selfie_path], 60 * 60)
+    return {
+      id: a.id, status: a.status, fullName: a.full_name, nin: a.nin, phone: a.phone, address: a.address, area: a.area, vehicle: a.vehicle, plate: a.plate,
+      guarantorName: a.guarantor_name, guarantorPhone: a.guarantor_phone, guarantorRelationship: a.guarantor_relationship,
+      idPhotoUrl: data?.[0]?.signedUrl ?? null, selfieUrl: data?.[1]?.signedUrl ?? null,
+      reviewNote: a.review_note, createdAt: a.created_at, updatedAt: a.updated_at, reviewedAt: a.reviewed_at,
+    }
+  }
+
   async function toStoreApplicationView(a: StoreApplicationRow): Promise<StoreApplicationView> {
     const { data } = await client.storage.from(ID_BUCKET).createSignedUrls([a.certificate_path, a.director_id_path], 60 * 60)
     return {
@@ -1026,6 +1061,23 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       await rpc('submit_seller_application', { p: { ...input, idPhoto, selfie } })
       const row = unwrap(await client.from('seller_applications').select('*').eq('user_id', me).single<SellerApplicationRow>())
       return toApplicationView(row)
+    },
+
+    getRiderSignupsOpen: async () => unwrap(await client.from('app_settings').select('rider_signups_open').single<{ rider_signups_open: boolean }>()).rider_signups_open,
+
+    getMyRiderApplication: async () => {
+      const me = await requireId()
+      const row = unwrap(await client.from('rider_applications').select('*').eq('user_id', me).maybeSingle<RiderApplicationRow>())
+      return row ? toRiderApplicationView(row) : null
+    },
+
+    submitRiderApplication: async (input) => {
+      const me = await requireId()
+      const problems = validateRiderApplication(input).map((e) => RIDER_APPLICATION_ERROR_TEXT[e])
+      if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+      const [idPhoto, selfiePhoto] = await Promise.all([uploadIdPhoto(me, input.idPhoto, 'rider-id'), uploadIdPhoto(me, input.selfiePhoto, 'rider-selfie')])
+      await rpc('submit_rider_application', { p: { ...input, idPhoto, selfiePhoto } })
+      return toRiderApplicationView(unwrap(await client.from('rider_applications').select('*').eq('user_id', me).single<RiderApplicationRow>()))
     },
 
     getMyStoreApplication: async () => {
@@ -1438,6 +1490,7 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     takeDelivery: (orderId) => rpc('take_delivery', { p_order_id: orderId }),
     releaseDelivery: (orderId) => rpc('release_delivery', { p_order_id: orderId }),
     confirmDelivery: (orderId, pin) => rpc<PinResult>('confirm_delivery', { p_order_id: orderId, p_pin: pin }),
+    getRiderLevel: () => rpc<RiderLevel>('my_rider_level'),
     getRiderProfile: () => rpc<RiderCard>('my_rider_profile'),
     setRiderPhoto: async (photo) => {
       const [url] = await uploadPhotos(`riders/${await requireId()}`, [photo])
@@ -1467,6 +1520,24 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       return Promise.all(rows.map(toStoreApplicationView))
     },
     approveStoreApplication: (id) => rpc('approve_store_application', { p_application_id: id }),
+    setRiderSignupsOpen: (open) => rpc('set_rider_signups_open', { p_open: open }),
+    listRiderApplications: async () => {
+      const rows = unwrap(await client.from('rider_applications').select('*').eq('status', 'pending').order('updated_at').returns<RiderApplicationRow[]>())
+      return Promise.all(rows.map(toRiderApplicationView))
+    },
+    approveRiderApplication: (id) => rpc('approve_rider_application', { p_application_id: id }),
+    rejectRiderApplication: (id, note) => rpc('reject_rider_application', { p_application_id: id, p_note: note }),
+    listRiderFleets: async () =>
+      unwrap(await client.from('rider_fleets').select('id, name, contact_phone, trusted').order('name').returns<{ id: string; name: string; contact_phone: string; trusted: boolean }[]>()).map((f) => ({
+        id: f.id, name: f.name, contactPhone: f.contact_phone, trusted: f.trusted,
+      })),
+    createRiderFleet: async (name, contactPhone) => {
+      await rpc('create_rider_fleet', { p_name: name, p_phone: contactPhone })
+    },
+    setFleetTrusted: (fleetId, trusted) => rpc('set_fleet_trusted', { p_fleet: fleetId, p_trusted: trusted }),
+    listRiders: () => rpc<AdminRider[]>('admin_riders'),
+    setRiderFleet: (riderId, fleetId) => rpc('set_rider_fleet', { p_rider: riderId, p_fleet: fleetId }),
+    setRiderTrusted: (riderId, trusted) => rpc('set_rider_trusted', { p_rider: riderId, p_trusted: trusted }),
     rejectStoreApplication: (id, note) => rpc('reject_store_application', { p_application_id: id, p_note: note }),
     rejectSeller: (id, note) => rpc('reject_seller', { p_application_id: id, p_note: note }),
     rejectListing: (id, reason, note) => rpc('reject_listing', { p_listing_id: id, p_reason: reason, p_note: note }),

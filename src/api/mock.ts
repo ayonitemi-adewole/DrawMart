@@ -70,6 +70,7 @@ import { checkPin, isDeliveryPin, newDeliveryPin, type PinState } from '@/domain
 import { COLLECT_WARNING_MINUTES, collectBy, collectionOverdue, takeJobError } from '@/domain/riderLimits'
 import { riderAreasError, riderJobAlertAllowed } from '@/domain/riderAlerts'
 import { counterCodeError, counterReminderDue, counterReturnDue } from '@/domain/counter'
+import { NEW_RIDER_JOBS, NEW_RIDER_MAX_KOBO, RIDER_APPLICATION_ERROR_TEXT, newRiderLimitError, riderAccountBlocker, validateRiderApplication } from '@/domain/riderApplications'
 import { CHOOSE_WITHIN_HOURS, attemptError, redeliveryWindowError } from '@/domain/deliveryAttempts'
 import { deliveryMessageError, firstName } from '@/domain/deliveryChat'
 import { attemptPayError, pairPayError, payableNow, placeholderRiderPay, riderPayError, tripPay, type EarningKind, type RiderEarning, type RiderPayRates } from '@/domain/riderPay'
@@ -93,6 +94,9 @@ import {
   type NewPickupInput,
   type DeliveryJob,
   type CounterItem,
+  type AdminRider,
+  type RiderApplicationView,
+  type RiderFleet,
   type NotificationView,
   type PickupItemInput,
   type SavedPickupView,
@@ -111,7 +115,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v55' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v56' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -177,6 +181,12 @@ interface Db {
   sellerShops: Record<string, string>
   /** Businesses' applications for a store, by user id. */
   storeApplications: Record<string, StoreApplicationView>
+  /** riderApplications.ts. Approved applicants' accounts become delivery accounts (riderAccounts), like storeAccounts. */
+  riderSignupsOpen: boolean
+  riderApplications: Record<string, RiderApplicationView>
+  riderAccounts: Record<string, true>
+  riderFleets: RiderFleet[]
+  riderTrust: Record<string, { fleetId: string | null; trusted: boolean }>
   /** Buyer accounts an approved application turned into a store's: user id → store id. */
   storeAccounts: Record<string, string>
   /** Shops' chats with DrawMart, by shop id. */
@@ -663,6 +673,12 @@ async function freshDb(): Promise<Db> {
     sellerApplications: {},
     sellerShops: {},
     storeApplications: {},
+    riderSignupsOpen: false,
+    riderApplications: {},
+    riderAccounts: {},
+    riderFleets: [],
+    // The demo rider has a track record, so demos can carry anything.
+    riderTrust: { 'u-rider': { fleetId: null, trusted: true } },
     storeAccounts: {},
     supportThreads: {},
     supportMessages: [],
@@ -794,7 +810,7 @@ function notify(db: Db, userId: string, kind: NotificationKind, listingId: strin
 
 /** A job has reached the pool: riderAlerts.ts decides who hears (private.alert_riders). Not the rider who just let it go. */
 function alertRiders(db: Db, kind: 'rider_new_job' | 'rider_new_return', listingId: string, area: string | null, except: string | null, now: number) {
-  for (const r of DEMO_ACCOUNTS.filter((a) => a.role === 'delivery' && !a.pickupPointId && a.mockId !== except)) {
+  for (const r of riderIds(db).filter((id) => id !== except).map((mockId) => ({ mockId }))) {
     const prefs = db.pushPreferences[r.mockId]
     const allowed = riderJobAlertAllowed({
       enabled: (kind === 'rider_new_job' ? prefs?.riderNewJobs : prefs?.riderReturns) !== false,
@@ -1210,15 +1226,26 @@ function logStoreActivity(db: Db, actor: { merchantId: string; name: string }, b
 function accountFacts(db: Db, userId: string) {
   const individual = db.sellerApplications[userId]
   return {
-    isBuyer: !db.storeAccounts[userId] && db.users.some((u) => u.id === userId),
+    isBuyer: !db.storeAccounts[userId] && !db.riderAccounts[userId] && db.users.some((u) => u.id === userId),
     sellsAsIndividual: !!db.sellerShops[userId] || (!!individual && individual.status !== 'rejected'),
     hasBought: db.tickets.some((t) => t.userId === userId) || db.orders.some((o) => o.buyerId === userId),
   }
 }
 
+/** Every rider: the demo ones (not counter staff), and accounts approved to ride. */
+const riderIds = (db: Db) => [...DEMO_ACCOUNTS.filter((a) => a.role === 'delivery' && !a.pickupPointId).map((a) => a.mockId), ...Object.keys(db.riderAccounts)]
+const riderName = (db: Db, id: string) => db.riderApplications[id]?.fullName ?? DEMO_ACCOUNTS.find((a) => a.mockId === id)?.name ?? 'Rider'
+const riderCompleted = (db: Db, id: string) => db.orders.filter((o) => o.riderId === id && (o.status === 'delivered' || !!o.atCounterAt)).length
+const riderTrusted = (db: Db, id: string) => {
+  const t = db.riderTrust[id]
+  return !!t?.trusted || !!db.riderFleets.find((f) => f.id === t?.fleetId)?.trusted
+}
+/** riderApplications.ts newRiderLimitError, for this rider and order. */
+const riderLimit = (db: Db, id: string, o: MockOrder) => newRiderLimitError({ completed: riderCompleted(db, id), trusted: riderTrusted(db, id), orderKobo: o.priceKobo, isPrize: o.isPrize })
+
 /** Open from collection until it's delivered, handed in, or goes back (private.delivery_chat_open). */
 const chatOpen = (o: MockOrder) => o.status === 'dispatched' && o.fulfilment === 'delivery' && !!o.riderId && !!o.collectedAt && !o.atCounterAt
-const riderCard = (db: Db, riderId: string) => ({ firstName: firstName(DEMO_ACCOUNTS.find((a) => a.mockId === riderId)?.name ?? ''), photo: db.riderPhotos[riderId] ?? null })
+const riderCard = (db: Db, riderId: string) => ({ firstName: firstName(riderName(db, riderId)), photo: db.riderPhotos[riderId] ?? null })
 
 function orderView(db: Db, order: MockOrder, forBuyer = false): OrderView {
   const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, paidFeeCashKobo: _feeCash, paidFeeCreditKobo: _feeCredit, checkoutId: _checkoutId, confirmRemindedAt: _reminded, riderTakenAt: _taken, counterRemindedAt: _counterReminded, counterOutAt: _counterOut, ...o } = order
@@ -1341,7 +1368,13 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     getSession: async () => {
       const s = readSession()
       // An approved store application: the account is now the store's.
-      const shop = s?.role === 'buyer' ? (await load()).storeAccounts[s.userId] : undefined
+      const db = s?.role === 'buyer' ? await load() : null
+      const shop = db?.storeAccounts[s!.userId]
+      if (s && db?.riderAccounts[s.userId]) {
+        const next: AuthSession = { userId: s.userId, email: s.email, role: 'delivery' }
+        store.setItem(SESSION_KEY, JSON.stringify(next))
+        return next
+      }
       if (!s || !shop) return s
       const next: AuthSession = { userId: shop, email: s.email, role: 'store' }
       store.setItem(SESSION_KEY, JSON.stringify(next))
@@ -1359,8 +1392,9 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       const a = DEMO_ACCOUNTS.find((d) => d.email === email.trim().toLowerCase())
       if (!a || a.password !== password) throw new ApiError('invalid_input', 'That email and password don’t match. Try one of the demo accounts.')
       // Stores sign in as their store: userId is the store id on the mock.
-      const shop = a.role === 'buyer' ? (await load()).storeAccounts[a.mockId] : undefined
-      setSession(shop ? { userId: shop, email: a.email, role: 'store' } : { userId: a.mockId, email: a.email, role: a.role })
+      const db = a.role === 'buyer' ? await load() : null
+      const shop = db?.storeAccounts[a.mockId]
+      setSession(shop ? { userId: shop, email: a.email, role: 'store' } : db?.riderAccounts[a.mockId] ? { userId: a.mockId, email: a.email, role: 'delivery' } : { userId: a.mockId, email: a.email, role: a.role })
     },
     async signOut() {
       setSession(null)
@@ -1987,6 +2021,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
               arrivedAt: o.arrivedAt ?? null, failedAttempts: o.failedAttempts, awaitingBuyer: o.status === 'dispatched' && o.failedAttempts === 1 && !o.redeliveryChoice,
               redeliverAt: o.redeliveryChoice === 'redeliver' ? o.redeliverAt : null,
               ...poolFields(db, o),
+              locked: !o.riderId && !!riderLimit(db, me, o),
               collectFrom: o.handledBy === 'drawmart' ? { name: 'DrawMart escrow', area: 'Lagos' } : { name: merchant.name, area: merchant.area, ...(o.riderId === me && ((o.status === 'dispatched' && !o.collectedAt) || o.returnState === 'returning') ? db.shopPickups[o.merchantId] : {}) },
               pickupPoint: o.pickupPoint,
               dropOff: carrying ? { buyerName: db.users.find((u) => u.id === o.buyerId)?.displayName ?? 'Buyer', address: o.delivery.address, location: o.delivery.location, contactPhone: o.delivery.contactPhone } : null,
@@ -2001,6 +2036,9 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (counterPoint()) throw new ApiError('forbidden', 'Counter staff don’t take deliveries.')
         const full = takeJobError(riderJobsHeld(db, me))
         if (full) throw new ApiError('invalid_input', full)
+        const limited = db.orders.find((x) => x.id === orderId)
+        const limit = limited && riderLimit(db, me, limited)
+        if (limit) throw new ApiError('invalid_input', limit)
         const o = db.orders.find((x) => x.id === orderId && !x.riderId && ((x.status === 'dispatched' && !x.atCounterAt) || waitingAtCounter(x)))
         if (!o) throw new ApiError('invalid_input', 'Another rider has taken this delivery.')
         o.riderId = me
@@ -2043,6 +2081,117 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       }),
 
     getRiderProfile: () => tx((db) => riderCard(db, rider())),
+
+    getRiderLevel: () =>
+      tx((db) => {
+        const me = rider()
+        return { completed: riderCompleted(db, me), trusted: riderTrusted(db, me), jobsToUnlock: NEW_RIDER_JOBS, maxKobo: NEW_RIDER_MAX_KOBO }
+      }),
+
+    getRiderSignupsOpen: () => tx((db) => db.riderSignupsOpen),
+
+    getMyRiderApplication: () => tx((db) => db.riderApplications[buyer()] ?? null),
+
+    submitRiderApplication: (input) =>
+      tx((db) => {
+        const me = buyer()
+        if (!db.riderSignupsOpen) throw new ApiError('invalid_input', 'Rider sign-up isn’t open yet.')
+        const facts = accountFacts(db, me)
+        const blocker = riderAccountBlocker({ ...facts, appliedAsStore: !!db.storeApplications[me] && db.storeApplications[me].status !== 'rejected' })
+        if (blocker) throw new ApiError('invalid_input', blocker)
+        const prev = db.riderApplications[me]
+        if (prev?.status === 'pending') throw new ApiError('invalid_input', 'Your application is already being reviewed.')
+        if (prev?.status === 'approved') throw new ApiError('invalid_input', 'You’re already approved.')
+        const problems = validateRiderApplication(input).map((e) => RIDER_APPLICATION_ERROR_TEXT[e])
+        if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+        const at = iso(now())
+        db.riderApplications[me] = {
+          id: prev?.id ?? uid('A'), status: 'pending', fullName: input.fullName.trim(), nin: input.nin.trim(), phone: input.phone.trim(), address: input.address.trim(), area: input.area,
+          vehicle: input.vehicle, plate: input.vehicle === 'bicycle' ? null : input.plate.toUpperCase().replace(/[\s-]/g, ''), guarantorName: input.guarantorName.trim(), guarantorPhone: input.guarantorPhone.trim(),
+          guarantorRelationship: input.guarantorRelationship.trim(), idPhotoUrl: input.idPhoto, selfieUrl: input.selfiePhoto, reviewNote: null, createdAt: prev?.createdAt ?? at, updatedAt: at, reviewedAt: null,
+        }
+        return db.riderApplications[me]
+      }),
+
+    setRiderSignupsOpen: (open) =>
+      tx((db) => {
+        requireAdmin()
+        db.riderSignupsOpen = open
+      }),
+
+    listRiderApplications: () =>
+      tx((db) => {
+        requireAdmin()
+        return Object.values(db.riderApplications).filter((a) => a.status === 'pending').sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
+      }),
+
+    approveRiderApplication: (applicationId) =>
+      tx((db) => {
+        requireAdmin()
+        const [userId, a] = Object.entries(db.riderApplications).find(([, x]) => x.id === applicationId) ?? []
+        if (!userId || !a || a.status !== 'pending') throw new ApiError('invalid_input', 'Only applications waiting for review can be approved.')
+        if (riderAccountBlocker({ ...accountFacts(db, userId), appliedAsStore: false }))
+          throw new ApiError('invalid_input', 'This account has bought or sold on DrawMart since applying, so it can’t become a rider’s. Ask them to apply from a new account.')
+        db.riderAccounts[userId] = true
+        delete db.carts[userId]
+        delete db.saved[userId]
+        Object.assign(a, { status: 'approved', reviewedAt: iso(now()) })
+        notify(db, userId, 'rider_approved', null, iso(now()))
+      }),
+
+    rejectRiderApplication: (applicationId, note) =>
+      tx((db) => {
+        requireAdmin()
+        if (note.trim().length < 5) throw new ApiError('invalid_input', 'Tell the applicant what to fix.')
+        const a = Object.values(db.riderApplications).find((x) => x.id === applicationId)
+        if (!a || a.status !== 'pending') throw new ApiError('invalid_input', 'Only applications waiting for review can be rejected.')
+        Object.assign(a, { status: 'rejected', reviewNote: note.trim(), reviewedAt: iso(now()) })
+      }),
+
+    listRiderFleets: () =>
+      tx((db) => {
+        requireAdmin()
+        return [...db.riderFleets].sort((a, b) => a.name.localeCompare(b.name))
+      }),
+
+    createRiderFleet: (name, contactPhone) =>
+      tx((db) => {
+        requireAdmin()
+        if (name.trim().length < 2) throw new ApiError('invalid_input', 'Enter the fleet’s name.')
+        if (!isNigerianMobile(contactPhone)) throw new ApiError('invalid_input', 'Enter a Nigerian mobile number, e.g. 0803 123 4567.')
+        db.riderFleets.push({ id: uid('F'), name: name.trim(), contactPhone: contactPhone.trim(), trusted: false })
+      }),
+
+    setFleetTrusted: (fleetId, trusted) =>
+      tx((db) => {
+        requireAdmin()
+        const f = db.riderFleets.find((x) => x.id === fleetId)
+        if (!f) throw new ApiError('not_found', 'That fleet doesn’t exist.')
+        f.trusted = trusted
+      }),
+
+    listRiders: () =>
+      tx((db): AdminRider[] => {
+        requireAdmin()
+        return riderIds(db)
+          .map((id) => ({ id, name: riderName(db, id), photo: db.riderPhotos[id] ?? null, fleetId: db.riderTrust[id]?.fleetId ?? null, trusted: !!db.riderTrust[id]?.trusted, completed: riderCompleted(db, id), holding: riderJobsHeld(db, id), joinedAt: db.riderApplications[id]?.reviewedAt ?? '2026-10-01T00:00:00.000Z' }))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      }),
+
+    setRiderFleet: (riderId, fleetId) =>
+      tx((db) => {
+        requireAdmin()
+        if (!riderIds(db).includes(riderId)) throw new ApiError('not_found', 'That rider doesn’t exist.')
+        if (fleetId && !db.riderFleets.some((f) => f.id === fleetId)) throw new ApiError('not_found', 'That fleet doesn’t exist.')
+        db.riderTrust[riderId] = { trusted: db.riderTrust[riderId]?.trusted ?? false, fleetId }
+      }),
+
+    setRiderTrusted: (riderId, trusted) =>
+      tx((db) => {
+        requireAdmin()
+        if (!riderIds(db).includes(riderId)) throw new ApiError('not_found', 'That rider doesn’t exist.')
+        db.riderTrust[riderId] = { fleetId: db.riderTrust[riderId]?.fleetId ?? null, trusted }
+      }),
 
     setRiderPhoto: (photo) =>
       tx((db) => {
@@ -2162,7 +2311,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const due = payableNow(db.riderEarnings, now()) as typeof db.riderEarnings
         return [...new Set(due.map((e) => e.riderId))].map((riderId) => ({
           riderId,
-          riderName: DEMO_ACCOUNTS.find((a) => a.mockId === riderId)?.name ?? 'Rider',
+          riderName: riderName(db, riderId),
           account: db.riderPayoutAccounts[riderId] ?? null,
           lines: due.filter((e) => e.riderId === riderId).sort((a, b) => a.earnedAt.localeCompare(b.earnedAt)).map(({ riderId: _r, sourceKey: _s, paidBy: _p, ...e }) => e),
         }))
@@ -2820,6 +2969,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
             id: o.claim.id, kind: o.claim.kind, status: o.claim.status, mine: !!d.riderId,
             collectBy: d.riderId === me && o.claim.status === 'awaiting_pickup' && d.takenAt ? collectBy(d.takenAt) : null,
             ...poolPay(db, o, nearestArea(d.location, DELIVERY_AREAS), sellerArea(db, o), d.openedAt ?? null),
+            locked: !d.riderId && !!riderLimit(db, me, o),
             productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, quantity: o.quantity, category: l.category,
             returnTo: { name: shop.name, area: shop.area, ...(d.riderId === me && o.claim.status === 'returning' ? db.shopPickups[o.merchantId] : {}) },
             pickupFrom: d.riderId === me && o.claim.status === 'awaiting_pickup' ? { buyerName: db.users.find((u) => u.id === o.buyerId)?.displayName ?? 'Buyer', address: d.address, location: d.location, contactPhone: d.phone } : null,
@@ -2832,6 +2982,8 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const o = db.orders.find((x) => x.claim?.id === claimId && x.claim.status === 'awaiting_pickup')
         const full = takeJobError(riderJobsHeld(db, rider()))
         if (full) throw new ApiError('invalid_input', full)
+        const limit = o && riderLimit(db, rider(), o)
+        if (limit) throw new ApiError('invalid_input', limit)
         if (!o || db.claimDetails[claimId].riderId) throw new ApiError('invalid_input', 'Another rider has taken this return.')
         Object.assign(db.claimDetails[claimId], { riderId: rider(), takenAt: iso(now()) })
       }),
