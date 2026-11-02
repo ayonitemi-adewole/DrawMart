@@ -100,9 +100,12 @@ function SessionSync() {
     })
     return api.auth.onChange((s) => {
       const user = s?.userId ?? null
-      if (lastUser !== undefined && lastUser !== user) qc.clear()
-      lastUser = user
       qc.setQueryData(keys.session, s)
+      // Reset rather than clear: clearing detaches pages from their queries, so a page already
+      // showing (the sign-in page, say) wouldn't see the new session until something redrew it.
+      // Supabase reports a sign-in after the sign-in call has finished, so nothing would.
+      if (lastUser !== undefined && lastUser !== user) void qc.resetQueries({ predicate: (q) => q.queryKey[0] !== keys.session[0] })
+      lastUser = user
     })
   }, [qc])
   return null
