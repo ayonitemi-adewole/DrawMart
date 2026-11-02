@@ -1434,7 +1434,10 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     releaseDelivery: (orderId) => rpc('release_delivery', { p_order_id: orderId }),
     confirmDelivery: (orderId, pin) => rpc<PinResult>('confirm_delivery', { p_order_id: orderId, p_pin: pin }),
     markArrived: (orderId) => rpc<string>('mark_arrived', { p_order_id: orderId }),
-    failDeliveryAttempt: (orderId, photo, at) => rpc('fail_delivery_attempt', { p_order_id: orderId, p_photo: photo, p_lat: at.lat, p_lng: at.lng }),
+    failDeliveryAttempt: async (orderId, photo, at) => {
+      const [url] = await uploadPhotos(`riders/${await requireId()}`, [photo])
+      await rpc('fail_delivery_attempt', { p_order_id: orderId, p_photo: url, p_lat: at.lat, p_lng: at.lng })
+    },
     getMyCounter: () => rpc<PickupPoint | null>('my_counter'),
     listCounterItems: () => rpc<CounterItem[]>('counter_items'),
     receiveAtCounter: (orderId, productCode) => rpc('receive_at_counter', { p_order_id: orderId, p_product_code: productCode }),
