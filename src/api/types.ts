@@ -151,6 +151,36 @@ export interface NewProductInput {
   priceKobo: Kobo
 }
 
+export type SupportSender = 'shop' | 'drawmart'
+
+/** A message between a shop and DrawMart's team. Never says which admin wrote it. */
+export interface SupportMessage {
+  id: string
+  sender: SupportSender
+  body: string
+  createdAt: string
+}
+
+/** The shop's own chat with DrawMart. */
+export interface SupportThreadView {
+  messages: SupportMessage[]
+  /** DrawMart's replies the shop hasn't read. */
+  unread: number
+}
+
+/** A chat in the admins' support inbox. */
+export interface SupportThreadSummary {
+  merchantId: string
+  merchantName: string
+  kind: Merchant['kind']
+  lastMessageAt: string
+  lastMessage: string
+  lastSender: SupportSender
+  /** The shop's messages no admin has read. */
+  unread: number
+  resolved: boolean
+}
+
 /** The buyer's review of an order, as the buyer and the shop see it. */
 export interface OrderReview {
   id: string
@@ -799,6 +829,15 @@ export interface DrawMartApi {
   /** Issues the code to show in the video, and says what the listing form must ask for. */
   getListingCheckPlan(): Promise<ListingCheckPlan>
   getListingCheck(listingId: string): Promise<ListingCheckView | null>
+  /** The signed-in shop's chat with DrawMart. */
+  getSupportThread(): Promise<SupportThreadView>
+  sendSupportMessage(body: string): Promise<void>
+  /** No shop: the shop read its own chat. A shop: an admin read that one. */
+  markSupportRead(merchantId?: string): Promise<void>
+  listSupportThreads(): Promise<SupportThreadSummary[]>
+  getSupportMessages(merchantId: string): Promise<SupportMessage[]>
+  replySupport(merchantId: string, body: string): Promise<void>
+  setSupportResolved(merchantId: string, resolved: boolean): Promise<void>
   /** After delivery (reviews.ts). Changes it if there's one already. */
   submitReview(orderId: string, input: ReviewInput): Promise<void>
   /** The shop's one reply. */

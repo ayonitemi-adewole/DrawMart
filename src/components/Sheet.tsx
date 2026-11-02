@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { XIcon } from './icons'
 import { IconButton, cx } from './ui'
 
@@ -6,6 +7,10 @@ import { IconButton, cx } from './ui'
  * Modal built on native <dialog>: focus trapping, Escape and the top layer
  * come for free. Renders as a bottom sheet on phones and a centred card on
  * larger screens.
+ *
+ * It renders at the end of <body>, so a sheet opened from inside a form (the
+ * product form's rider pickup, say) never puts one form inside another, which
+ * browsers submit as a page reload.
  */
 export function Sheet({
   open,
@@ -37,11 +42,13 @@ export function Sheet({
     if (!open && d.open) d.close()
   }, [open])
 
-  return (
+  return createPortal(
     <dialog
       ref={ref}
       aria-label={title}
       onClose={onClose}
+      // React still passes events up to the form that opened it: keep a submit in here.
+      onSubmit={(e) => e.stopPropagation()}
       onClick={(e) => {
         // Click on the backdrop (the dialog element itself) closes it.
         if (e.target === e.currentTarget) onClose()
@@ -67,6 +74,7 @@ export function Sheet({
         )}
         {children}
       </div>
-    </dialog>
+    </dialog>,
+    document.body,
   )
 }

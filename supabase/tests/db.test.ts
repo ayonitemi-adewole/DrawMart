@@ -1695,6 +1695,49 @@ describe('delivery fees', () => {
   })
 })
 
+describe('seller support', () => {
+  const SHOP = '11111111-1111-4111-8111-000000000003'
+  let owner: string, staff: string, buyer: string
+  const thread = (who: string) => asUser<{ sender: string; body: string }>(who, `select sender, body from public.support_messages where merchant_id = $1 order by created_at`, [SHOP])
+  type Inbox = { merchantId: string; unread: number; resolved: boolean; lastSender: string }[]
+  const inbox = async () => (await asUser<{ i: Inbox }>(staff, `select public.support_inbox() i`))[0].i.find((t) => t.merchantId === SHOP)
+
+  beforeAll(async () => {
+    owner = await newUser('support-store@example.com', { merchantId: SHOP })
+    staff = await newUser('support-staff@example.com', { role: 'admin' })
+    buyer = await newUser('support-buyer@example.com')
+  })
+
+  it('lets a shop write to DrawMart and admins answer', async () => {
+    await expectFail(asUser(owner, `select public.send_support_message('  ')`), 'invalid_input')
+    await asUser(owner, `select public.send_support_message('When will my payout arrive?')`)
+    expect(await inbox()).toMatchObject({ unread: 1, resolved: false, lastSender: 'shop' })
+
+    await expectFail(asUser(owner, `select public.reply_support($1, 'Hi')`, [SHOP]), 'forbidden')
+    await expectFail(asUser(owner, `select public.support_inbox()`), 'forbidden')
+    await asUser(staff, `select public.mark_support_read($1)`, [SHOP])
+    await asUser(staff, `select public.reply_support($1, 'It’s due 48 hours after delivery.')`, [SHOP])
+    await asUser(staff, `select public.set_support_resolved($1, true)`, [SHOP])
+    expect(await inbox()).toMatchObject({ unread: 0, resolved: true, lastSender: 'drawmart' })
+    expect(await admin(`select kind from public.notifications where user_id = $1 and kind = 'store_support_reply'`, [owner])).toHaveLength(1)
+
+    expect(await thread(owner)).toEqual([{ sender: 'shop', body: 'When will my payout arrive?' }, { sender: 'drawmart', body: 'It’s due 48 hours after delivery.' }])
+    // Never which admin answered.
+    await expect(asUser(owner, `select sender_user_id from public.support_messages`)).rejects.toThrow(/permission denied/)
+
+    // A new message opens it again.
+    await asUser(owner, `select public.send_support_message('Thanks!')`)
+    expect(await inbox()).toMatchObject({ unread: 1, resolved: false })
+  })
+
+  it('keeps each shop’s chat to itself and admins', async () => {
+    expect(await thread(buyer)).toEqual([])
+    await expect(asUser(null, `select id from public.support_messages`)).rejects.toThrow(/permission denied/)
+    await expectFail(asUser(buyer, `select public.send_support_message('Hello')`), 'forbidden')
+    await expect(asUser(owner, `insert into public.support_messages (merchant_id, sender, sender_user_id, body) values ($1, 'drawmart', $2, 'fake')`, [SHOP, owner])).rejects.toThrow(/permission denied/)
+  })
+})
+
 describe('store applications', () => {
   let staff: string
   const input = (who: string, over: Record<string, unknown> = {}) => ({

@@ -48,6 +48,8 @@ import { StorePayoutsPage } from '@/pages/merchant/StorePayoutsPage'
 import { InsightsPage } from '@/pages/merchant/InsightsPage'
 import { SellPage } from '@/pages/SellPage'
 import { StoreApplicationPage } from '@/pages/StoreApplicationPage'
+import { HelpPage } from '@/pages/HelpPage'
+import { AdminSupportPage } from '@/pages/admin/AdminSupportPage'
 import { AdminStoreApplicationsPage } from '@/pages/admin/AdminStoreApplicationsPage'
 import { SignInPage } from '@/pages/SignInPage'
 import { TicketsPage } from '@/pages/TicketsPage'
@@ -159,6 +161,7 @@ const router = createBrowserRouter([
       { path: 'saved', element: <RequireSignIn role="buyer"><SavedPage /></RequireSignIn> },
       { path: 'wallet', element: <RequireSignIn role="buyer"><WalletPage /></RequireSignIn> },
       { path: 'sell', element: <RequireSignIn role="buyer"><SellPage /></RequireSignIn> },
+      { path: 'sell/help', element: <RequireSignIn role="buyer"><HelpPage app="sell" /></RequireSignIn> },
       { path: 'sell/business', element: <RequireSignIn role="buyer"><StoreApplicationPage /></RequireSignIn> },
       { path: 'cart', element: <RequireSignIn role="buyer"><CartPage /></RequireSignIn> },
       { path: 'checkout', element: <RequireSignIn role="buyer"><CheckoutPage /></RequireSignIn> },
@@ -180,6 +183,7 @@ const router = createBrowserRouter([
       { path: 'payouts', element: <StorePayoutsPage /> },
       { path: 'profile', element: <StoreProfileSettingsPage /> },
       { path: 'reviews', element: <StoreReviewsPage /> },
+      { path: 'help', element: <HelpPage app="store" /> },
       { path: 'shop', element: <StoreShopPreviewPage /> },
       { path: 'insights', element: <InsightsPage /> },
       { path: 'messages', element: <MessagesPage basePath="/store/messages" /> },
@@ -205,6 +209,7 @@ const router = createBrowserRouter([
       { path: 'stories', element: <AdminStoriesPage /> },
       { path: 'sellers', element: <AdminSellersPage /> },
       { path: 'store-applications', element: <AdminStoreApplicationsPage /> },
+      { path: 'support', element: <AdminSupportPage /> },
       { path: '*', element: <NotFound /> },
     ],
   },

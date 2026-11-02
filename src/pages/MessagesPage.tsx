@@ -249,7 +249,8 @@ function Thread({ conversation: c, basePath }: { conversation: ConversationView;
   )
 }
 
-function MessageList({ messages, me }: { messages: ChatMessage[]; me: ChatMessage['sender'] }) {
+/** `warnOffPlatform` flags the other side asking for payment outside DrawMart; DrawMart's own team doesn't need it. */
+export function MessageList({ messages, me, warnOffPlatform = true }: { messages: (Pick<ChatMessage, 'id' | 'body' | 'createdAt'> & { sender: string })[]; me: string; warnOffPlatform?: boolean }) {
   let lastDay = ''
   return (
     <ol className="flex flex-col gap-2" aria-label="Messages">
@@ -258,7 +259,7 @@ function MessageList({ messages, me }: { messages: ChatMessage[]; me: ChatMessag
         const showDay = day !== lastDay
         lastDay = day
         const mine = m.sender === me
-        const warn = !mine && asksForOffPlatformPayment(m.body)
+        const warn = warnOffPlatform && !mine && asksForOffPlatformPayment(m.body)
         return (
           <li key={m.id} className="flex flex-col gap-1">
             {showDay ? <span className="my-2 self-center rounded-full bg-sunken px-3 py-1 text-[11px] font-bold text-subtle">{day}</span> : null}
@@ -289,8 +290,8 @@ function Composer({ conversationId }: { conversationId: string }) {
   return <MessageBox send={useSendMessage(conversationId)} />
 }
 
-/** The text box and send button. `send` is a mutation taking the message text. */
-function MessageBox({ send, placeholder = 'Write a message…', autoFocus }: { send: { mutate: (body: string, o: { onSuccess: () => void; onError: (e: unknown) => void }) => void; isPending: boolean }; placeholder?: string; autoFocus?: boolean }) {
+/** The text box and send button. `inline` sits in a card rather than pinned to the bottom of the screen. */
+export function MessageBox({ send, placeholder = 'Write a message…', autoFocus, inline }: { send: { mutate: (body: string, o: { onSuccess: () => void; onError: (e: unknown) => void }) => void; isPending: boolean }; placeholder?: string; autoFocus?: boolean; inline?: boolean }) {
   const toast = useToast()
   const [body, setBody] = useState('')
   const problem = body ? messageError(body) : 'empty'
@@ -310,7 +311,13 @@ function MessageBox({ send, placeholder = 'Write a message…', autoFocus }: { s
   }
 
   return (
-    <form onSubmit={submit} className="sticky bottom-[calc(max(env(safe-area-inset-bottom),12px)+84px)] flex items-end gap-2 rounded-3xl border border-line bg-raised/95 p-2 shadow-lift backdrop-blur-xl lg:bottom-4">
+    <form
+      onSubmit={submit}
+      className={cx(
+        'flex items-end gap-2 rounded-3xl border border-line p-2',
+        inline ? 'bg-raised' : 'sticky bottom-[calc(max(env(safe-area-inset-bottom),12px)+84px)] bg-raised/95 shadow-lift backdrop-blur-xl lg:bottom-4',
+      )}
+    >
       <label htmlFor="message" className="sr-only">
         Message
       </label>

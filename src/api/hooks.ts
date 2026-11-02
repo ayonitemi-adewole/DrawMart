@@ -32,6 +32,9 @@ export const keys = {
   shop: (id: string) => ['shop', id] as const,
   shopReviews: (id: string, listingId?: string) => ['shop-reviews', id, listingId ?? null] as const,
   adminReviews: ['admin-reviews'] as const,
+  supportThread: ['support-thread'] as const,
+  supportInbox: ['support-inbox'] as const,
+  supportMessages: (merchantId: string) => ['support-messages', merchantId] as const,
   cacNumber: (id: string) => ['cac-number', id] as const,
   openClaims: ['open-claims'] as const,
   listingCheckPlan: ['listing-check-plan'] as const,
@@ -107,6 +110,11 @@ export const useListingCheckPlan = (enabled: boolean) => useQuery({ queryKey: ke
 export const useListingCheck = (id: string | null) => useQuery({ queryKey: keys.listingCheck(id ?? ''), queryFn: () => api.getListingCheck(id!), enabled: !!id, staleTime: 5 * 60_000 })
 export const useOpenClaims = () => useQuery({ queryKey: keys.openClaims, queryFn: () => api.listOpenClaims(), enabled: useIs('admin') })
 export const useReturnJobs = () => useQuery({ queryKey: keys.returnJobs, queryFn: () => api.listReturnJobs(), enabled: useIs('delivery'), refetchInterval: 30_000 })
+export const useSupportThread = () => useQuery({ queryKey: keys.supportThread, queryFn: () => api.getSupportThread(), enabled: useHasShop(), refetchInterval: 10_000 })
+export const useSupportUnread = () => useSupportThread().data?.unread ?? 0
+export const useSupportInbox = () => useQuery({ queryKey: keys.supportInbox, queryFn: () => api.listSupportThreads(), enabled: useIs('admin'), refetchInterval: 15_000 })
+export const useSupportMessages = (merchantId: string) =>
+  useQuery({ queryKey: keys.supportMessages(merchantId), queryFn: () => api.getSupportMessages(merchantId), enabled: useIs('admin') && !!merchantId, refetchInterval: 5_000 })
 export const useShopReviews = (merchantId: string | null | undefined, listingId?: string) =>
   useQuery({ queryKey: keys.shopReviews(merchantId ?? '', listingId), queryFn: () => api.getShopReviews(merchantId!, listingId), enabled: !!merchantId })
 export const useAdminReviews = () => useQuery({ queryKey: keys.adminReviews, queryFn: () => api.listAdminReviews(), enabled: useIs('admin') })
@@ -415,6 +423,35 @@ export function useSetDeliverySizeExtra() {
   return useMutation({
     mutationFn: ({ size, extraKobo }: { size: PackageSize; extraKobo: Kobo }) => api.setDeliverySizeExtra(size, extraKobo),
     onSettled: () => qc.invalidateQueries({ queryKey: keys.deliveryPricing }),
+  })
+}
+
+export function useSendSupportMessage() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (body: string) => api.sendSupportMessage(body), onSuccess: () => qc.invalidateQueries({ queryKey: keys.supportThread }) })
+}
+
+export function useReplySupport(merchantId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: string) => api.replySupport(merchantId, body),
+    onSuccess: () => Promise.all([qc.invalidateQueries({ queryKey: keys.supportMessages(merchantId) }), qc.invalidateQueries({ queryKey: keys.supportInbox })]),
+  })
+}
+
+export function useMarkSupportRead() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (merchantId: string | undefined) => api.markSupportRead(merchantId),
+    onSuccess: () => Promise.all([qc.invalidateQueries({ queryKey: keys.supportThread }), qc.invalidateQueries({ queryKey: keys.supportInbox })]),
+  })
+}
+
+export function useSetSupportResolved() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ merchantId, resolved }: { merchantId: string; resolved: boolean }) => api.setSupportResolved(merchantId, resolved),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.supportInbox }),
   })
 }
 

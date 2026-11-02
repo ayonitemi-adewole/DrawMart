@@ -7,7 +7,7 @@
  */
 import { STORE_APPLICATION_ERROR_TEXT, validateStoreApplication } from '@/domain/storeApplications'
 import type { PayoutAccount, PayoutKind, PayoutStatus } from '@/domain/payouts'
-import type { ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews, StoreApplicationView } from './types'
+import type { ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews, StoreApplicationView, SupportMessage, SupportThreadSummary } from './types'
 import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js'
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
@@ -178,6 +178,14 @@ interface ProfileRow {
   /** An individual seller's own shop (buyer accounts only). */
   seller_id: string | null
 }
+
+interface SupportMessageRow {
+  id: string
+  sender: SupportMessage['sender']
+  body: string
+  created_at: string
+}
+const toSupportMessage = (m: SupportMessageRow): SupportMessage => ({ id: m.id, sender: m.sender, body: m.body, createdAt: m.created_at })
 
 interface StoreApplicationRow {
   id: string
@@ -1203,6 +1211,31 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     finishReturn: async (claimId, photo) => {
       const [url] = await uploadPhotos(`riders/${await requireId()}`, [photo])
       await rpc('finish_return', { p_claim_id: claimId, p_photo: url })
+    },
+    getSupportThread: async () => {
+      const shop = await myMerchantId()
+      const [thread, rows] = await Promise.all([
+        client.from('support_threads').select('shop_read_at').eq('merchant_id', shop).maybeSingle<{ shop_read_at: string }>(),
+        client.from('support_messages').select('id, sender, body, created_at').eq('merchant_id', shop).order('created_at').returns<SupportMessageRow[]>(),
+      ])
+      const readAt = Date.parse(unwrap(thread)?.shop_read_at ?? '1970-01-01T00:00:00Z')
+      const messages = unwrap(rows).map(toSupportMessage)
+      return { messages, unread: messages.filter((m) => m.sender === 'drawmart' && Date.parse(m.createdAt) > readAt).length }
+    },
+    sendSupportMessage: async (body) => {
+      await rpc('send_support_message', { p_body: body })
+    },
+    markSupportRead: async (merchantId) => {
+      await rpc('mark_support_read', { p_merchant: merchantId ?? null })
+    },
+    listSupportThreads: () => rpc<SupportThreadSummary[]>('support_inbox'),
+    getSupportMessages: async (merchantId) =>
+      unwrap(await client.from('support_messages').select('id, sender, body, created_at').eq('merchant_id', merchantId).order('created_at').returns<SupportMessageRow[]>()).map(toSupportMessage),
+    replySupport: async (merchantId, body) => {
+      await rpc('reply_support', { p_merchant: merchantId, p_body: body })
+    },
+    setSupportResolved: async (merchantId, resolved) => {
+      await rpc('set_support_resolved', { p_merchant: merchantId, p_resolved: resolved })
     },
     submitReview: async (orderId, input) => {
       await rpc('submit_review', { p_order_id: orderId, p_rating: input.rating, p_seller_comment: input.sellerComment, p_product_comment: input.productComment })

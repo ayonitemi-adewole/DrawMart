@@ -4,7 +4,7 @@ import { useMe, useMerchant, useMerchantListings, useMySellerApplication, useSub
 import type { SellerApplicationView } from '@/api/types'
 import { AlertIcon, CameraIcon, ChartIcon, CheckIcon, ClockIcon, IdCardIcon, LayoutIcon, PlusIcon, ShieldIcon, StoreIcon, TruckIcon, XIcon, type IconComponent } from '@/components/icons'
 import { useToast } from '@/components/toast'
-import { Badge, Button, Card, ErrorState, Field, Notice, PageTitle, Segmented, Skeleton, cx, errorMessage, inputCls } from '@/components/ui'
+import { Badge, Button, Card, ErrorState, Field, Notice, PageTitle, Segmented, Skeleton, buttonClass, cx, errorMessage, inputCls } from '@/components/ui'
 import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication, type SellerApplicationError, type SellerApplicationInput } from '@/domain/sellers'
 import { SellerInsights } from '@/components/SellerInsights'
 import { photoToDataUrl } from '@/lib/image'
@@ -306,11 +306,16 @@ function SellerDashboard() {
         eyebrow="Your shop"
         sub="Regular products at a fixed price. Each listing is checked before it goes on sale."
         action={
-          tab !== 'new' ? (
-            <Button onClick={() => setTab('new')}>
-              <PlusIcon size={18} /> New item
-            </Button>
-          ) : null
+          <span className="flex flex-wrap gap-2">
+            <Link to="/sell/help" className={buttonClass('outline')}>
+              Help
+            </Link>
+            {tab !== 'new' ? (
+              <Button onClick={() => setTab('new')}>
+                <PlusIcon size={18} /> New item
+              </Button>
+            ) : null}
+          </span>
         }
       >
         <span className="flex flex-wrap items-center gap-2">

@@ -24,6 +24,8 @@ function describe(n: NotificationView, store: boolean): { icon: IconComponent; t
       return { icon: ClockIcon, title: `Confirm soon: ${n.listingTitle}`, body: 'Add a photo of the item, or this order will be cancelled.', to: `${home}?tab=orders` }
     case 'store_order_expired':
       return { icon: XIcon, title: `Order cancelled: ${n.listingTitle}`, body: 'It wasn’t confirmed or made ready in time. The buyer was refunded and the product is paused until you resume it.', to: `${home}?tab=orders` }
+    case 'store_support_reply':
+      return { icon: ChatIcon, title: 'DrawMart replied', body: 'Read it in Help.', to: store ? '/store/help' : '/sell/help' }
     case 'store_approved':
       return { icon: StoreIcon, title: 'Your store is approved', body: 'Add your bank account and where riders collect from, then send your first listing.', to: '/store' }
     case 'store_new_review':

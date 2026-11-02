@@ -52,9 +52,11 @@ export function buttonClass(
   );
 }
 
+/** A plain button unless `type="submit"` is given, so one inside a form never submits it by accident. */
 export function Button({
   variant = "primary",
   size = "md",
+  type = "button",
   className,
   loading,
   children,
@@ -66,6 +68,7 @@ export function Button({
 }) {
   return (
     <button
+      type={type}
       className={buttonClass(variant, size, className)}
       disabled={loading || rest.disabled}
       aria-busy={loading || undefined}

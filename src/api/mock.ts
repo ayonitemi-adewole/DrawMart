@@ -6,7 +6,7 @@
  * keeps draw seeds out of every response until a draw has run, so the UI is
  * built against realistic behaviour.
  */
-import type { ReturnJob, ReviewView, StoreApplicationView } from './types'
+import type { ReturnJob, ReviewView, StoreApplicationView, SupportMessage } from './types'
 import { catalogDraws, catalogProducts } from './seedCatalog'
 import { canSaveListing } from '@/domain/saved'
 import { crossedAlmostSold, isClosingSoon, isRelistOf, relistAlertKind, sameLagosDay, savedAlertAllowed, type SavedAlertKind } from '@/domain/savedAlerts'
@@ -99,7 +99,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v44' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v45' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -158,6 +158,9 @@ interface Db {
   storeApplications: Record<string, StoreApplicationView>
   /** Buyer accounts an approved application turned into a store's: user id → store id. */
   storeAccounts: Record<string, string>
+  /** Shops' chats with DrawMart, by shop id. */
+  supportThreads: Record<string, { lastMessageAt: string; shopReadAt: string; staffReadAt: string; resolvedAt: string | null }>
+  supportMessages: (SupportMessage & { merchantId: string })[]
   /** Not stored: the buyer the current call acts for, set by tx(). */
   viewer?: string
   conversations: MockConversation[]
@@ -621,6 +624,8 @@ async function freshDb(): Promise<Db> {
     sellerShops: {},
     storeApplications: {},
     storeAccounts: {},
+    supportThreads: {},
+    supportMessages: [],
     conversations: [],
     messages: [],
     callPhones: { 'm-surulere': '0803 000 1234' },
@@ -2191,6 +2196,83 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       tx((db) => {
         const c = db.listingChecks[listingId]
         return c ? { code: c.code, hasVideo: !!c.videoKey, serial: c.serial, videoUrl: c.videoKey ? (checkFiles.get(c.videoKey) ?? null) : null, proofUrl: c.proofKey ? (checkFiles.get(c.proofKey) ?? null) : null } : null
+      }),
+
+    getSupportThread: () =>
+      tx((db) => {
+        const shop = myShop(db)
+        if (!shop) throw new ApiError('forbidden', 'Only sellers can write to DrawMart here.')
+        const t = db.supportThreads[shop]
+        const messages = db.supportMessages.filter((m) => m.merchantId === shop).map(({ merchantId: _shop, ...m }) => m)
+        return { messages, unread: messages.filter((m) => m.sender === 'drawmart' && (!t || m.createdAt > t.shopReadAt)).length }
+      }),
+
+    sendSupportMessage: (body) =>
+      tx((db) => {
+        const shop = myShop(db)
+        if (!shop) throw new ApiError('forbidden', 'Only sellers can write to DrawMart here.')
+        const problem = messageError(body)
+        if (problem) throw new ApiError('invalid_input', problem)
+        const minuteAgo = iso(now() - 60_000)
+        if (db.supportMessages.filter((m) => m.merchantId === shop && m.sender === 'shop' && m.createdAt > minuteAgo).length >= MAX_MESSAGES_PER_MINUTE)
+          throw new ApiError('invalid_input', 'You’re sending messages very fast. Wait a moment.')
+        const at = iso(now())
+        db.supportMessages.push({ id: uid('H'), merchantId: shop, sender: 'shop', body: body.trim(), createdAt: at })
+        db.supportThreads[shop] = { staffReadAt: db.supportThreads[shop]?.staffReadAt ?? '1970-01-01T00:00:00.000Z', lastMessageAt: at, shopReadAt: at, resolvedAt: null }
+      }),
+
+    markSupportRead: (merchantId) =>
+      tx((db) => {
+        if (merchantId) {
+          if (readSession()?.role !== 'admin') throw new ApiError('forbidden', 'Admins only.')
+          if (db.supportThreads[merchantId]) db.supportThreads[merchantId].staffReadAt = iso(now())
+          return
+        }
+        const shop = myShop(db)
+        if (shop && db.supportThreads[shop]) db.supportThreads[shop].shopReadAt = iso(now())
+      }),
+
+    listSupportThreads: () =>
+      tx((db) => {
+        if (readSession()?.role !== 'admin') throw new ApiError('forbidden', 'Admins only.')
+        return Object.entries(db.supportThreads)
+          .map(([merchantId, t]) => {
+            const messages = db.supportMessages.filter((m) => m.merchantId === merchantId)
+            const last = messages[messages.length - 1]
+            const shop = db.merchants.find((m) => m.id === merchantId)!
+            return {
+              merchantId, merchantName: shop.name, kind: shop.kind, lastMessageAt: t.lastMessageAt, lastMessage: last.body.slice(0, 140), lastSender: last.sender,
+              unread: messages.filter((m) => m.sender === 'shop' && m.createdAt > t.staffReadAt).length, resolved: !!t.resolvedAt,
+            }
+          })
+          .sort((a, b) => Number(b.unread > 0) - Number(a.unread > 0) || b.lastMessageAt.localeCompare(a.lastMessageAt))
+      }),
+
+    getSupportMessages: (merchantId) =>
+      tx((db) => {
+        if (readSession()?.role !== 'admin') throw new ApiError('forbidden', 'Admins only.')
+        return db.supportMessages.filter((m) => m.merchantId === merchantId).map(({ merchantId: _shop, ...m }) => m)
+      }),
+
+    replySupport: (merchantId, body) =>
+      tx((db) => {
+        if (readSession()?.role !== 'admin') throw new ApiError('forbidden', 'Admins only.')
+        const t = db.supportThreads[merchantId]
+        if (!t) throw new ApiError('not_found', 'That chat doesn’t exist.')
+        const problem = messageError(body)
+        if (problem) throw new ApiError('invalid_input', problem)
+        const at = iso(now())
+        db.supportMessages.push({ id: uid('H'), merchantId, sender: 'drawmart', body: body.trim(), createdAt: at })
+        Object.assign(t, { lastMessageAt: at, staffReadAt: at })
+        notifyShop(db, merchantId, 'store_support_reply', null, at)
+      }),
+
+    setSupportResolved: (merchantId, resolved) =>
+      tx((db) => {
+        if (readSession()?.role !== 'admin') throw new ApiError('forbidden', 'Admins only.')
+        const t = db.supportThreads[merchantId]
+        if (!t) throw new ApiError('not_found', 'That chat doesn’t exist.')
+        t.resolvedAt = resolved ? iso(now()) : null
       }),
 
     submitReview: (orderId, input) =>

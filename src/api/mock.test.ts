@@ -2014,4 +2014,46 @@ describe('mock api', () => {
       expect(await api.submitStoreApplication(input)).toMatchObject({ id: sent.id, status: 'pending', reviewNote: null })
     })
   })
+
+  describe('seller support', () => {
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('lets a shop write to DrawMart and admins answer, with unread counts on both sides', async () => {
+      const api = make()
+      await as(api, 'store')
+      expect(await api.getSupportThread()).toEqual({ messages: [], unread: 0 })
+      await expect(api.sendSupportMessage('  ')).rejects.toMatchObject({ code: 'invalid_input' })
+      await api.sendSupportMessage('When will my payout arrive?')
+      await expect(api.listSupportThreads()).rejects.toMatchObject({ code: 'forbidden' })
+
+      await as(api, 'admin')
+      const [t] = await api.listSupportThreads()
+      expect(t).toMatchObject({ merchantId: 'm-ikeja', unread: 1, resolved: false, lastSender: 'shop' })
+      await api.markSupportRead(t.merchantId)
+      await api.replySupport(t.merchantId, 'It’s due 48 hours after delivery.')
+      await api.setSupportResolved(t.merchantId, true)
+      expect((await api.listSupportThreads())[0]).toMatchObject({ unread: 0, resolved: true, lastSender: 'drawmart' })
+
+      await as(api, 'store')
+      const mine = await api.getSupportThread()
+      expect(mine.unread).toBe(1)
+      expect(mine.messages.map((m) => m.sender)).toEqual(['shop', 'drawmart'])
+      expect((await api.listNotifications()).some((n) => n.kind === 'store_support_reply')).toBe(true)
+      await api.markSupportRead()
+      expect((await api.getSupportThread()).unread).toBe(0)
+      await api.sendSupportMessage('Thanks!')
+
+      await as(api, 'admin')
+      expect((await api.listSupportThreads())[0]).toMatchObject({ unread: 1, resolved: false })
+    })
+
+    it('is for shops only', async () => {
+      const api = make()
+      await as(api, 'buyer')
+      await expect(api.sendSupportMessage('Hello')).rejects.toMatchObject({ code: 'forbidden' })
+      await as(api, 'seller')
+      await api.sendSupportMessage('How do I add a video?')
+      expect((await api.getSupportThread()).messages).toHaveLength(1)
+    })
+  })
 })
