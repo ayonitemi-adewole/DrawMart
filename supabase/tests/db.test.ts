@@ -1695,6 +1695,92 @@ describe('delivery fees', () => {
   })
 })
 
+describe('reviews', () => {
+  const SHOP = '11111111-1111-4111-8111-000000000004'
+  let owner: string, buyer: string, other: string, staff: string, listing: string
+  const order = async (who?: string, delivered = true) => {
+    const [{ id }] = await admin<{ id: string }>(
+      `insert into public.orders (listing_id, user_id, merchant_id, price_kobo, fee_kobo, delivery_address, delivery_phone, handled_by, is_prize) values ($1, $2, $3, 2000000, 0, 'x', 'x', 'store', false) returning id`,
+      [listing, who ?? buyer, SHOP])
+    if (delivered) await admin(`update public.orders set status = 'delivered', delivered_at = now() where id = $1`, [id])
+    return id
+  }
+  const review = (who: string, id: string, rating = 4, seller = 'Quick.', product = 'Good.') =>
+    asUser<{ r: string }>(who, `select public.submit_review($1, $2, $3, $4) r`, [id, rating, seller, product])
+  type Shop = { count: number; shown: boolean; average: number | null; breakdown: number[] | null; reviews: { id: string; name: string; hidden: boolean }[] }
+  const shop = async (who: string | null, l: string | null = null) => (await asUser<{ s: Shop }>(who, `select public.shop_reviews($1, $2) s`, [SHOP, l]))[0].s
+
+  beforeAll(async () => {
+    owner = await newUser('review-store@example.com', { merchantId: SHOP })
+    buyer = await newUser('ada.okafor@example.com')
+    other = await newUser('review-other@example.com')
+    staff = await newUser('review-staff@example.com', { role: 'admin' })
+    ;[{ id: listing }] = await admin<{ id: string }>(`select id from public.listings where merchant_id = $1 order by kind = 'product' desc limit 1`, [SHOP])
+  })
+
+  it('takes one per delivered order, changeable until the seller replies, with one reply', async () => {
+    await expectFail(review(buyer, await order(buyer, false)), 'invalid_input')
+    const id = await order()
+    await expectFail(review(other, id), 'not_found')
+    await expectFail(review(buyer, id, 0), 'invalid_input')
+    await expectFail(review(buyer, id, 4, 'x'.repeat(501)), 'invalid_input')
+    const [{ r }] = await review(buyer, id)
+    expect(await review(buyer, id, 5)).toEqual([{ r }])
+    expect(await admin(`select kind from public.notifications where kind = 'store_new_review' and user_id = $1`, [owner])).toHaveLength(1)
+
+    await expectFail(asUser(other, `select public.reply_to_review($1, 'Hi')`, [r]), 'not_found')
+    await expectFail(asUser(owner, `select public.reply_to_review($1, ' ')`, [r]), 'invalid_input')
+    await asUser(owner, `select public.reply_to_review($1, 'Thank you!')`, [r])
+    await expectFail(asUser(owner, `select public.reply_to_review($1, 'Again')`, [r]), 'invalid_input')
+    await expectFail(review(buyer, id), 'invalid_input')
+    expect(await admin(`select kind from public.notifications where kind = 'review_reply' and user_id = $1`, [buyer])).toHaveLength(1)
+
+    // The buyer and the shop read it on the order; nobody reads whose it is from the table.
+    expect(await asUser(buyer, `select rating, reply from public.reviews where order_id = $1`, [id])).toEqual([{ rating: 5, reply: 'Thank you!' }])
+    expect(await asUser(owner, `select rating from public.reviews where order_id = $1`, [id])).toEqual([{ rating: 5 }])
+    expect(await asUser(other, `select id from public.reviews`)).toEqual([])
+    await expect(asUser(owner, `select user_id from public.reviews`)).rejects.toThrow(/permission denied/)
+    await expect(asUser(null, `select id from public.reviews`)).rejects.toThrow(/permission denied/)
+    await expect(asUser(buyer, `update public.reviews set rating = 1`)).rejects.toThrow(/permission denied/)
+  })
+
+  it('closes 30 days after delivery and never takes won items', async () => {
+    const late = await order()
+    await admin(`update public.orders set delivered_at = now() - interval '31 days' where id = $1`, [late])
+    await expectFail(review(buyer, late), 'invalid_input')
+    const prize = await order()
+    await admin(`update public.orders set is_prize = true where id = $1`, [prize])
+    await expectFail(review(buyer, prize), 'invalid_input')
+  })
+
+  it('shows the rating from 5, with first names, and admins can hide one', async () => {
+    // One review so far, from the first test.
+    expect(await shop(null)).toMatchObject({ count: 1, shown: false, average: null, reviews: [] })
+    expect(await shop(owner)).toMatchObject({ count: 1, average: 5 })
+    for (const rating of [4, 4, 4, 5]) await review(buyer, await order(), rating)
+    const pub = await shop(null)
+    expect(pub).toMatchObject({ count: 5, shown: true, average: 4.4, breakdown: [2, 3, 0, 0, 0] })
+    expect(pub.reviews.map((r) => r.name)).toEqual(Array(5).fill('Ada'))
+    expect(JSON.stringify(pub)).not.toContain(buyer)
+    expect((await shop(other, listing)).reviews).toHaveLength(5)
+
+    for (const [name, want] of [['Adaeze Okafor', 'Adaeze'], ['tunde_99', 'Tunde'], ['buyer2', 'A buyer'], ['', 'A buyer'], ['.x', 'A buyer']])
+      expect(await admin(`select private.reviewer_name($1) n`, [name])).toEqual([{ n: want }])
+
+    const id = pub.reviews[0].id
+    await expectFail(asUser(owner, `select public.set_review_hidden($1, true, 'Rude')`, [id]), 'forbidden')
+    await expectFail(asUser(staff, `select public.set_review_hidden($1, true, '')`, [id]), 'invalid_input')
+    await asUser(staff, `select public.set_review_hidden($1, true, 'Abusive')`, [id])
+    expect(await shop(null)).toMatchObject({ count: 4, shown: false, reviews: [] })
+    expect((await shop(owner)).reviews.filter((r) => r.hidden)).toHaveLength(1)
+    const [{ a }] = await asUser<{ a: { id: string; hiddenReason: string }[] }>(staff, `select public.admin_reviews() a`)
+    expect(a.find((r) => r.id === id)?.hiddenReason).toBe('Abusive')
+    await expectFail(asUser(buyer, `select public.admin_reviews()`), 'forbidden')
+    await asUser(staff, `select public.set_review_hidden($1, false, '')`, [id])
+    expect((await shop(null)).shown).toBe(true)
+  })
+})
+
 describe('shop profiles', () => {
   const VI = '11111111-1111-4111-8111-000000000005'
   let owner: string, buyer: string, staff: string

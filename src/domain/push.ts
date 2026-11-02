@@ -16,7 +16,7 @@ export const PUSH_CATEGORIES: { value: PushCategory; label: string; sub: string 
 
 /** What a store can switch on and off. Messages is the same switch buyers have. */
 export const STORE_PUSH_CATEGORIES: typeof PUSH_CATEGORIES = [
-  { value: 'storeOrders', label: 'New orders', sub: 'When someone buys from you' },
+  { value: 'storeOrders', label: 'Orders and reviews', sub: 'When someone buys from you or reviews an order' },
   { value: 'storeListings', label: 'Listing reviews', sub: 'When a listing is approved or isn’t' },
   { value: 'storeDraws', label: 'Draws', sub: 'When a draw sells out, has a winner, or closes within 24 hours unsold' },
   { value: 'storePickups', label: 'Pickups and inspections', sub: 'The morning before' },

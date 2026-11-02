@@ -22,6 +22,12 @@ function Icon({ size = 20, children, ...rest }: IconProps) {
   );
 }
 
+export const StarIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M12 2.5l2.94 5.96 6.56.95-4.75 4.63 1.12 6.54L12 17.5l-5.87 3.08 1.12-6.54L2.5 9.41l6.56-.95z" />
+  </Icon>
+);
+
 export const TicketIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M3 8a2 2 0 0 0 0 4v4a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-4a2 2 0 0 0 0-4V4a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1z" />

@@ -12,6 +12,7 @@ import type { CheckoutDetails } from '@/domain/cart'
 import type { DeliveryPricing } from '@/domain/deliveryFees'
 import type { ShopPickup } from '@/domain/shopPickup'
 import type { ShopProfileInput } from '@/domain/shopProfile'
+import type { ReviewInput } from '@/domain/reviews'
 import type { PayoutAccount, PayoutLine } from '@/domain/payouts'
 import type { NotificationPreference, PushPreferences, PushSubscriptionKeys } from '@/domain/push'
 import type { OrderError } from '@/domain/orders'
@@ -149,7 +150,59 @@ export interface NewProductInput {
   priceKobo: Kobo
 }
 
+/** The buyer's review of an order, as the buyer and the shop see it. */
+export interface OrderReview {
+  id: string
+  rating: number
+  sellerComment: string
+  productComment: string
+  reply: string | null
+  repliedAt: string | null
+  hidden: boolean
+  createdAt: string
+}
+
+/** A review as the public sees it: a first name, never the account. */
+export interface ReviewView {
+  id: string
+  rating: number
+  sellerComment: string
+  productComment: string
+  reply: string | null
+  repliedAt: string | null
+  createdAt: string
+  /** First name only (reviews.ts reviewerName). */
+  name: string
+  listingId: string
+  listingTitle: string
+  productCode: string
+  /** Hidden by DrawMart. Only the shop and admins get these. */
+  hidden: boolean
+}
+
+export interface ShopReviews {
+  /** Reviews that aren't hidden. */
+  count: number
+  /** Whether the public sees the rating yet (REVIEWS_SHOWN_FROM). */
+  shown: boolean
+  /** Null for the public until shown. The shop and admins always get it. */
+  average: number | null
+  /** How many gave 5 stars, 4, … down to 1. */
+  breakdown: number[] | null
+  /** Reviews of the one listing asked about. */
+  listingCount: number | null
+  /** The latest, newest first: of that listing if one was asked about. */
+  reviews: ReviewView[]
+}
+
+export interface AdminReviewView extends ReviewView {
+  merchantName: string
+  hiddenReason: string | null
+}
+
 export interface OrderView extends Order {
+  /** The buyer's review. Only the buyer, the shop and admins get it. */
+  review: OrderReview | null
   productCode: string
   listingTitle: string
   listingImage: string | null
@@ -722,6 +775,13 @@ export interface DrawMartApi {
   /** Issues the code to show in the video, and says what the listing form must ask for. */
   getListingCheckPlan(): Promise<ListingCheckPlan>
   getListingCheck(listingId: string): Promise<ListingCheckView | null>
+  /** After delivery (reviews.ts). Changes it if there's one already. */
+  submitReview(orderId: string, input: ReviewInput): Promise<void>
+  /** The shop's one reply. */
+  replyToReview(reviewId: string, reply: string): Promise<void>
+  getShopReviews(merchantId: string, listingId?: string): Promise<ShopReviews>
+  listAdminReviews(): Promise<AdminReviewView[]>
+  setReviewHidden(reviewId: string, hidden: boolean, reason: string): Promise<void>
   /** A shop's public page. */
   getShop(merchantId: string): Promise<Merchant>
   updateShopProfile(input: ShopProfileInput): Promise<void>

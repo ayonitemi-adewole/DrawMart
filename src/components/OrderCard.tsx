@@ -18,7 +18,10 @@ import { dateTime } from '@/lib/time'
 import { ProductId } from './ProductId'
 import { DeliveryPin } from './DeliveryPin'
 import { CameraCapture } from './CameraCapture'
-import { AlertIcon, CameraIcon, ClockIcon, CopyIcon, MapPinIcon, PhoneIcon, StoreIcon, TruckIcon, XIcon } from './icons'
+import { ReviewSheet } from './ReviewSheet'
+import { Stars } from './Stars'
+import { canEditReview, canReview } from '@/domain/reviews'
+import { StarIcon, AlertIcon, CameraIcon, ClockIcon, CopyIcon, MapPinIcon, PhoneIcon, StoreIcon, TruckIcon, XIcon } from './icons'
 import { Sheet } from './Sheet'
 import { useToast } from './toast'
 import { Badge, Button, Card, Field, Notice, ProductImage, buttonClass, cx, errorMessage, inputCls, type Tone } from './ui'
@@ -56,6 +59,7 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
   const [addingPickup, setAddingPickup] = useState(false)
   const [claiming, setClaiming] = useState(false)
   const [contesting, setContesting] = useState(false)
+  const [reviewing, setReviewing] = useState(false)
   const claimText = o.claim ? claimStatusText(o.claim.kind, o.claim.status, audience === 'buyer' ? 'buyer' : 'seller') : null
   const pickupDetails = useShopPickup()
   const needsPickupDetails = audience === 'store' && pickupDetails.data === null
@@ -220,6 +224,27 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
       ) : null}
       {contesting ? <ContestSheet order={o} onClose={() => setContesting(false)} /> : null}
       {o.status === 'delivered' && o.deliveredAt ? <span className="text-xs text-subtle">{pickup ? 'Collected' : 'Delivered'} {dateTime(o.deliveredAt)}</span> : null}
+      {o.review && audience !== 'admin' ? (
+        <div className="flex flex-col gap-1 rounded-2xl bg-ground p-3 text-sm">
+          <span className="flex flex-wrap items-center gap-2">
+            <strong>{audience === 'buyer' ? 'Your review' : 'The buyer’s review'}</strong>
+            <Stars rating={o.review.rating} size={14} />
+          </span>
+          {o.review.sellerComment ? <p className="text-muted">{o.review.sellerComment}</p> : null}
+          {o.review.productComment ? <p className="text-muted">{o.review.productComment}</p> : null}
+          {o.review.reply ? <p className="text-muted"><strong className="text-ink">The seller replied: </strong>{o.review.reply}</p> : null}
+          {o.review.hidden ? <p className="text-xs text-subtle">DrawMart has hidden this review from other buyers.</p> : null}
+          {audience === 'store' && !o.review.reply && !o.review.hidden ? (
+            <Link to="/store/reviews" className="flex min-h-11 w-fit items-center font-bold">Reply</Link>
+          ) : null}
+        </div>
+      ) : null}
+      {audience === 'buyer' && (o.review ? canEditReview(o, o.review, Date.now()) : canReview(o, Date.now())) ? (
+        <Button variant={o.review ? 'ghost' : 'outline'} onClick={() => setReviewing(true)}>
+          <StarIcon size={16} /> {o.review ? 'Change your review' : 'Rate this order'}
+        </Button>
+      ) : null}
+      {reviewing ? <ReviewSheet order={o} onClose={() => setReviewing(false)} /> : null}
       {audience === 'buyer' && o.isPrize && o.status === 'delivered' ? (
         <Link to={`/draws/${o.listingId}`} className="flex min-h-11 w-fit items-center text-sm">
           Choose whether to show this on the Winners page

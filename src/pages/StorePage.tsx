@@ -3,6 +3,7 @@ import { useParams } from 'react-router'
 import { useListings, useShop } from '@/api/hooks'
 import { CheckIcon, ClockIcon, IdCardIcon, MapPinIcon, PhoneIcon, ShieldIcon, StoreIcon } from '@/components/icons'
 import { ListingGrid } from '@/components/ListingGrid'
+import { ShopRating, ShopReviewsSection } from '@/components/Reviews'
 import { NoProductMatch, ProductSearch } from '@/components/ProductId'
 import { Badge, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui'
 import { listingMatchesSearch } from '@/domain/productCode'
@@ -44,6 +45,7 @@ export function StorePage({ merchantId }: { merchantId?: string }) {
               <span className="flex items-center gap-1">
                 <MapPinIcon size={14} /> {m.area}, Lagos
               </span>
+              <ShopRating merchantId={m.id} className="text-sm" />
             </div>
           </div>
         </div>
@@ -102,6 +104,8 @@ export function StorePage({ merchantId }: { merchantId?: string }) {
           <EmptyState icon={StoreIcon} title="Nothing on sale right now" body="Check back soon, or save something you like to hear when it’s back." />
         )}
       </section>
+
+      <ShopReviewsSection merchantId={m.id} />
     </div>
   )
 }

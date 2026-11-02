@@ -292,6 +292,7 @@ export interface Order {
 }
 
 export type NotificationKind =
+  | 'store_new_review' | 'review_reply'
   | 'order_cancelled' | 'order_claim_update' | 'store_order_claim' | 'store_order_failed' | 'store_suspended' | 'store_order_confirm_soon' | 'store_order_expired' | 'store_price_approved' | 'store_price_rejected' | 'store_new_order' | 'store_listing_approved' | 'store_listing_rejected' | 'store_draw_sold_out'
   | 'store_winner_picked' | 'store_draw_closing' | 'store_pickup_tomorrow' | 'store_new_message'
   | 'store_payout_sent' | 'store_bank_changed'

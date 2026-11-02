@@ -17,6 +17,7 @@ import type { ListingView, PurchaseReceipt } from "@/api/types";
 import { BuyNowPanel } from "@/components/BuyNowPanel";
 import { PrizeActions } from "@/components/PrizeActions";
 import { RelatedListings } from "@/components/RelatedListings";
+import { ShopRating, ShopReviewsSection } from "@/components/Reviews";
 import { CopyButton } from "@/components/CopyButton";
 import { Countdown } from "@/components/Countdown";
 import {
@@ -151,8 +152,8 @@ function ProductDetail({ listing: l }: { listing: ListingView }) {
             </h1>
             <ProductId code={l.productCode} copy />
             <div className="flex items-center gap-3">
-              <span className="flex size-10 items-center justify-center rounded-xl bg-brand-soft font-display font-extrabold text-brand-ink">
-                {l.merchant.name.charAt(0)}
+              <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-brand-soft font-display font-extrabold text-brand-ink">
+                {l.merchant.logoUrl ? <img src={l.merchant.logoUrl} alt="" className="size-full rounded-xl object-cover" /> : l.merchant.name.charAt(0)}
               </span>
               <div className="flex flex-col text-sm leading-tight">
                 <Link to={storeView ? "/store/shop" : `/stores/${l.merchant.id}`} className="font-bold text-ink">
@@ -161,6 +162,7 @@ function ProductDetail({ listing: l }: { listing: ListingView }) {
                 <span className="flex items-center gap-1 text-xs text-subtle">
                   <MapPinIcon size={12} /> {l.merchant.area}, Lagos
                 </span>
+                <ShopRating merchantId={l.merchant.id} />
               </div>
             </div>
           </div>
@@ -195,6 +197,7 @@ function ProductDetail({ listing: l }: { listing: ListingView }) {
           {storeView ? <StoreViewNotice /> : <BuyNowPanel listing={l} />}
         </div>
       </div>
+      <ShopReviewsSection merchantId={l.merchant.id} listingId={l.id} />
       {storeView ? null : <RelatedListings listing={l} />}
     </div>
   );
@@ -265,8 +268,8 @@ function ListingDetail({ listing: l }: { listing: ListingView }) {
             </h1>
             <ProductId code={l.productCode} copy />
             <div className="flex items-center gap-3">
-              <span className="flex size-10 items-center justify-center rounded-xl bg-brand-soft font-display font-extrabold text-brand-ink">
-                {l.merchant.name.charAt(0)}
+              <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-brand-soft font-display font-extrabold text-brand-ink">
+                {l.merchant.logoUrl ? <img src={l.merchant.logoUrl} alt="" className="size-full rounded-xl object-cover" /> : l.merchant.name.charAt(0)}
               </span>
               <div className="flex flex-col text-sm leading-tight">
                 <Link to={storeView ? "/store/shop" : `/stores/${l.merchant.id}`} className="font-bold text-ink">
@@ -275,6 +278,7 @@ function ListingDetail({ listing: l }: { listing: ListingView }) {
                 <span className="flex items-center gap-1 text-xs text-subtle">
                   <MapPinIcon size={12} /> {l.merchant.area}, Lagos
                 </span>
+                <ShopRating merchantId={l.merchant.id} />
               </div>
             </div>
           </div>

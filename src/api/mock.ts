@@ -6,7 +6,7 @@
  * keeps draw seeds out of every response until a draw has run, so the UI is
  * built against realistic behaviour.
  */
-import type { ReturnJob } from './types'
+import type { ReturnJob, ReviewView } from './types'
 import { catalogDraws, catalogProducts } from './seedCatalog'
 import { canSaveListing } from '@/domain/saved'
 import { crossedAlmostSold, isClosingSoon, isRelistOf, relistAlertKind, sameLagosDay, savedAlertAllowed, type SavedAlertKind } from '@/domain/savedAlerts'
@@ -38,6 +38,7 @@ import { canClaim, canContest, claimError, contestError, returnFeeKobo, returnRe
 import { deliveryFeeKobo, packageSizeOf, sellerAreaOf } from '@/domain/deliveryFees'
 import { locationError } from '@/domain/location'
 import { shopProfileErrors } from '@/domain/shopProfile'
+import { REVIEWS_SHOWN_FROM, averageRating, canReview, hideReasonError, replyError, reviewError, reviewerName } from '@/domain/reviews'
 import { shopPickupErrorText, shopPickupErrors, type ShopPickup } from '@/domain/shopPickup'
 import { DELIVERY_AREAS, areaFromText, nearestArea, checkoutDeliveryFees, deliveryPriceError, placeholderPricing, sizeExtraError, type DeliveryPricing } from '@/domain/deliveryFees'
 import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO, REFUSAL_REASONS, SUSPEND_AFTER_FAILURES, collectionFailError, photosError } from '@/domain/deliveryChecks'
@@ -97,7 +98,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v42' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v43' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -164,6 +165,23 @@ interface Db {
   views: { listingId: string; visitor: string; day: string }[]
   boosts: (Omit<BoostView, 'productCode' | 'listingTitle' | 'merchantName'> & { merchantId: string })[]
   boostSettings: BoostSettings
+  reviews: MockReview[]
+}
+
+interface MockReview {
+  id: string
+  orderId: string
+  userId: string
+  merchantId: string
+  listingId: string
+  rating: number
+  sellerComment: string
+  productComment: string
+  reply: string | null
+  repliedAt: string | null
+  hiddenAt: string | null
+  hiddenReason: string | null
+  createdAt: string
 }
 
 interface MockConversation {
@@ -575,6 +593,7 @@ async function freshDb(): Promise<Db> {
     checkTickets: {},
     listingChecks: {},
     claimDetails: {},
+    reviews: [],
     excusedFailures: [],
     // The demo shops already have somewhere to collect from, near the middle of their area.
     shopPickups: Object.fromEntries(MERCHANTS.map((m) => {
@@ -966,11 +985,20 @@ function statsBetween(db: Db, l: Listing, from: string, to: string) {
 }
 
 /** `forBuyer`: the buyer's own screens, the only place a PIN may go. */
+/** reviews.ts: a first name, never the account. */
+function reviewView(db: Db, r: MockReview): ReviewView {
+  const l = db.listings.find((x) => x.id === r.listingId)!
+  const name = reviewerName(db.users.find((u) => u.id === r.userId)?.displayName ?? '')
+  return { id: r.id, rating: r.rating, sellerComment: r.sellerComment, productComment: r.productComment, reply: r.reply, repliedAt: r.repliedAt, createdAt: r.createdAt, hidden: !!r.hiddenAt, name, listingId: r.listingId, listingTitle: l.title, productCode: l.productCode }
+}
+
 function orderView(db: Db, order: MockOrder, forBuyer = false): OrderView {
   const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, paidFeeCashKobo: _feeCash, paidFeeCreditKobo: _feeCredit, checkoutId: _checkoutId, confirmRemindedAt: _reminded, ...o } = order
   const l = db.listings.find((x) => x.id === o.listingId)!
   const merchant = db.merchants.find((m) => m.id === o.merchantId)!
-  return { ...o, deliveryPin: forBuyer && o.status !== 'delivered' && o.status !== 'cancelled' ? pin : null, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, merchantName: merchant.name }
+  const r = db.reviews.find((x) => x.orderId === o.id)
+  const review = r ? { id: r.id, rating: r.rating, sellerComment: r.sellerComment, productComment: r.productComment, reply: r.reply, repliedAt: r.repliedAt, hidden: !!r.hiddenAt, createdAt: r.createdAt } : null
+  return { ...o, review, deliveryPin: forBuyer && o.status !== 'delivered' && o.status !== 'cancelled' ? pin : null, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, merchantName: merchant.name }
 }
 
 // -------------------------------------------------------------------- API
@@ -2137,6 +2165,81 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       tx((db) => {
         const c = db.listingChecks[listingId]
         return c ? { code: c.code, hasVideo: !!c.videoKey, serial: c.serial, videoUrl: c.videoKey ? (checkFiles.get(c.videoKey) ?? null) : null, proofUrl: c.proofKey ? (checkFiles.get(c.proofKey) ?? null) : null } : null
+      }),
+
+    submitReview: (orderId, input) =>
+      tx((db) => {
+        const o = db.orders.find((x) => x.id === orderId && x.buyerId === buyer())
+        if (!o) throw new ApiError('not_found', 'That order doesn’t exist.')
+        if (o.isPrize) throw new ApiError('invalid_input', 'Won items are delivered by DrawMart, so they aren’t reviewed here.')
+        if (o.status !== 'delivered' || !o.deliveredAt) throw new ApiError('invalid_input', 'You can review an order once it’s delivered.')
+        if (!canReview(o, now())) throw new ApiError('invalid_input', 'Reviews close 30 days after delivery.')
+        const problem = reviewError(input)
+        if (problem) throw new ApiError('invalid_input', problem)
+        const fields = { rating: input.rating, sellerComment: input.sellerComment.trim(), productComment: input.productComment.trim() }
+        const r = db.reviews.find((x) => x.orderId === o.id)
+        if (r) {
+          if (r.reply !== null) throw new ApiError('invalid_input', 'The seller has replied, so this review can’t be changed.')
+          if (r.hiddenAt) throw new ApiError('invalid_input', 'DrawMart has hidden this review, so it can’t be changed.')
+          Object.assign(r, fields)
+          return
+        }
+        db.reviews.push({ id: uid('V'), orderId: o.id, userId: o.buyerId, merchantId: o.merchantId, listingId: o.listingId, ...fields, reply: null, repliedAt: null, hiddenAt: null, hiddenReason: null, createdAt: iso(now()) })
+        notifyShop(db, o.merchantId, 'store_new_review', o.listingId, iso(now()))
+      }),
+
+    replyToReview: (reviewId, reply) =>
+      tx((db) => {
+        const shop = readSession() ? myShop(db) : null
+        const r = db.reviews.find((x) => x.id === reviewId && x.merchantId === shop)
+        if (!r) throw new ApiError('not_found', 'That review doesn’t exist.')
+        if (r.reply !== null) throw new ApiError('invalid_input', 'You’ve already replied to this review.')
+        if (r.hiddenAt) throw new ApiError('invalid_input', 'DrawMart has hidden this review.')
+        const problem = replyError(reply)
+        if (problem) throw new ApiError('invalid_input', problem)
+        Object.assign(r, { reply: reply.trim(), repliedAt: iso(now()) })
+        notify(db, r.userId, 'review_reply', r.listingId, iso(now()))
+      }),
+
+    getShopReviews: (merchantId, listingId) =>
+      tx((db) => {
+        const role = readSession()?.role
+        const insider = role === 'admin' || (!!role && myShop(db) === merchantId)
+        const visible = db.reviews.filter((r) => r.merchantId === merchantId && !r.hiddenAt)
+        const open = visible.length >= REVIEWS_SHOWN_FROM || insider
+        const list = db.reviews
+          .filter((r) => r.merchantId === merchantId && (!listingId || r.listingId === listingId) && (!r.hiddenAt || insider))
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .slice(0, 50)
+        return {
+          count: visible.length,
+          shown: visible.length >= REVIEWS_SHOWN_FROM,
+          average: open ? averageRating(visible.map((r) => r.rating)) : null,
+          breakdown: open ? [5, 4, 3, 2, 1].map((s) => visible.filter((r) => r.rating === s).length) : null,
+          listingCount: listingId ? visible.filter((r) => r.listingId === listingId).length : null,
+          reviews: open ? list.map((r) => reviewView(db, r)) : [],
+        }
+      }),
+
+    listAdminReviews: () =>
+      tx((db) => {
+        if (readSession()?.role !== 'admin') throw new ApiError('forbidden', 'Admins only.')
+        return [...db.reviews]
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .slice(0, 200)
+          .map((r) => ({ ...reviewView(db, r), merchantName: db.merchants.find((m) => m.id === r.merchantId)!.name, hiddenReason: r.hiddenReason }))
+      }),
+
+    setReviewHidden: (reviewId, hidden, reason) =>
+      tx((db) => {
+        if (readSession()?.role !== 'admin') throw new ApiError('forbidden', 'Admins only.')
+        if (hidden) {
+          const problem = hideReasonError(reason)
+          if (problem) throw new ApiError('invalid_input', problem)
+        }
+        const r = db.reviews.find((x) => x.id === reviewId)
+        if (!r) throw new ApiError('not_found', 'That review doesn’t exist.')
+        Object.assign(r, hidden ? { hiddenAt: r.hiddenAt ?? iso(now()), hiddenReason: reason.trim() } : { hiddenAt: null, hiddenReason: null })
       }),
 
     getShop: (merchantId) =>

@@ -1857,4 +1857,102 @@ describe('mock api', () => {
       await expect(api.updateShopProfile({ ...profile, showCac: true })).rejects.toMatchObject({ code: 'invalid_input' })
     })
   })
+
+  describe('reviews', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+    const clock = () => {
+      const c = { t: Date.parse('2026-11-02T10:00:00+01:00') }
+      return { c, api: make(() => c.t) }
+    }
+    const IKEJA = 'm-ikeja'
+    /** A delivered order from the Ikeja store. Leaves the buyer signed in. */
+    const delivered = async (api: ReturnType<typeof make>, title = 'Review lamp') => {
+      await as(api, 'store')
+      const p = await api.createProduct({ title, description: '', category: 'Home', priceKobo: k(20_000), stock: 1 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const [order] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await as(api, 'store')
+      await api.sellerConfirmOrder(order.id, '/assets/c.jpg')
+      await api.dispatchOrder(order.id)
+      await as(api, 'rider')
+      await api.takeDelivery(order.id)
+      await api.passCollection(order.id, ['/assets/a.jpg'])
+      await api.confirmDelivery(order.id, order.deliveryPin!)
+      await as(api, 'funke')
+      return { p, order }
+    }
+    const input = { rating: 4, sellerComment: 'Quick and friendly.', productComment: 'Works well.' }
+
+    it('lets the buyer review once delivered, change it until the seller replies, and tells each side', async () => {
+      const { api } = clock()
+      const { p, order } = await delivered(api)
+      await api.submitReview(order.id, input)
+      expect((await api.listMyOrders()).find((o) => o.id === order.id)?.review).toMatchObject({ rating: 4, reply: null })
+      await api.submitReview(order.id, { ...input, rating: 5 })
+
+      await as(api, 'store')
+      expect((await api.listNotifications()).some((n) => n.kind === 'store_new_review' && n.listingId === p.id)).toBe(true)
+      const mine = await api.getShopReviews(IKEJA)
+      expect(mine).toMatchObject({ count: 1, shown: false, average: 5 })
+      await expect(api.replyToReview(mine.reviews[0].id, ' ')).rejects.toMatchObject({ code: 'invalid_input' })
+      await api.replyToReview(mine.reviews[0].id, 'Thank you!')
+      await expect(api.replyToReview(mine.reviews[0].id, 'Again')).rejects.toMatchObject({ code: 'invalid_input' })
+
+      await as(api, 'funke')
+      expect((await api.listNotifications()).some((n) => n.kind === 'review_reply')).toBe(true)
+      await expect(api.submitReview(order.id, input)).rejects.toThrow('replied')
+
+      await api.auth.signOut()
+      expect(await api.getShopReviews(IKEJA)).toMatchObject({ count: 1, shown: false, average: null, reviews: [] })
+    })
+
+    it('refuses before delivery, after 30 days, and for another buyer’s order', async () => {
+      const { c, api } = clock()
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Early lamp', description: '', category: 'Home', priceKobo: k(20_000), stock: 1 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const [early] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await expect(api.submitReview(early.id, input)).rejects.toThrow('once it’s delivered')
+
+      const { order } = await delivered(api)
+      await as(api, 'buyer')
+      await expect(api.submitReview(order.id, input)).rejects.toMatchObject({ code: 'not_found' })
+      await as(api, 'funke')
+      await expect(api.submitReview(order.id, { ...input, rating: 0 })).rejects.toMatchObject({ code: 'invalid_input' })
+      c.t += 31 * 86_400_000
+      await expect(api.submitReview(order.id, input)).rejects.toThrow('30 days')
+    })
+
+    it('shows a shop’s rating from 5 reviews, first names only, and admins can hide one', async () => {
+      const { api } = clock()
+      const orders = []
+      for (const [i, rating] of [5, 4, 4, 4, 5].entries()) {
+        const { order } = await delivered(api, `Lamp ${i}`)
+        await api.submitReview(order.id, { ...input, rating })
+        orders.push(order)
+      }
+      await api.auth.signOut()
+      const pub = await api.getShopReviews(IKEJA)
+      expect(pub).toMatchObject({ count: 5, shown: true, average: 4.4, breakdown: [2, 3, 0, 0, 0] })
+      expect(pub.reviews.map((r) => r.name)).toEqual(Array(5).fill('Funke'))
+      expect(JSON.stringify(pub)).not.toContain('u-funke')
+      expect((await api.getShopReviews(IKEJA, orders[0].listingId)).reviews).toHaveLength(1)
+
+      await as(api, 'admin')
+      const id = (await api.listAdminReviews())[0].id
+      await expect(api.setReviewHidden(id, true, '')).rejects.toMatchObject({ code: 'invalid_input' })
+      await api.setReviewHidden(id, true, 'Abusive')
+      await api.auth.signOut()
+      expect(await api.getShopReviews(IKEJA)).toMatchObject({ count: 4, shown: false, reviews: [] })
+      await as(api, 'store')
+      expect((await api.getShopReviews(IKEJA)).reviews.filter((r) => r.hidden)).toHaveLength(1)
+      await as(api, 'funke')
+      await expect(api.listAdminReviews()).rejects.toMatchObject({ code: 'forbidden' })
+    })
+  })
 })

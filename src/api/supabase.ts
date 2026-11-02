@@ -6,7 +6,7 @@
  * supabase/migrations, which enforces the same rules as src/domain.
  */
 import type { PayoutAccount, PayoutKind, PayoutStatus } from '@/domain/payouts'
-import type { ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob } from './types'
+import type { ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews } from './types'
 import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js'
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
@@ -217,6 +217,7 @@ interface OrderRow {
   confirm_photo: string | null
   refunded_at: string | null
   claim: { id: string; kind: ClaimKind; status: ClaimStatus; description: string; photos: string[] | null; return_fee_kobo: number; review_note: string | null } | null
+  review: { id: string; rating: number; seller_comment: string; product_comment: string; reply: string | null; replied_at: string | null; hidden_at: string | null; created_at: string } | null
   ready_by: string | null
   collected_at: string | null
   collection_photos: string[] | null
@@ -261,7 +262,7 @@ const RESULT_COLUMNS = 'listing_id, commitment, seed, closing_ref, winning_numbe
 // Named, because the CAC number column isn't readable: `*` would fail.
 const MERCHANT_COLUMNS = 'id, kind, name, area, public_cac, show_cac, verified, verified_at, delivery_area, suspended_at, about, logo_url, cover_url, opening_hours, shop_note, public_phone'
 const LISTING_SELECT = `*, merchant:merchants(${MERCHANT_COLUMNS}), result:draw_results(${RESULT_COLUMNS}), handover:listing_handovers(*)`
-const ORDER_SELECT = '*, claim:order_claims(id, kind, status, description, photos, return_fee_kobo, review_note), listing:listings(product_code, title, images, category), merchant:merchants(name), pickup_point:pickup_points(*)'
+const ORDER_SELECT = '*, claim:order_claims(id, kind, status, description, photos, return_fee_kobo, review_note), review:reviews(id, rating, seller_comment, product_comment, reply, replied_at, hidden_at, created_at), listing:listings(product_code, title, images, category), merchant:merchants(name), pickup_point:pickup_points(*)'
 const PHOTO_BUCKET = 'listing-photos'
 const CHECK_BUCKET = 'listing-checks'
 /** Private: ID photos for seller checks. */
@@ -443,6 +444,7 @@ function toOrderView(o: OrderRow): OrderView {
     listingImage: o.listing.images?.[0] ?? null,
     category: o.listing.category,
     merchantName: o.merchant.name,
+    review: o.review ? { id: o.review.id, rating: o.review.rating, sellerComment: o.review.seller_comment, productComment: o.review.product_comment, reply: o.review.reply, repliedAt: o.review.replied_at, hidden: !!o.review.hidden_at, createdAt: o.review.created_at } : null,
     deliveryPin: null,
   }
 }
@@ -1147,6 +1149,17 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     finishReturn: async (claimId, photo) => {
       const [url] = await uploadPhotos(`riders/${await requireId()}`, [photo])
       await rpc('finish_return', { p_claim_id: claimId, p_photo: url })
+    },
+    submitReview: async (orderId, input) => {
+      await rpc('submit_review', { p_order_id: orderId, p_rating: input.rating, p_seller_comment: input.sellerComment, p_product_comment: input.productComment })
+    },
+    replyToReview: async (reviewId, reply) => {
+      await rpc('reply_to_review', { p_review_id: reviewId, p_reply: reply })
+    },
+    getShopReviews: (merchantId, listingId) => rpc<ShopReviews>('shop_reviews', { p_merchant: merchantId, p_listing: listingId ?? null }),
+    listAdminReviews: () => rpc<AdminReviewView[]>('admin_reviews'),
+    setReviewHidden: async (reviewId, hidden, reason) => {
+      await rpc('set_review_hidden', { p_review_id: reviewId, p_hidden: hidden, p_reason: reason })
     },
     getShop: async (merchantId) => {
       const row = unwrap(await client.from('merchants').select(MERCHANT_COLUMNS).eq('id', merchantId).maybeSingle<MerchantRow>())
