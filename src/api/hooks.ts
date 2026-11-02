@@ -49,6 +49,7 @@ export const keys = {
   listingCheckPlan: ['listing-check-plan'] as const,
   listingCheck: (id: string) => ['listing-check', id] as const,
   returnJobs: ['return-jobs'] as const,
+  riderAreas: ['rider-areas'] as const,
   pending: ['pending'] as const,
   myOrders: ['my-orders'] as const,
   merchantOrders: ['merchant-orders'] as const,
@@ -101,7 +102,7 @@ const useIs = (role: AccountRole) => useAccess().role === role
 /** Buyers and stores get notifications. Riders and admins don't. */
 const useHasInbox = () => {
   const role = useAccess().role
-  return role === 'buyer' || role === 'store'
+  return role === 'buyer' || role === 'store' || role === 'delivery'
 }
 export const useMe = () => useQuery({ queryKey: keys.me, queryFn: () => api.getCurrentUser(), enabled: useIs('buyer') })
 export const useMyListings = () => useQuery({ queryKey: keys.myListings, queryFn: () => api.listMyListings(), enabled: useIs('buyer') })
@@ -415,6 +416,13 @@ export function useSetSaved() {
 
 // Delivery accounts. No push channel yet, so the pool polls.
 export const useDeliveryJobs = () => useQuery({ queryKey: keys.deliveryJobs, queryFn: () => api.listDeliveryJobs(), enabled: useIs('delivery'), refetchInterval: 30_000 })
+
+export const useRiderAreas = () => useQuery({ queryKey: keys.riderAreas, queryFn: () => api.getRiderAreas(), enabled: useIs('delivery') })
+
+export function useSetRiderAreas() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (areas: string[]) => api.setRiderAreas(areas), onSettled: () => qc.invalidateQueries({ queryKey: keys.riderAreas }) })
+}
 
 export function useDeliveryActions() {
   const invalidate = useInvalidateAll()

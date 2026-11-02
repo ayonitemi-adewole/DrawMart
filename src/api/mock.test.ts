@@ -776,6 +776,68 @@ describe('mock api', () => {
     const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
     const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
 
+    it('alerts riders to new jobs in their areas, a few an hour, and reminds them about their own', async () => {
+      const c = { t: Date.parse('2026-11-02T10:00:00+01:00') }
+      const api = make(() => c.t)
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Alert lamp', description: '', category: 'Home', priceKobo: k(5_000), stock: 9 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const orders = []
+      for (let i = 0; i < 8; i++) orders.push((await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null }))[0])
+      const ids = orders.map((o) => o.id)
+      const ready = async (id: string) => {
+        await as(api, 'store')
+        await api.sellerConfirmOrder(id, '/assets/c.jpg')
+        await api.dispatchOrder(id)
+        await as(api, 'rider')
+      }
+      const alerts = async (kind: string) => (await api.listNotifications()).filter((n) => n.kind === kind)
+
+      await ready(ids[0])
+      const [first] = await alerts('rider_new_job')
+      expect(first).toMatchObject({ listingId: p.id, listingTitle: 'Alert lamp' })
+      expect(first.area).toBeTruthy()
+
+      // Somewhere else: nothing. Back to everywhere: alerts again, up to 4 an hour.
+      await expect(api.setRiderAreas(['mars'])).rejects.toThrow('delivery areas')
+      await api.setRiderAreas([first.area === 'lekki' ? 'ikeja' : 'lekki'])
+      await ready(ids[1])
+      expect(await alerts('rider_new_job')).toHaveLength(1)
+      await api.setRiderAreas([])
+      expect(await api.getRiderAreas()).toEqual([])
+      for (const id of ids.slice(2, 6)) await ready(id)
+      expect(await alerts('rider_new_job')).toHaveLength(4)
+      c.t += 61 * 60_000
+      await ready(ids[6])
+      expect(await alerts('rider_new_job')).toHaveLength(5)
+
+      // Switched off: no more, in the app either.
+      await api.setPushPreference('riderNewJobs', false)
+      await ready(ids[7])
+      expect(await alerts('rider_new_job')).toHaveLength(5)
+
+      // Its own jobs: half an hour before one goes back, then when it has.
+      await api.takeDelivery(ids[0])
+      c.t += 89 * 60_000
+      expect(await alerts('rider_collect_soon')).toHaveLength(0)
+      c.t += 60_000
+      expect(await alerts('rider_collect_soon')).toHaveLength(1)
+      c.t += 30 * 60_000
+      expect(await alerts('rider_collect_soon')).toHaveLength(1)
+      expect(await alerts('rider_job_released')).toHaveLength(1)
+
+      // A PIN paused at the door: told when it can be tried again.
+      await api.takeDelivery(ids[1])
+      await api.passCollection(ids[1], ['/assets/a.jpg'])
+      const wrong = orders[1].deliveryPin === '000000' ? '111111' : '000000'
+      for (let i = 0; i < 5; i++) await api.confirmDelivery(ids[1], wrong)
+      expect(await alerts('rider_pin_unlocked')).toHaveLength(0)
+      c.t += 31 * 60_000
+      expect(await alerts('rider_pin_unlocked')).toHaveLength(1)
+    })
+
     it('holds at most 5 jobs, and sends ones not collected within 2 hours back to the pool', async () => {
       const c = { t: Date.parse('2026-11-02T10:00:00+01:00') }
       const api = make(() => c.t)
@@ -1656,7 +1718,7 @@ describe('mock api', () => {
       expect((await api.getPushPreferences()).orders).toBe(true)
     })
 
-    it('only takes real push services, and not from riders', async () => {
+    it('only takes real push services, and not from admins', async () => {
       const api = make()
       await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
       await api.savePushSubscription(device)
@@ -1667,6 +1729,8 @@ describe('mock api', () => {
       await expect(api.setPushPreference('nonsense' as 'wins', false)).rejects.toMatchObject({ code: 'invalid_input' })
       await api.auth.signOut()
       await api.auth.signInWithPassword('rider@drawmart.test', 'drawmart-demo')
+      await api.savePushSubscription(device)
+      await api.auth.signInWithPassword('admin@drawmart.test', 'drawmart-demo')
       await expect(api.savePushSubscription(device)).rejects.toMatchObject({ code: 'forbidden' })
     })
 

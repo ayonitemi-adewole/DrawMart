@@ -834,8 +834,8 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     removeFromCart: (listingId) => rpc('remove_from_cart', { p_listing_id: listingId }),
 
     getPushPreferences: async () => {
-      const row = unwrap(await client.from('push_preferences').select('wins, draw_results, orders, messages, saved_items, draw_reveal, store_orders, store_listings, store_draws, store_pickups, store_payouts').maybeSingle<{ wins: boolean; draw_results: boolean; orders: boolean; messages: boolean; saved_items: boolean; draw_reveal: boolean; store_orders: boolean; store_listings: boolean; store_draws: boolean; store_pickups: boolean; store_payouts: boolean }>())
-      return row ? { wins: row.wins, drawResults: row.draw_results, orders: row.orders, messages: row.messages, savedItems: row.saved_items, drawReveal: row.draw_reveal, storeOrders: row.store_orders, storeListings: row.store_listings, storeDraws: row.store_draws, storePickups: row.store_pickups, storePayouts: row.store_payouts } : DEFAULT_PUSH_PREFERENCES
+      const row = unwrap(await client.from('push_preferences').select('wins, draw_results, orders, messages, saved_items, draw_reveal, store_orders, store_listings, store_draws, store_pickups, store_payouts, rider_new_jobs, rider_returns, rider_jobs').maybeSingle<{ wins: boolean; draw_results: boolean; orders: boolean; messages: boolean; saved_items: boolean; draw_reveal: boolean; store_orders: boolean; store_listings: boolean; store_draws: boolean; store_pickups: boolean; store_payouts: boolean; rider_new_jobs: boolean; rider_returns: boolean; rider_jobs: boolean }>())
+      return row ? { wins: row.wins, drawResults: row.draw_results, orders: row.orders, messages: row.messages, savedItems: row.saved_items, drawReveal: row.draw_reveal, storeOrders: row.store_orders, storeListings: row.store_listings, storeDraws: row.store_draws, storePickups: row.store_pickups, storePayouts: row.store_payouts, riderNewJobs: row.rider_new_jobs, riderReturns: row.rider_returns, riderJobs: row.rider_jobs } : DEFAULT_PUSH_PREFERENCES
     },
     setPushPreference: (category, enabled) => rpc('set_push_preference', { p_category: category, p_enabled: enabled }),
     savePushSubscription: ({ endpoint, p256dh, auth }) => rpc('save_push_subscription', { p_endpoint: endpoint, p_p256dh: p256dh, p_auth: auth }),
@@ -1032,15 +1032,15 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       const rows = unwrap(
         await client
           .from('notifications')
-          .select('id, kind, listing_id, created_at, read_at, celebrated_at, listing:listings(title, images, category, draw_at, result:draw_results(winning_number))')
+          .select('id, kind, listing_id, area, created_at, read_at, celebrated_at, listing:listings(title, images, category, draw_at, result:draw_results(winning_number))')
           .eq('user_id', me)
           .order('created_at', { ascending: false })
           .limit(100)
-          .returns<{ id: string; kind: NotificationView['kind']; listing_id: string; created_at: string; read_at: string | null; celebrated_at: string | null; listing: { title: string; images: string[]; category: Category; draw_at: string | null; result: { winning_number: number } | null } }[]>(),
+          .returns<{ id: string; kind: NotificationView['kind']; listing_id: string; area: string | null; created_at: string; read_at: string | null; celebrated_at: string | null; listing: { title: string; images: string[]; category: Category; draw_at: string | null; result: { winning_number: number } | null } }[]>(),
       )
       return rows.map((n) => ({
         id: n.id, kind: n.kind, listingId: n.listing_id ?? '', listingTitle: n.listing?.title ?? '', listingImage: n.listing?.images?.[0] ?? null, listingCategory: n.listing?.category, drawAt: n.listing?.draw_at,
-        winningNumber: n.listing?.result?.winning_number ?? null, createdAt: n.created_at, read: n.read_at !== null, celebrated: n.celebrated_at !== null,
+        winningNumber: n.listing?.result?.winning_number ?? null, area: n.area, createdAt: n.created_at, read: n.read_at !== null, celebrated: n.celebrated_at !== null,
       }))
     },
 
@@ -1391,6 +1391,8 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       unwrap(await client.from('orders').select(ORDER_SELECT).eq('handled_by', 'drawmart').order('created_at', { ascending: false }).returns<OrderRow[]>()).map(toOrderView),
 
     // Delivery accounts
+    getRiderAreas: async () => unwrap(await client.from('rider_areas').select('area').returns<{ area: string }[]>()).map((r) => r.area),
+    setRiderAreas: (areas) => rpc('set_rider_areas', { p_areas: areas }),
     listDeliveryJobs: () => rpc<DeliveryJob[]>('delivery_jobs'),
     takeDelivery: (orderId) => rpc('take_delivery', { p_order_id: orderId }),
     releaseDelivery: (orderId) => rpc('release_delivery', { p_order_id: orderId }),

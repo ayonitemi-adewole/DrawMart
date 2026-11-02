@@ -2565,6 +2565,61 @@ describe('cart and checkout', () => {
       expect((await admin<{ reason: string }>(`select reason from private.job_releases where order_id = $1`, [ids[5]])).map((r) => r.reason)).toEqual(['handed_back'])
     })
 
+    it('alerts riders to jobs in their areas, a few an hour, without details on the lock screen', async () => {
+      const near = await newUser('near-rider@example.com', { role: 'delivery' })
+      const far = await newUser('far-rider@example.com', { role: 'delivery' })
+      const alerts = async (who: string, kind: string) => asUser<{ listing_id: string; area: string | null }>(who, `select listing_id, area from public.notifications where kind = $1`, [kind])
+      await admin(`insert into public.push_subscriptions (endpoint, user_id, p256dh, auth) values ('https://fcm.googleapis.com/x/near', $1, 'k', 'a')`, [near])
+
+      // Only riders choose areas, and only ours.
+      await expectFail(asUser(store, `select public.set_rider_areas(array['ikeja'])`), 'forbidden')
+      await expectFail(asUser(far, `select public.set_rider_areas(array['mars'])`), 'invalid_input')
+      const [{ area }] = await admin<{ area: string }>(`select m.delivery_area area from public.merchants m join public.profiles p on p.merchant_id = m.id where p.id = $1`, [store])
+      await asUser(far, `select public.set_rider_areas($1)`, [[area === 'lekki' ? 'ikeja' : 'lekki']])
+      const { id } = await readyOrder('alert1@example.com')
+      expect(await alerts(near, 'rider_new_job')).toEqual([expect.objectContaining({ area })])
+      expect(await asUser(far, `select area from public.rider_areas`)).toHaveLength(1)
+      expect(await asUser(near, `select area from public.rider_areas`)).toEqual([])
+
+      // The lock screen: the item type and area, never the title, an address or a name.
+      const [push] = await admin<{ title: string; body: string; url: string }>(`select title, body, url from private.push_outbox where user_id = $1`, [near])
+      const [{ title, name }] = await admin<{ title: string; name: string }>(`select l.title, a.name from public.orders o join public.listings l on l.id = o.listing_id join public.delivery_areas a on a.id = $2 where o.id = $1`, [id, area])
+      expect(push).toMatchObject({ title: 'New delivery job', url: '/delivery?tab=available' })
+      expect(push.body).toContain(name)
+      expect(push.body).not.toContain(title)
+
+      // At most 4 an hour; none to a rider in other areas.
+      for (let i = 2; i <= 5; i++) await readyOrder(`alert${i}@example.com`)
+      expect(await alerts(near, 'rider_new_job')).toHaveLength(4)
+      expect(await alerts(far, 'rider_new_job')).toHaveLength(0)
+      await asUser(far, `select public.set_rider_areas('{}')`)
+
+      // Their own: a reminder half an hour before it goes back, once, then word that it has.
+      await asUser(near, `select public.take_delivery($1)`, [id])
+      await admin(`update public.orders set rider_assigned_at = now() - interval '89 minutes' where id = $1`, [id])
+      await admin(`select private.process_deadlines()`)
+      expect(await alerts(near, 'rider_collect_soon')).toHaveLength(0)
+      await admin(`update public.orders set rider_assigned_at = now() - interval '91 minutes' where id = $1`, [id])
+      await admin(`select private.process_deadlines()`)
+      await admin(`select private.process_deadlines()`)
+      expect(await alerts(near, 'rider_collect_soon')).toHaveLength(1)
+      await admin(`update public.orders set rider_assigned_at = now() - interval '121 minutes' where id = $1`, [id])
+      await admin(`select private.process_deadlines()`)
+      expect(await alerts(near, 'rider_job_released')).toHaveLength(1)
+      // Back in the pool, so the other rider hears, not the one who let it go.
+      expect(await alerts(far, 'rider_new_job')).toHaveLength(1)
+
+      // A paused PIN that's ready to try again.
+      await asUser(near, `select public.take_delivery($1)`, [id])
+      await asUser(near, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+      await admin(`update private.order_pins set attempts = 5, locked_until = now() - interval '1 minute' where order_id = $1`, [id])
+      await admin(`select private.process_deadlines()`)
+      await admin(`select private.process_deadlines()`)
+      expect(await alerts(near, 'rider_pin_unlocked')).toHaveLength(1)
+      const pushes = await admin<{ body: string }>(`select body from private.push_outbox where user_id = $1`, [near])
+      expect(pushes.map((p) => p.body).join(' ')).not.toMatch(/Awolowo|[0-9]{6}/)
+    })
+
     describe('checks', () => {
       const SHOP = '11111111-1111-4111-8111-000000000005'
       let seller: string, staffUser: string
@@ -3460,7 +3515,7 @@ describe('store notifications', () => {
     expect(texts).not.toMatch(/ticket|@|won/i)
   })
 
-  it('respects the store’s own switches, and is closed to riders', async () => {
+  it('respects the store’s own switches, and is open to riders', async () => {
     const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
     await asUser(store, `select public.set_push_preference('storeListings', false)`)
     await asUser(staff, `select public.approve_listing($1)`, [id])
@@ -3468,8 +3523,8 @@ describe('store notifications', () => {
     expect(await queued(store)).toEqual([])
     await asUser(store, `select public.set_push_preference('storeListings', true)`)
     const rider = await newUser('noticerider@example.com', { role: 'delivery' })
-    await expectFail(subscribe(rider, device('noticerider')), 'forbidden')
-    await expectFail(asUser(rider, `select public.set_push_preference('messages', false)`), 'forbidden')
+    await subscribe(rider, device('noticerider'))
+    await asUser(rider, `select public.set_push_preference('riderJobs', false)`)
   })
 
   it('tells the store once about a chat, and never quotes it on a lock screen', async () => {
@@ -3621,7 +3676,7 @@ describe('push notifications', () => {
     expect(await queued(quiet)).toEqual([])
   })
 
-  it('only signs up real push services, not for riders', async () => {
+  it('only signs up real push services, not for admins', async () => {
     for (const endpoint of ['https://evil.example/abc', 'http://fcm.googleapis.com/abc', 'https://fcm.googleapis.com.evil.example/abc', 'https://169.254.169.254/x', '']) {
       expect(pushSubscriptionValid({ ...device('x'), endpoint })).toBe(false)
       await expectFail(subscribe(other, { ...device('x'), endpoint }), 'invalid_input')
@@ -3631,7 +3686,6 @@ describe('push notifications', () => {
       await subscribe(other, { ...device('x'), endpoint })
       await asUser(other, `select public.delete_push_subscription($1)`, [endpoint])
     }
-    await expectFail(subscribe(await newUser('pushrider@example.com', { role: 'delivery' }), device('s')), 'forbidden')
     await expectFail(subscribe(staff, device('a')), 'forbidden')
     await expect(asUser(null, `select public.save_push_subscription('a', 'b', 'c')`)).rejects.toThrow(/permission denied/)
   })

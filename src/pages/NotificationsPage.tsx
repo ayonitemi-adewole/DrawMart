@@ -6,12 +6,24 @@ import { AlertIcon, BellIcon, CalendarIcon, ChatIcon, CheckIcon, ClockIcon, Hear
 import { DrawRevealToggle, PushToggle, StorePushSettings } from '@/components/PushSettings'
 import { Card, EmptyState, ErrorState, PageTitle, Skeleton, cx } from '@/components/ui'
 import { handoverMethodFor } from '@/domain/listing'
+import { areaName } from '@/domain/riderAlerts'
+import { RiderAlertSettings } from './delivery/RiderAlertSettings'
 import { dateTime, ticketNo } from '@/lib/time'
 
 /** `store` says which app a seller works from: the store app, or /sell in the buyer app. */
 function describe(n: NotificationView, store: boolean): { icon: IconComponent; title: string; body: string; to: string } {
   const home = store ? '/store' : '/sell'
   switch (n.kind) {
+    case 'rider_new_job':
+      return { icon: TruckIcon, title: `New job: ${n.listingTitle}`, body: `Collect it in ${areaName(n.area)}.`, to: '/delivery?tab=available' }
+    case 'rider_new_return':
+      return { icon: TruckIcon, title: `Return to collect: ${n.listingTitle}`, body: `From a buyer in ${areaName(n.area)}.`, to: '/delivery?tab=returns' }
+    case 'rider_collect_soon':
+      return { icon: ClockIcon, title: `Collect soon: ${n.listingTitle}`, body: 'If you don’t collect it in time, it goes back on the list for another rider.', to: '/delivery?tab=mine' }
+    case 'rider_job_released':
+      return { icon: XIcon, title: `Back on the list: ${n.listingTitle}`, body: 'You didn’t collect it in time, so another rider can take it.', to: '/delivery?tab=available' }
+    case 'rider_pin_unlocked':
+      return { icon: LockIcon, title: `Try the PIN again: ${n.listingTitle}`, body: 'The pause on this delivery’s PIN is over.', to: '/delivery?tab=mine' }
     case 'store_payout_sent':
       return { icon: NairaIcon, title: 'Payout sent', body: 'We’ve sent money to your bank account. See what it covered.', to: store ? '/store/payouts' : '/sell?tab=payouts' }
     case 'store_bank_changed':
@@ -99,7 +111,9 @@ function describe(n: NotificationView, store: boolean): { icon: IconComponent; t
 
 /** /notifications: updates on the draws a buyer is in. Opening it marks them read. */
 export function NotificationsPage() {
-  const store = useAccess().role === 'store'
+  const role = useAccess().role
+  const store = role === 'store'
+  const rider = role === 'delivery'
   const q = useNotifications()
   const markRead = useMarkNotificationsRead()
   const unread = q.data?.some((n) => !n.read) ?? false
@@ -113,10 +127,12 @@ export function NotificationsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <PageTitle eyebrow="Notifications" sub={store ? 'New orders, listing reviews, draws, pickups and messages.' : 'Updates on the draws you’re in and the items you’ve saved.'}>
+      <PageTitle eyebrow="Notifications" sub={rider ? 'New jobs and returns, and reminders about the jobs you’ve taken.' : store ? 'New orders, listing reviews, draws, pickups and messages.' : 'Updates on the draws you’re in and the items you’ve saved.'}>
         What’s new
       </PageTitle>
-      {store ? (
+      {rider ? (
+        <RiderAlertSettings />
+      ) : store ? (
         <StorePushSettings />
       ) : (
         <>
@@ -129,7 +145,7 @@ export function NotificationsPage() {
       ) : q.isError ? (
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
       ) : q.data.length === 0 ? (
-        <EmptyState icon={BellIcon} title="Nothing yet" body={store ? 'We’ll let you know here when someone buys from you, and how your listings and draws are doing.' : 'We’ll let you know here when a draw you’re in sells out, and when its winner is announced.'} />
+        <EmptyState icon={BellIcon} title="Nothing yet" body={rider ? 'We’ll let you know here when there’s a job for you, and before one you’ve taken goes back on the list.' : store ? 'We’ll let you know here when someone buys from you, and how your listings and draws are doing.' : 'We’ll let you know here when a draw you’re in sells out, and when its winner is announced.'} />
       ) : (
         <Card className="divide-y divide-line overflow-hidden">
           {q.data.map((n) => {

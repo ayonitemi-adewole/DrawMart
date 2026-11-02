@@ -488,6 +488,8 @@ export interface NotificationView {
   /** When a sold-out draw's winner is announced. */
   drawAt: string | null
   winningNumber: number | null
+  /** A rider's alert: the delivery area it's collected in. Never an address. */
+  area: string | null
   createdAt: string
   read: boolean
   /** A win the buyer has been greeted with. Separate from read: opening the bell isn't the pop-up. */
@@ -961,6 +963,9 @@ export interface DrawMartApi {
   listPrizeOrders(): Promise<OrderView[]>
 
   // Delivery accounts
+  /** Areas this rider wants new jobs from. Empty means all of Lagos (riderAlerts.ts). */
+  getRiderAreas(): Promise<string[]>
+  setRiderAreas(areas: string[]): Promise<void>
   /** Orders ready to be taken, and this rider's own. */
   listDeliveryJobs(): Promise<DeliveryJob[]>
   takeDelivery(orderId: string): Promise<void>

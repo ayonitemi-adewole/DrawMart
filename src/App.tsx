@@ -228,6 +228,7 @@ const router = createBrowserRouter([
     errorElement: <RouteError />,
     children: [
       { index: true, element: <DeliveryPage /> },
+      { path: 'notifications', element: <NotificationsPage /> },
       { path: 'returns/:id', element: <ReturnJobPage /> },
       { path: ':id', element: <DeliveryJobPage /> },
     ],

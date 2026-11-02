@@ -49,7 +49,10 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
 
   const nav: NavItem[] =
     app === 'delivery'
-      ? [{ to: '/delivery', label: 'Deliveries', icon: TruckIcon }]
+      ? [
+          { to: '/delivery', label: 'Deliveries', icon: TruckIcon },
+          { to: '/delivery/notifications', label: 'Notifications', icon: BellIcon, count: unreadNotifications },
+        ]
       : app === 'store'
       ? [
           { to: '/store', label: 'Dashboard', icon: LayoutIcon },
