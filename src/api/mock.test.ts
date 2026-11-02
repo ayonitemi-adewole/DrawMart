@@ -2105,4 +2105,72 @@ describe('mock api', () => {
       expect((await api.getListing(l.id))?.liveAt).toBeTruthy()
     })
   })
+
+  describe('discounts', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+    const week = (from = Date.now()) => ({ startsAt: new Date(from - 60_000).toISOString(), endsAt: new Date(from + 7 * 86_400_000).toISOString() })
+    const product = async (api: ReturnType<typeof make>, priceKobo = k(20_000)) => {
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Discount lamp', description: '', category: 'Home', priceKobo, stock: 5 })
+      await api.approveListing(p.id)
+      return p
+    }
+
+    it('puts products on sale: the buyer pays less, and the fee is on what they paid', async () => {
+      const api = make()
+      const p = await product(api)
+      await api.createDiscount({ kind: 'sale', percentOff: 10, amountOffKobo: null, code: '', maxUses: null, listingIds: [p.id], ...week() })
+      const [d] = await api.listDiscounts()
+      expect(d).toMatchObject({ kind: 'sale', percentOff: 10, listingIds: [p.id] })
+
+      await as(api, 'funke')
+      expect(await api.listDiscounts()).toEqual([])
+      expect((await api.getListing(p.id)).sale).toMatchObject({ priceKobo: k(18_000), percentOff: 10 })
+      await api.topUp(k(100_000))
+      const [order] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null, quantities: { [p.id]: 2 } })
+      expect(order).toMatchObject({ priceKobo: k(36_000), discountKobo: k(4_000) })
+      const listing = await api.getListing(p.id)
+      expect(order.feeKobo).toBe(Math.round((k(36_000) * listing.feeBps) / 10_000))
+
+      await as(api, 'store')
+      await api.endDiscount(d.id)
+      await expect(api.endDiscount(d.id)).rejects.toMatchObject({ code: 'not_found' })
+      expect((await api.getListing(p.id)).sale).toBeNull()
+    })
+
+    it('never discounts draws, and checks what the store sets', async () => {
+      const api = make()
+      const p = await product(api)
+      const draw = (await api.listMerchantListings()).find((l) => l.kind === 'raffle')!
+      await expect(api.createDiscount({ kind: 'sale', percentOff: 10, amountOffKobo: null, code: '', maxUses: null, listingIds: [draw.id], ...week() })).rejects.toThrow('never draws')
+      await expect(api.createDiscount({ kind: 'sale', percentOff: 95, amountOffKobo: null, code: '', maxUses: null, listingIds: [p.id], ...week() })).rejects.toMatchObject({ code: 'invalid_input' })
+      await expect(api.createDiscount({ kind: 'sale', percentOff: null, amountOffKobo: k(19_950), code: '', maxUses: null, listingIds: [p.id], ...week() })).rejects.toMatchObject({ code: 'invalid_input' })
+      await as(api, 'lekki')
+      await expect(api.createDiscount({ kind: 'sale', percentOff: 10, amountOffKobo: null, code: '', maxUses: null, listingIds: [p.id], ...week() })).rejects.toThrow('your own products')
+    })
+
+    it('takes a code once per buyer, up to its limit, and gives the better of code and sale', async () => {
+      const api = make()
+      const p = await product(api)
+      await api.createDiscount({ kind: 'sale', percentOff: 5, amountOffKobo: null, code: '', maxUses: null, listingIds: [p.id], ...week() })
+      await api.createDiscount({ kind: 'code', percentOff: null, amountOffKobo: k(3_000), code: 'save3k', maxUses: 2, listingIds: [p.id], ...week() })
+      await expect(api.createDiscount({ kind: 'code', percentOff: 10, amountOffKobo: null, code: 'SAVE3K', maxUses: null, listingIds: [p.id], ...week() })).rejects.toThrow('taken')
+
+      await as(api, 'funke')
+      await expect(api.checkDiscountCode('NOPE', [p.id])).rejects.toThrow('isn’t valid')
+      expect(await api.checkDiscountCode(' save3k ', [p.id])).toEqual({ code: 'SAVE3K', prices: { [p.id]: k(17_000) } })
+      await api.topUp(k(100_000))
+      const [order] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null, code: 'SAVE3K' })
+      expect(order).toMatchObject({ priceKobo: k(17_000), discountKobo: k(3_000) })
+      await expect(api.checkDiscountCode('SAVE3K', [p.id])).rejects.toThrow('already used')
+
+      await as(api, 'emeka')
+      await api.topUp(k(100_000))
+      await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null, code: 'SAVE3K' })
+      await as(api, 'ngozi')
+      await expect(api.checkDiscountCode('SAVE3K', [p.id])).rejects.toThrow('used up')
+      expect((await api.getListing(p.id)).sale?.priceKobo).toBe(k(19_000)) // the sale still runs
+    })
+  })
 })

@@ -14,6 +14,7 @@ import type { ShopPickup } from '@/domain/shopPickup'
 import type { ShopProfileInput } from '@/domain/shopProfile'
 import type { ReviewInput } from '@/domain/reviews'
 import type { PricingStats } from '@/domain/drawPricing'
+import type { CodeCheck, Discount, DiscountInput, ListingSale } from '@/domain/discounts'
 import type { PayoutAccount, PayoutLine } from '@/domain/payouts'
 import type { NotificationPreference, PushPreferences, PushSubscriptionKeys } from '@/domain/push'
 import type { OrderError } from '@/domain/orders'
@@ -64,6 +65,8 @@ export interface DrawResultView extends DrawResult {
 }
 
 export interface ListingView extends Omit<Listing, 'handover'> {
+  /** A store's sale running now (discounts.ts). Products only. */
+  sale?: ListingSale | null
   /** Only for its own seller and admins: a new price waiting for review. */
   pendingPriceKobo?: Kobo | null
   /** Pickup/inspection booking. Only sent to the listing's store and admins; null for buyers. */
@@ -580,6 +583,8 @@ export interface CheckoutInput extends CheckoutDetails {
   quantities?: Record<string, number>
   /** The total the buyer saw: it's refused if a price has changed since. */
   expectedTotalKobo?: Kobo
+  /** A store's discount code (discounts.ts). */
+  code?: string
 }
 
 export interface ListingFilter {
@@ -836,6 +841,13 @@ export interface DrawMartApi {
   /** Issues the code to show in the video, and says what the listing form must ask for. */
   getListingCheckPlan(): Promise<ListingCheckPlan>
   getListingCheck(listingId: string): Promise<ListingCheckView | null>
+  /** The signed-in shop's discounts, newest first. */
+  listDiscounts(): Promise<Discount[]>
+  createDiscount(input: DiscountInput): Promise<void>
+  /** Stops it now. Orders already placed keep their price. */
+  endDiscount(id: string): Promise<void>
+  /** What a code does to these items. Changes nothing. */
+  checkDiscountCode(code: string, listingIds: string[]): Promise<CodeCheck>
   /** How finished draws did in this category and ticket band (drawPricing.ts). Stores and admins. */
   getDrawPriceStats(category: Category, band: number): Promise<PricingStats>
   /** The signed-in shop's saved chat answers, oldest first. */

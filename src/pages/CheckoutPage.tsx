@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react'
+import type { CodeCheck } from '@/domain/discounts'
 import { Link, useSearchParams } from 'react-router'
 import { DeliveryPin } from '@/components/DeliveryPin'
-import { useDeliveryPricing, useAddressActions, useAddresses, useCart, useCheckout, useListing, useMe, usePickupPoints, useWallet } from '@/api/hooks'
+import { useCheckDiscountCode, useDeliveryPricing, useAddressActions, useAddresses, useCart, useCheckout, useListing, useMe, usePickupPoints, useWallet } from '@/api/hooks'
 import type { ListingView, OrderView } from '@/api/types'
 import { AddressPicker } from '@/components/AddressPicker'
 import { CheckCircleIcon, MapPinIcon, PhoneIcon, ShieldIcon, StoreIcon, TruckIcon } from '@/components/icons'
@@ -80,6 +81,7 @@ function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: L
   // With a saved address, buyers land on the review, ready to change it.
   const [step, setStep] = useState<Step>(problems.length ? 'where' : 'review')
   const [placed, setPlaced] = useState<OrderView[] | null>(null)
+  const [applied, setApplied] = useState<CodeCheck | null>(null)
 
   if (placed) return <Placed orders={placed} />
   if (items.length === 0) {
@@ -104,7 +106,10 @@ function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: L
   const fees = pricing.data && destination ? checkoutDeliveryFees(items, destination, pricing.data) : []
   const feeTotal = fees.reduce((n, f) => n + f.feeKobo, 0)
   const feesKnown = !!pricing.data && !!destination
-  const total = checkoutTotalKobo(items, quantityOf) + feeTotal
+  const codePrices = applied?.prices ?? {}
+  const itemsTotal = checkoutTotalKobo(items, quantityOf, codePrices)
+  const codeSaving = applied ? checkoutTotalKobo(items, quantityOf) - itemsTotal : 0
+  const total = itemsTotal + feeTotal
   const itemCount = items.reduce((n, l) => n + quantityOf(l), 0)
   const balance = wallet.data?.balance
   const pay = balance ? splitPayment(total, balance) : null
@@ -125,7 +130,7 @@ function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: L
     }
     if (short || !available || !feesKnown) return
     checkout.mutate(
-      { listingIds: items.map((l) => l.id), quantities, expectedTotalKobo: total, ...details },
+      { listingIds: items.map((l) => l.id), quantities, expectedTotalKobo: total, code: applied?.code, ...details },
       {
         onSuccess: (orders) => {
           setPlaced(orders)
@@ -304,7 +309,7 @@ function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: L
                 <li key={l.id} className="flex items-center gap-3 text-sm">
                   <ProductImage category={l.category} src={l.images[0]} alt="" size="sm" className="size-12 shrink-0" />
                   <span className="min-w-0 flex-1 truncate font-semibold">{l.title}{quantityOf(l) > 1 ? ` × ${quantityOf(l)}` : ''}</span>
-                  <span className="shrink-0 font-bold tabular-nums">{isWonPrize(l) ? 'Won' : formatNaira(lineAmountKobo(l, quantityOf(l)) ?? 0)}</span>
+                  <span className="shrink-0 font-bold tabular-nums">{isWonPrize(l) ? 'Won' : formatNaira(lineAmountKobo(l, quantityOf(l), codePrices) ?? 0)}</span>
                 </li>
               ))}
             </ul>
@@ -325,6 +330,12 @@ function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: L
                   <dd className="text-right text-muted">{pricing.isError ? 'Couldn’t load' : 'Choose where first'}</dd>
                 </div>
               )}
+              {applied ? (
+                <div className="flex justify-between gap-3 text-brand-ink">
+                  <dt>Code {applied.code}</dt>
+                  <dd className="font-bold tabular-nums">−{formatNaira(codeSaving)}</dd>
+                </div>
+              ) : null}
               {pay && pay.fromCredit > 0 ? (
                 <div className="flex justify-between text-ticket-ink">
                   <dt>From store credit</dt>
@@ -336,9 +347,67 @@ function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: L
                 <dd className="font-extrabold tabular-nums">{formatNaira(pay ? pay.fromCash : total)}</dd>
               </div>
             </dl>
+            {items.some((l) => l.kind === 'product') ? <CodeBox listingIds={items.map((l) => l.id)} applied={applied} onApplied={setApplied} /> : null}
           </Card>
         </aside>
       </div>
+    </div>
+  )
+}
+
+/** A store's discount code. Checking it changes nothing; it's used when the order goes through. */
+function CodeBox({ listingIds, applied, onApplied }: { listingIds: string[]; applied: CodeCheck | null; onApplied: (c: CodeCheck | null) => void }) {
+  const check = useCheckDiscountCode()
+  const [code, setCode] = useState('')
+  const [problem, setProblem] = useState<string | null>(null)
+
+  if (applied)
+    return (
+      <div className="flex items-center justify-between gap-2 border-t border-line pt-3 text-sm">
+        <span>
+          Code <strong className="font-mono">{applied.code}</strong> applied
+        </span>
+        <Button variant="ghost" size="sm" className="min-h-11" onClick={() => onApplied(null)}>
+          Remove
+        </Button>
+      </div>
+    )
+
+  function apply() {
+    if (!code.trim()) return
+    setProblem(null)
+    check.mutate({ code, listingIds }, { onSuccess: onApplied, onError: (e) => setProblem(errorMessage(e)) })
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5 border-t border-line pt-3">
+      <label htmlFor="discount-code" className="text-sm font-bold">
+        Discount code
+      </label>
+      <div className="flex gap-2">
+        <input
+          id="discount-code"
+          autoComplete="off"
+          value={code}
+          onChange={(e) => setCode(e.target.value.toUpperCase())}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              apply()
+            }
+          }}
+          className={cx(inputCls, 'min-w-0 flex-1 font-mono uppercase')}
+          placeholder="SAVE10"
+        />
+        <Button variant="outline" className="min-h-11 shrink-0" loading={check.isPending} onClick={apply}>
+          Apply
+        </Button>
+      </div>
+      {problem ? (
+        <span className="text-xs font-semibold text-hot-ink" role="alert">
+          {problem}
+        </span>
+      ) : null}
     </div>
   )
 }

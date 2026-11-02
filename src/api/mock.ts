@@ -40,6 +40,7 @@ import { locationError } from '@/domain/location'
 import { shopProfileErrors } from '@/domain/shopProfile'
 import { quickReplyError } from '@/domain/quickReplies'
 import { pricingStats } from '@/domain/drawPricing'
+import { MAX_OPEN_DISCOUNTS, bestPrice, discountActive, discountErrors, normalizeCode, type Discount, type ListingSale } from '@/domain/discounts'
 import { DUPLICATE_CAC_TEXT, STORE_APPLICATION_ERROR_TEXT, normalizeCac, storeAccountBlocker, validateStoreApplication } from '@/domain/storeApplications'
 import { REVIEWS_SHOWN_FROM, averageRating, canReview, hideReasonError, replyError, reviewError, reviewerName } from '@/domain/reviews'
 import { shopPickupErrorText, shopPickupErrors, type ShopPickup } from '@/domain/shopPickup'
@@ -101,7 +102,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v46' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v47' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -165,6 +166,11 @@ interface Db {
   supportMessages: (SupportMessage & { merchantId: string })[]
   /** Sellers' saved chat answers, by shop id, oldest first. */
   quickReplies: Record<string, QuickReply[]>
+  discounts: (Discount & { merchantId: string })[]
+  /** One use of a code per buyer. */
+  discountRedemptions: { discountId: string; userId: string }[]
+  /** Not stored: the time the current call runs at, set by tx(). */
+  clock?: number
   /** Not stored: the buyer the current call acts for, set by tx(). */
   viewer?: string
   conversations: MockConversation[]
@@ -631,6 +637,8 @@ async function freshDb(): Promise<Db> {
     supportThreads: {},
     supportMessages: [],
     quickReplies: {},
+    discounts: [],
+    discountRedemptions: [],
     conversations: [],
     messages: [],
     callPhones: { 'm-surulere': '0803 000 1234' },
@@ -952,6 +960,19 @@ function resultView(db: Db, r: DrawResult): DrawResultView {
  * `full` is for the listing's own store and for admins. Buyers never see the
  * store's pickup address or phone number.
  */
+/** discounts.ts: what a product costs now with a running sale and, if given, a code. */
+function unitPrice(db: Db, l: Listing, codeId: string | null) {
+  const t = db.clock ?? Date.now()
+  const usable = db.discounts.filter((d) => d.listingIds.includes(l.id) && (d.kind === 'sale' || d.id === codeId) && discountActive(d, t))
+  return l.kind === 'product' ? bestPrice(l.priceKobo, usable) : { unitKobo: l.priceKobo, discountId: null }
+}
+
+function listingSale(db: Db, l: Listing): ListingSale | null {
+  const best = unitPrice(db, l, null)
+  const d = db.discounts.find((x) => x.id === best.discountId)
+  return d ? { priceKobo: best.unitKobo, percentOff: d.percentOff, amountOffKobo: d.amountOffKobo, endsAt: d.endsAt } : null
+}
+
 /** A CAC number only shows if the store chose to (shopProfile.ts). */
 const publicMerchant = (m: Merchant): Merchant => ({ ...m, cacNumber: m.showCac ? m.cacNumber : '' })
 
@@ -959,7 +980,7 @@ function listingView(db: Db, l: Listing, audience: 'buyer' | 'full' = 'buyer'): 
   const merchant = db.merchants.find((m) => m.id === l.merchantId)!
   const myNumbers = db.tickets.filter((t) => t.listingId === l.id && t.userId === (db.viewer ?? ME)).map((t) => t.number)
   const r = db.results.find((x) => x.listingId === l.id)
-  return { ...l, merchant: publicMerchant(merchant), handover: audience === 'full' ? l.handover : null, rejection: audience === 'full' ? l.rejection : null, pendingPriceKobo: audience === 'full' ? (db.priceReviews.find((r) => r.listingId === l.id)?.newPriceKobo ?? null) : null, myNumbers, result: r ? resultView(db, r) : null }
+  return { ...l, sale: listingSale(db, l), merchant: publicMerchant(merchant), handover: audience === 'full' ? l.handover : null, rejection: audience === 'full' ? l.rejection : null, pendingPriceKobo: audience === 'full' ? (db.priceReviews.find((r) => r.listingId === l.id)?.newPriceKobo ?? null) : null, myNumbers, result: r ? resultView(db, r) : null }
 }
 
 function conversationView(db: Db, c: MockConversation, me: ChatSide): ConversationView {
@@ -1087,6 +1108,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       const db = await load()
       db.viewer = buyer()
       const t = now()
+      db.clock = t
       processDeadlines(db, t)
       applyPendingLimits(db, t)
       await runDueDraws(db, t)
@@ -1096,6 +1118,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       settlePickups(db)
       syncPayouts(db, now())
       delete db.viewer
+      delete db.clock
       save(db)
       return out
     })
@@ -1181,6 +1204,15 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     if ((role === 'buyer' || role === undefined) && c.buyerId === buyer()) return 'buyer'
     if (c.merchantId === myShop(db)) return 'seller'
     return null
+  }
+  /** A code this buyer can use now, or why not (discounts.ts). */
+  function usableCode(db: Db, code: string) {
+    const d = db.discounts.find((x) => x.kind === 'code' && x.code === normalizeCode(code))
+    if (!d || Date.parse(d.startsAt) > now()) throw new ApiError('invalid_input', 'That code isn’t valid.')
+    if (d.endedAt || Date.parse(d.endsAt) <= now()) throw new ApiError('invalid_input', 'That code has ended.')
+    if (d.maxUses !== null && d.uses >= d.maxUses) throw new ApiError('invalid_input', 'That code has been used up.')
+    if (db.discountRedemptions.some((r) => r.discountId === d.id && r.userId === buyer())) throw new ApiError('invalid_input', 'You’ve already used that code.')
+    return d
   }
   /** Buyers who bought a ticket or an item in the last 30 days. */
   const activeBuyerCount = (db: Db) => {
@@ -1597,8 +1629,10 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     listPickupPoints: () => tx(() => PICKUP_POINTS),
 
-    checkout: ({ listingIds, quantities = {}, expectedTotalKobo, ...details }) =>
+    checkout: ({ listingIds, quantities = {}, expectedTotalKobo, code, ...details }) =>
       tx((db) => {
+        const codeDiscount = code?.trim() ? usableCode(db, code) : null
+        const codePrices: Record<string, Kobo> = {}
         if (!listingIds.length) throw new ApiError('invalid_input', 'Your cart is empty.')
         if (new Set(listingIds).size !== listingIds.length) throw new ApiError('not_found', 'One of those items no longer exists.')
         const listings = listingIds.map((id) => getListingOr404(db, id))
@@ -1614,8 +1648,10 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           if (isWonPrize(v) && db.orders.some((o) => o.listingId === v.id)) throw new ApiError('invalid_input', `${v.title} has already been arranged.`)
         }
         const to = details.fulfilment === 'pickup' ? PICKUP_POINTS.find((p) => p.id === details.pickupPointId)?.location : details.delivery.location
+        if (codeDiscount)
+          for (const l of listings) if (l.status === 'for_sale' && codeDiscount.listingIds.includes(l.id)) codePrices[l.id] = unitPrice(db, l, codeDiscount.id).unitKobo
         const fees = to ? checkoutDeliveryFees(views, to, db.deliveryPricing) : []
-        const grandTotal = checkoutTotalKobo(views, (v) => quantities[v.id] ?? 1) + fees.reduce((n, f) => n + f.feeKobo, 0)
+        const grandTotal = checkoutTotalKobo(views, (v) => quantities[v.id] ?? 1, codePrices) + fees.reduce((n, f) => n + f.feeKobo, 0)
         if (expectedTotalKobo !== undefined && expectedTotalKobo !== grandTotal) throw new ApiError('invalid_input', 'A price has just changed. Check the new total.')
         const mine = db.ledger.filter((e) => e.userId === buyer())
         let balance = balanceFromLedger(mine)
@@ -1626,12 +1662,15 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const pickupPoint = pickup ? (PICKUP_POINTS.find((p) => p.id === details.pickupPointId) ?? null) : null
         if (pickup && !pickupPoint) throw new ApiError('invalid_input', CHECKOUT_ERROR_TEXT.pickup_point_required)
         const checkoutId = uid('C')
+        let codeUsed = false
         const unpaid = new Map(fees.map((f) => [f.merchantId, f.feeKobo]))
         const orders = listings.map((l, i) => {
           const v = views[i]
           const prize = isWonPrize(v)
           const quantity = quantities[v.id] ?? 1
-          const price = lineAmountKobo(v, quantity)!
+          const price = lineAmountKobo(v, quantity, codePrices)!
+          const used = prize || l.kind !== 'product' ? null : unitPrice(db, l, codeDiscount?.id ?? null)
+          if (used?.discountId && used.discountId === codeDiscount?.id) codeUsed = true
           let paid = { fromCash: 0, fromCredit: 0 }
           let paidFee = { fromCash: 0, fromCredit: 0 }
           const deliveryFeeKobo = prize ? 0 : (unpaid.get(l.merchantId) ?? 0)
@@ -1655,6 +1694,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
             cancelledAt: null, cancelReason: null, cancelNote: null, confirmRemindedAt: null,
             confirmBy: prize ? null : confirmDeadline(now()), confirmedAt: null, confirmPhoto: null,
             refundedAt: null, claim: null, readyBy: null, collectedAt: null, collectionPhotos: null, collectionProblems: null, refusalPhoto: null, returnState: null, returnedAt: null,
+            discountKobo: used ? quantity * l.priceKobo - price : 0,
             id: uid('O'), listingId: l.id, buyerId: buyer(), merchantId: l.merchantId, quantity, priceKobo: price, feeKobo: prize ? 0 : saleEconomics(price, l.feeBps).feeKobo,
             delivery: pickup ? { address: '', location: null, contactPhone: details.delivery.contactPhone.trim() } : { address: details.delivery.address.trim(), location: details.delivery.location, contactPhone: details.delivery.contactPhone.trim() },
             fulfilment: details.fulfilment, pickupPoint, isPrize: prize, handledBy: prize && !isCar(l) ? 'drawmart' : 'store',
@@ -1664,6 +1704,11 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           if (order.handledBy === 'store') notifyShop(db, order.merchantId, 'store_new_order', order.listingId, at)
           return orderView(db, order, true)
         })
+        if (codeDiscount) {
+          if (!codeUsed) throw new ApiError('invalid_input', 'That code isn’t for anything you’re buying.')
+          codeDiscount.uses += 1
+          db.discountRedemptions.push({ discountId: codeDiscount.id, userId: buyer() })
+        }
         db.carts[buyer()] = (db.carts[buyer()] ?? []).filter((id) => !listingIds.includes(id))
         return orders
       }),
@@ -2201,6 +2246,55 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       tx((db) => {
         const c = db.listingChecks[listingId]
         return c ? { code: c.code, hasVideo: !!c.videoKey, serial: c.serial, videoUrl: c.videoKey ? (checkFiles.get(c.videoKey) ?? null) : null, proofUrl: c.proofKey ? (checkFiles.get(c.proofKey) ?? null) : null } : null
+      }),
+
+    listDiscounts: () =>
+      tx((db) => {
+        const shop = myShop(db)
+        return db.discounts
+          .filter((d) => d.merchantId === shop)
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .map(({ merchantId: _shop, ...d }) => d)
+      }),
+
+    createDiscount: (input) =>
+      tx((db) => {
+        const shop = myShop(db)
+        if (!shop) throw new ApiError('forbidden', 'Only sellers can run discounts.')
+        const ids = [...new Set(input.listingIds)]
+        const mine = ids.map((id) => db.listings.find((l) => l.id === id))
+        if (mine.some((l) => !l || l.merchantId !== shop || l.kind !== 'product' || !['for_sale', 'paused', 'pending_review'].includes(l.status)))
+          throw new ApiError('invalid_input', 'Discounts are only for your own products, never draws.')
+        const problems = discountErrors({ ...input, listingIds: ids }, Object.fromEntries(mine.map((l) => [l!.id, l!.priceKobo])))
+        const code = input.kind === 'code' ? normalizeCode(input.code) : null
+        if (code && db.discounts.some((d) => d.code === code)) problems.push('That code is taken. Try another.')
+        if (Date.parse(input.endsAt) <= now()) problems.push('The end has to be in the future.')
+        if (db.discounts.filter((d) => d.merchantId === shop && !d.endedAt && Date.parse(d.endsAt) > now()).length >= MAX_OPEN_DISCOUNTS)
+          problems.push('You can have up to 20 discounts running or waiting to start. End one first.')
+        if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+        db.discounts.push({
+          id: uid('D'), merchantId: shop, kind: input.kind, percentOff: input.percentOff, amountOffKobo: input.amountOffKobo, code, maxUses: input.kind === 'code' ? input.maxUses : null,
+          uses: 0, startsAt: input.startsAt, endsAt: input.endsAt, endedAt: null, listingIds: ids, createdAt: iso(now()),
+        })
+      }),
+
+    endDiscount: (id) =>
+      tx((db) => {
+        const d = db.discounts.find((x) => x.id === id && x.merchantId === myShop(db) && !x.endedAt)
+        if (!d) throw new ApiError('not_found', 'That discount doesn’t exist or has already ended.')
+        d.endedAt = iso(now())
+      }),
+
+    checkDiscountCode: (code, listingIds) =>
+      tx((db) => {
+        const d = usableCode(db, code)
+        const prices: Record<string, Kobo> = {}
+        for (const id of listingIds) {
+          const l = db.listings.find((x) => x.id === id)
+          if (l && l.kind === 'product' && l.status === 'for_sale' && d.listingIds.includes(l.id)) prices[l.id] = unitPrice(db, l, d.id).unitKobo
+        }
+        if (!Object.keys(prices).length) throw new ApiError('invalid_input', 'That code isn’t for anything you’re buying.')
+        return { code: d.code!, prices }
       }),
 
     getDrawPriceStats: (category, band) =>

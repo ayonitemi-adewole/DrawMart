@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { dateTime } from '@/lib/time'
+import { describeDiscount } from '@/domain/discounts'
 import { Link, useLocation } from 'react-router'
 import { useAccess, useCart, useConversations, useMerchant, useMyOrders, useSetCartQuantity } from '@/api/hooks'
 import type { ListingView, OrderView } from '@/api/types'
@@ -54,6 +56,17 @@ export function BuyNowPanel({ listing: l }: { listing: ListingView }) {
       <div className="flex flex-col gap-1">
         <span className="text-xs font-extrabold tracking-[0.14em] text-brand uppercase">{product ? 'Buy now · no draw' : 'Draw ended · now for sale'}</span>
         <span className="font-display text-4xl font-extrabold tabular-nums">{formatNaira(price)}</span>
+        {l.sale ? (
+          <span className="flex flex-wrap items-center gap-2 text-sm">
+            <s className="text-subtle">
+              <span className="sr-only">was </span>
+              {formatNaira(l.priceKobo)}
+            </s>
+            <Badge tone="hot">
+              {describeDiscount(l.sale)} until {dateTime(l.sale.endsAt)}
+            </Badge>
+          </span>
+        ) : null}
         {lowStock ? <Badge tone="hot" className="w-fit">{lowStock}</Badge> : null}
         <span className="text-sm text-muted">
           {product

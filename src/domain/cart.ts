@@ -9,7 +9,7 @@ import { LOCATION_ERROR_TEXT, locationError, type LocationError } from './locati
 import { salePriceKobo } from './orders'
 import type { Delivery, Fulfilment, Kobo, Listing } from './types'
 
-type CartListing = Pick<Listing, 'kind' | 'status' | 'category' | 'priceKobo' | 'fallbackPriceKobo'> & { result?: { iWon: boolean } | null }
+type CartListing = Pick<Listing, 'kind' | 'status' | 'category' | 'priceKobo' | 'fallbackPriceKobo'> & { id?: string; result?: { iWon: boolean } | null; sale?: { priceKobo: Kobo } | null }
 
 export const isWonPrize = (l: CartListing) => l.status === 'drawn' && !!l.result?.iWon
 
@@ -27,15 +27,20 @@ export const CART_ERROR_TEXT: Record<CartError, string> = {
   not_available: 'Only items on sale, and draws you’ve won, can go in your cart.',
 }
 
-/** What a line costs today (a won item is free), or null if it can't be bought any more. */
-export function lineAmountKobo(l: CartListing, quantity = 1): Kobo | null {
+/**
+ * What a line costs today (a won item is free), or null if it can't be bought any more.
+ * `codePrices` are prices with a discount code (discounts.ts CodeCheck), when they're lower.
+ */
+export function lineAmountKobo(l: CartListing, quantity = 1, codePrices: Record<string, Kobo> = {}): Kobo | null {
   if (isWonPrize(l)) return 0
   const price = salePriceKobo(l)
-  return price === null ? null : price * quantity
+  if (price === null) return null
+  const withCode = l.kind === 'product' && l.id ? codePrices[l.id] : undefined
+  return (withCode !== undefined && withCode < price ? withCode : price) * quantity
 }
 
-export function checkoutTotalKobo<L extends CartListing>(lines: readonly L[], quantityOf: (l: L) => number = () => 1): Kobo {
-  return lines.reduce((sum, l) => sum + (lineAmountKobo(l, quantityOf(l)) ?? 0), 0)
+export function checkoutTotalKobo<L extends CartListing>(lines: readonly L[], quantityOf: (l: L) => number = () => 1, codePrices: Record<string, Kobo> = {}): Kobo {
+  return lines.reduce((sum, l) => sum + (lineAmountKobo(l, quantityOf(l), codePrices) ?? 0), 0)
 }
 
 export interface CheckoutDetails {

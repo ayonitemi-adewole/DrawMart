@@ -8,9 +8,10 @@ import type { Kobo, Listing } from './types'
 export const MIN_PRODUCT_PRICE_KOBO = 100_00 // ₦100
 
 /** The price a buyer pays today, or null if it isn't on sale at a fixed price. */
-export function salePriceKobo(l: Pick<Listing, 'kind' | 'status' | 'priceKobo' | 'fallbackPriceKobo'>): Kobo | null {
+export function salePriceKobo(l: Pick<Listing, 'kind' | 'status' | 'priceKobo' | 'fallbackPriceKobo'> & { sale?: { priceKobo: Kobo } | null }): Kobo | null {
   if (l.status !== 'for_sale') return null
-  return l.kind === 'product' ? l.priceKobo : l.fallbackPriceKobo
+  // A store's sale (discounts.ts). Products only, never draws.
+  return l.kind === 'product' ? (l.sale?.priceKobo ?? l.priceKobo) : l.fallbackPriceKobo
 }
 
 /** The store pays the platform fee on fixed-price sales; buyers see one clean price. */

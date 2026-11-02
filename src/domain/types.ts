@@ -256,6 +256,8 @@ export interface Order {
   feeKobo: Kobo
   /** How many. priceKobo and feeKobo are for all of them. */
   quantity: number
+  /** What a store discount took off priceKobo (discounts.ts). Older orders don't have it. */
+  discountKobo?: Kobo
   /** What the buyer paid for delivery. One fee covers everything from a seller in a checkout, so only one of those orders has it. Not part of the seller's payout. */
   deliveryFeeKobo: Kobo
   /** The seller must confirm by this, or it cancels (orderConfirm.ts). Null for won items and older orders. */

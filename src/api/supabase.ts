@@ -5,6 +5,7 @@
  * sees). Every write is an RPC to a database function in
  * supabase/migrations, which enforces the same rules as src/domain.
  */
+import type { Discount } from '@/domain/discounts'
 import type { PricingStats } from '@/domain/drawPricing'
 import { STORE_APPLICATION_ERROR_TEXT, validateStoreApplication } from '@/domain/storeApplications'
 import type { PayoutAccount, PayoutKind, PayoutStatus } from '@/domain/payouts'
@@ -100,6 +101,7 @@ interface DrawResultRow {
 
 interface ListingRow {
   id: string
+  sale?: { priceKobo: number | string; percentOff: number | null; amountOffKobo: number | string | null; endsAt: string } | null
   product_code: string
   kind: ListingKind
   merchant_id: string
@@ -180,6 +182,21 @@ interface ProfileRow {
   seller_id: string | null
 }
 
+interface DiscountRow {
+  id: string
+  kind: Discount['kind']
+  percent_off: number | null
+  amount_off_kobo: number | string | null
+  code: string | null
+  max_uses: number | null
+  uses: number
+  starts_at: string
+  ends_at: string
+  ended_at: string | null
+  created_at: string
+  discount_listings: { listing_id: string }[]
+}
+
 interface SupportMessageRow {
   id: string
   sender: SupportMessage['sender']
@@ -253,6 +270,7 @@ interface OrderRow {
   return_state: 'returning' | 'returned' | null
   returned_at: string | null
   delivery_fee_kobo: number
+  discount_kobo?: number
   cancelled_at: string | null
   cancel_reason: CancelReason | null
   cancel_note: string | null
@@ -288,7 +306,8 @@ interface LedgerRow {
 const RESULT_COLUMNS = 'listing_id, commitment, seed, closing_ref, winning_number, drawn_at'
 // Named, because the CAC number column isn't readable: `*` would fail.
 const MERCHANT_COLUMNS = 'id, kind, name, area, public_cac, show_cac, verified, verified_at, delivery_area, suspended_at, about, logo_url, cover_url, opening_hours, shop_note, public_phone'
-const LISTING_SELECT = `*, merchant:merchants(${MERCHANT_COLUMNS}), result:draw_results(${RESULT_COLUMNS}), handover:listing_handovers(*)`
+// sale:listing_sale is a computed field: the running sale, if any (discounts.ts).
+const LISTING_SELECT = `*, sale:listing_sale, merchant:merchants(${MERCHANT_COLUMNS}), result:draw_results(${RESULT_COLUMNS}), handover:listing_handovers(*)`
 const ORDER_SELECT = '*, claim:order_claims(id, kind, status, description, photos, return_fee_kobo, review_note), review:reviews(id, rating, seller_comment, product_comment, reply, replied_at, hidden_at, created_at), listing:listings(product_code, title, images, category), merchant:merchants(name), pickup_point:pickup_points(*)'
 const PHOTO_BUCKET = 'listing-photos'
 const CHECK_BUCKET = 'listing-checks'
@@ -381,6 +400,7 @@ export function toResultView(
 function toListingView(l: ListingRow, me: string | null, mine: Mine): ListingView {
   return {
     id: l.id,
+    sale: l.sale ? { priceKobo: num(l.sale.priceKobo), percentOff: l.sale.percentOff, amountOffKobo: l.sale.amountOffKobo === null ? null : num(l.sale.amountOffKobo), endsAt: l.sale.endsAt } : null,
     productCode: l.product_code,
     kind: l.kind,
     merchantId: l.merchant_id,
@@ -454,6 +474,7 @@ function toOrderView(o: OrderRow): OrderView {
     returnState: o.return_state,
     returnedAt: o.returned_at,
     deliveryFeeKobo: num(o.delivery_fee_kobo),
+    discountKobo: num(o.discount_kobo ?? 0),
     cancelledAt: o.cancelled_at,
     cancelReason: o.cancel_reason,
     cancelNote: o.cancel_note,
@@ -853,6 +874,7 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
           listingIds: input.listingIds,
           quantities: input.quantities ?? {},
           expectedTotalKobo: input.expectedTotalKobo ?? null,
+          code: input.code ?? null,
           fulfilment: input.fulfilment,
           address: pickup ? null : input.delivery.address,
           phone: input.delivery.contactPhone,
@@ -1212,6 +1234,29 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     finishReturn: async (claimId, photo) => {
       const [url] = await uploadPhotos(`riders/${await requireId()}`, [photo])
       await rpc('finish_return', { p_claim_id: claimId, p_photo: url })
+    },
+    listDiscounts: async () => {
+      const rows = unwrap(
+        await client
+          .from('discounts')
+          .select('id, kind, percent_off, amount_off_kobo, code, max_uses, uses, starts_at, ends_at, ended_at, created_at, discount_listings(listing_id)')
+          .order('created_at', { ascending: false })
+          .returns<DiscountRow[]>(),
+      )
+      return rows.map((d) => ({
+        id: d.id, kind: d.kind, percentOff: d.percent_off, amountOffKobo: d.amount_off_kobo === null ? null : num(d.amount_off_kobo), code: d.code, maxUses: d.max_uses, uses: d.uses,
+        startsAt: d.starts_at, endsAt: d.ends_at, endedAt: d.ended_at, createdAt: d.created_at, listingIds: d.discount_listings.map((x) => x.listing_id),
+      }))
+    },
+    createDiscount: async (input) => {
+      await rpc('create_discount', { p: input })
+    },
+    endDiscount: async (id) => {
+      await rpc('end_discount', { p_id: id })
+    },
+    checkDiscountCode: async (code, listingIds) => {
+      const r = await rpc<{ code: string; prices: Record<string, number | string> }>('check_discount_code', { p_code: code, p_listing_ids: listingIds })
+      return { code: r.code, prices: Object.fromEntries(Object.entries(r.prices).map(([id, k]) => [id, num(k)])) }
     },
     getDrawPriceStats: (category, band) => rpc<PricingStats>('draw_price_stats', { p_category: category, p_band: band }),
     listQuickReplies: async () =>

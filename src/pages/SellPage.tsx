@@ -9,12 +9,13 @@ import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication, type SellerAp
 import { SellerInsights } from '@/components/SellerInsights'
 import { photoToDataUrl } from '@/lib/image'
 import { PushPrompt } from '@/components/PushSettings'
-import { NairaIcon, StarIcon } from '@/components/icons'
+import { GiftIcon, NairaIcon, StarIcon } from '@/components/icons'
 import { Payouts } from './merchant/Payouts'
 import { MerchantListings } from './merchant/MerchantPage'
 import { ShopProfile } from './merchant/ShopProfile'
 import { GettingStarted } from './merchant/GettingStarted'
 import { SellerReviews } from './merchant/SellerReviews'
+import { Discounts } from './merchant/Discounts'
 import { listingFormFrom } from './merchant/parts'
 import { localDate } from '@/domain/listing'
 import { MerchantOrders, NewProduct } from './merchant/NewProduct'
@@ -287,8 +288,8 @@ export function IdPhoto({
   )
 }
 
-type SellTab = 'items' | 'orders' | 'payouts' | 'insights' | 'reviews' | 'profile' | 'new'
-const SELL_TABS: SellTab[] = ['items', 'orders', 'payouts', 'insights', 'reviews', 'profile', 'new']
+type SellTab = 'items' | 'orders' | 'payouts' | 'insights' | 'discounts' | 'reviews' | 'profile' | 'new'
+const SELL_TABS: SellTab[] = ['items', 'orders', 'payouts', 'insights', 'discounts', 'reviews', 'profile', 'new']
 
 /** Once approved: the seller's own items, orders to send, and a regular-product form. */
 function SellerDashboard() {
@@ -342,6 +343,7 @@ function SellerDashboard() {
           { value: 'orders', label: <><TruckIcon size={16} /> Orders</> },
           { value: 'payouts', label: <><NairaIcon size={16} /> Payouts</> },
           { value: 'insights', label: <><ChartIcon size={16} /> Insights</> },
+          { value: 'discounts', label: <><GiftIcon size={16} /> Discounts</> },
           { value: 'reviews', label: <><StarIcon size={16} /> Reviews</> },
           { value: 'profile', label: <><StoreIcon size={16} /> Profile</> },
           { value: 'new', label: <><PlusIcon size={16} /> New item</> },
@@ -354,6 +356,8 @@ function SellerDashboard() {
           <MerchantOrders />
         ) : tab === 'payouts' ? (
           <Payouts />
+        ) : tab === 'discounts' ? (
+          <Discounts />
         ) : tab === 'reviews' ? (
           <SellerReviews />
         ) : tab === 'profile' ? (

@@ -90,6 +90,7 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
             <Badge tone={s.tone}>{s.label}</Badge>
             <span className="text-sm font-extrabold tabular-nums">{o.isPrize ? 'Won in a draw' : formatNaira(o.priceKobo)}</span>
             {audience === 'buyer' && o.deliveryFeeKobo > 0 && !cancelled ? <span className="text-xs text-subtle">+ {formatNaira(o.deliveryFeeKobo)} delivery</span> : null}
+            {o.discountKobo ? <span className="text-xs text-subtle">{audience === 'buyer' ? 'You saved' : 'Your discount'} {formatNaira(o.discountKobo)}</span> : null}
           </div>
         </div>
       </div>

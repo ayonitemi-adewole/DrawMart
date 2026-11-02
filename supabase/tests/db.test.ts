@@ -1695,6 +1695,86 @@ describe('delivery fees', () => {
   })
 })
 
+describe('discounts', () => {
+  const SHOP = '11111111-1111-4111-8111-000000000005'
+  let owner: string, staff: string, other: string
+  const week = () => ({ startsAt: new Date(Date.now() - 60_000).toISOString(), endsAt: new Date(Date.now() + 7 * 86_400_000).toISOString() })
+  const create = (who: string, p: Record<string, unknown>) => asUser<{ id: string }>(who, `select public.create_discount($1) id`, [{ maxUses: null, code: '', percentOff: null, amountOffKobo: null, ...week(), ...p }])
+  const sale = async (listing: string) => (await asUser<{ s: { priceKobo: number } | null }>(null, `select public.listing_sale(l) s from public.listings l where id = $1`, [listing]))[0].s
+  const product = async (price = 2_000_000) => {
+    const [{ id }] = await asUser<{ id: string }>(owner, `select public.create_product($1) id`, [{ title: 'Discount lamp', description: '', category: 'Home', priceKobo: price, stock: 5 }])
+    await asUser(staff, `select public.approve_listing($1)`, [id])
+    return id
+  }
+  const buyer = async (email: string) => {
+    const u = await newUser(email)
+    await asUser(u, `select public.top_up(10000000)`)
+    return u
+  }
+  const buy = (who: string, listing: string, extra: Record<string, unknown> = {}) =>
+    asUser<{ ids: string[] }>(who, `select public.checkout($1) ids`, [{ listingIds: [listing], fulfilment: 'delivery', address: '15 Awolowo Road, Ikoyi', phone: '0803 123 4567', lat: 6.45, lng: 3.43, ...extra }])
+  const order = (id: string) => admin<{ price_kobo: number; fee_kobo: number; discount_kobo: number; fee_bps: number }>(
+    `select o.price_kobo, o.fee_kobo, o.discount_kobo, l.fee_bps from public.orders o join public.listings l on l.id = o.listing_id where o.id = $1`, [id])
+
+  beforeAll(async () => {
+    owner = await newUser('discount-store@example.com', { merchantId: SHOP })
+    staff = await newUser('discount-staff@example.com', { role: 'admin' })
+    other = await newUser('discount-other@example.com', { merchantId: '11111111-1111-4111-8111-000000000004' })
+  })
+  beforeEach(async () => {
+    await admin(`update public.merchants set suspended_at = null where id = $1`, [SHOP])
+  })
+
+  it('puts products on sale: the buyer pays less, and the fee is on what they paid', async () => {
+    const id = await product()
+    const [{ id: d }] = await create(owner, { kind: 'sale', percentOff: 10, listingIds: [id] })
+    expect(await sale(id)).toMatchObject({ priceKobo: 1_800_000, percentOff: 10 })
+    const b = await buyer('discount-sale@example.com')
+    const [{ ids }] = await buy(b, id, { quantities: { [id]: 2 } })
+    const [o] = await order(ids[0])
+    expect(o).toMatchObject({ price_kobo: 3600000, discount_kobo: 400000 })
+    expect(Number(o.fee_kobo)).toBe(Math.round((3_600_000 * o.fee_bps) / 10_000))
+
+    // Only the shop sees its discounts.
+    expect(await asUser(b, `select id from public.discounts`)).toEqual([])
+    expect(await asUser(owner, `select id from public.discounts where id = $1`, [d])).toHaveLength(1)
+    await expectFail(asUser(other, `select public.end_discount($1)`, [d]), 'not_found')
+    await asUser(owner, `select public.end_discount($1)`, [d])
+    expect(await sale(id)).toBeNull()
+  })
+
+  it('never discounts draws, and checks what the store sets', async () => {
+    const id = await product()
+    const [{ id: draw }] = await admin<{ id: string }>(`select id from public.listings where merchant_id = $1 and kind = 'raffle' limit 1`, [SHOP])
+    await expectFail(create(owner, { kind: 'sale', percentOff: 10, listingIds: [draw] }), 'invalid_input')
+    await expectFail(create(owner, { kind: 'sale', percentOff: 95, listingIds: [id] }), 'invalid_input')
+    await expectFail(create(owner, { kind: 'sale', amountOffKobo: 1_995_000, listingIds: [id] }), 'invalid_input')
+    await expectFail(create(owner, { kind: 'sale', percentOff: 10, listingIds: [id], endsAt: new Date(Date.now() + 40 * 86_400_000).toISOString() }), 'invalid_input')
+    await expectFail(create(other, { kind: 'sale', percentOff: 10, listingIds: [id] }), 'invalid_input')
+    await expect(asUser(owner, `insert into public.discounts (merchant_id, kind, percent_off, starts_at, ends_at) values ($1, 'sale', 50, now(), now() + interval '1 day')`, [SHOP])).rejects.toThrow(/permission denied/)
+    for (const [kobo, d, want] of [[2_000_000, 10, 1_800_000], [333_333, 10, 300_000], [15_000, null, 10_000]] as const)
+      expect(await admin(`select private.discounted_unit($1, row(null, null, 'sale', $2, $3, null, null, 0, now(), now(), null, now())::public.discounts) u`, [kobo, d, d === null ? 10_000 : null])).toEqual([{ u: want }])
+  })
+
+  it('takes a code once per buyer, up to its limit, and gives the better of code and sale', async () => {
+    const id = await product()
+    await create(owner, { kind: 'sale', percentOff: 5, listingIds: [id] })
+    await create(owner, { kind: 'code', amountOffKobo: 300_000, code: 'dbsave3k', maxUses: 2, listingIds: [id] })
+    await expectFail(create(owner, { kind: 'code', percentOff: 10, code: 'DBSAVE3K', listingIds: [id] }), 'invalid_input')
+
+    const a = await buyer('discount-code-a@example.com')
+    await expectFail(asUser(a, `select public.check_discount_code('NOPE', $1)`, [[id]]), 'invalid_input')
+    expect(await asUser(a, `select public.check_discount_code(' dbsave3k ', $1) c`, [[id]])).toEqual([{ c: { code: 'DBSAVE3K', prices: { [id]: 1_700_000 } } }])
+    const [{ ids }] = await buy(a, id, { code: 'DBSAVE3K' })
+    expect(await order(ids[0])).toMatchObject([{ price_kobo: 1700000, discount_kobo: 300000 }])
+    await expectFail(buy(a, id, { code: 'DBSAVE3K' }), 'invalid_input') // once each
+
+    await buy(await buyer('discount-code-b@example.com'), id, { code: 'DBSAVE3K' })
+    await expectFail(buy(await buyer('discount-code-c@example.com'), id, { code: 'DBSAVE3K' }), 'invalid_input') // used up
+    expect(await sale(id)).toMatchObject({ priceKobo: 1_900_000 })
+  })
+})
+
 describe('draw pricing tips', () => {
   let store: string, staff: string, buyer: string
   type Stats = { draws: number | null; soldOut: number | null; avgDaysToSellOut: number | null }

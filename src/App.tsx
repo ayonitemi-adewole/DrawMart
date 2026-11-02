@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider, useIsFetching, useQueryClient } from '@tanstack/react-query'
+import { StoreDiscountsPage } from '@/pages/merchant/StoreDiscountsPage'
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { Link, Navigate, RouterProvider, createBrowserRouter, useRouteError } from 'react-router'
 import { api } from '@/api'
@@ -183,6 +184,7 @@ const router = createBrowserRouter([
       { path: 'payouts', element: <StorePayoutsPage /> },
       { path: 'profile', element: <StoreProfileSettingsPage /> },
       { path: 'reviews', element: <StoreReviewsPage /> },
+      { path: 'discounts', element: <StoreDiscountsPage /> },
       { path: 'help', element: <HelpPage app="store" /> },
       { path: 'shop', element: <StoreShopPreviewPage /> },
       { path: 'insights', element: <InsightsPage /> },

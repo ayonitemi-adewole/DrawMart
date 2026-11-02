@@ -231,8 +231,14 @@ export function ListingCard({
                   <span className="text-[11px] text-subtle">
                     {l.status === "sold" ? "Sold for" : "Buy now"}
                   </span>
-                  <span className="text-lg leading-tight font-extrabold">
+                  <span className="flex flex-wrap items-baseline gap-x-2 text-lg leading-tight font-extrabold">
                     {formatNaira(price ?? l.fallbackPriceKobo ?? l.priceKobo)}
+                    {l.sale && price !== null ? (
+                      <s className="text-xs font-semibold text-subtle">
+                        <span className="sr-only">was </span>
+                        {formatNaira(l.priceKobo)}
+                      </s>
+                    ) : null}
                   </span>
                 </div>
               ) : (

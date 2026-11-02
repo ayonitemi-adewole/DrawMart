@@ -2,7 +2,7 @@ import { NavLink, Outlet, ScrollRestoration, useLocation, useNavigate } from 're
 import { api } from '@/api'
 import { cancelRateFlagged } from '@/domain/orderCancel'
 import { useSupportInbox, useSupportUnread, useStoreApplications, useOpenClaims, useAccess, useCancelRates, useDuePayouts, useMerchant, usePendingListings, usePendingWinnerStories, usePriceReviews, usePrizeOrders, useSellerApplications, useSignOut, useUnreadMessages, useUnreadNotifications } from '@/api/hooks'
-import { InfoIcon, StarIcon, StoreIcon, AlertIcon, XIcon, BellIcon, NairaIcon, HeartIcon, ChartIcon, ChatIcon, TrendingUpIcon, TrophyIcon, TruckIcon, CheckIcon, ClipboardIcon, DiceIcon, HashIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
+import { GiftIcon, InfoIcon, StarIcon, StoreIcon, AlertIcon, XIcon, BellIcon, NairaIcon, HeartIcon, ChartIcon, ChatIcon, TrendingUpIcon, TrophyIcon, TruckIcon, CheckIcon, ClipboardIcon, DiceIcon, HashIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
 import { NavMenu } from '@/components/NavMenu'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { cx } from '@/components/ui'
@@ -54,6 +54,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
           { to: '/store/payouts', label: 'Payouts', icon: NairaIcon },
           { to: '/store/profile', label: 'Shop profile', icon: StoreIcon },
           { to: '/store/reviews', label: 'Reviews', icon: StarIcon },
+          { to: '/store/discounts', label: 'Discounts', icon: GiftIcon },
           { to: '/store/insights', label: 'Insights', icon: ChartIcon },
           { to: '/store/messages', label: 'Messages', icon: ChatIcon, count: unread },
           { to: '/store/notifications', label: 'Notifications', icon: BellIcon, count: unreadNotifications },

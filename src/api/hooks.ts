@@ -1,4 +1,5 @@
 import type { ClaimInput } from './types'
+import type { DiscountInput } from '@/domain/discounts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import type { ShopPickup } from '@/domain/shopPickup'
@@ -34,6 +35,7 @@ export const keys = {
   adminReviews: ['admin-reviews'] as const,
   supportThread: ['support-thread'] as const,
   quickReplies: ['quick-replies'] as const,
+  discounts: ['discounts'] as const,
   drawPriceStats: (category: string, band: number) => ['draw-price-stats', category, band] as const,
   supportInbox: ['support-inbox'] as const,
   supportMessages: (merchantId: string) => ['support-messages', merchantId] as const,
@@ -115,6 +117,7 @@ export const useReturnJobs = () => useQuery({ queryKey: keys.returnJobs, queryFn
 /** Cached per band, so typing a price doesn't ask again on every key. */
 export const useDrawPriceStats = (category: Category, band: number | null) =>
   useQuery({ queryKey: keys.drawPriceStats(category, band ?? -1), queryFn: () => api.getDrawPriceStats(category, band!), enabled: useIs('store') && band !== null, staleTime: 10 * 60_000 })
+export const useDiscounts = () => useQuery({ queryKey: keys.discounts, queryFn: () => api.listDiscounts(), enabled: useHasShop() })
 export const useQuickReplies = () => useQuery({ queryKey: keys.quickReplies, queryFn: () => api.listQuickReplies(), enabled: useHasShop() })
 export const useSupportThread = () => useQuery({ queryKey: keys.supportThread, queryFn: () => api.getSupportThread(), enabled: useHasShop(), refetchInterval: 10_000 })
 export const useSupportUnread = () => useSupportThread().data?.unread ?? 0
@@ -431,6 +434,16 @@ export function useSetDeliverySizeExtra() {
     onSettled: () => qc.invalidateQueries({ queryKey: keys.deliveryPricing }),
   })
 }
+
+export function useDiscountActions() {
+  const invalidate = useInvalidateAll()
+  return {
+    create: useMutation({ mutationFn: (input: DiscountInput) => api.createDiscount(input), onSettled: invalidate }),
+    end: useMutation({ mutationFn: (id: string) => api.endDiscount(id), onSettled: invalidate }),
+  }
+}
+
+export const useCheckDiscountCode = () => useMutation({ mutationFn: ({ code, listingIds }: { code: string; listingIds: string[] }) => api.checkDiscountCode(code, listingIds) })
 
 export function useQuickReplyActions() {
   const qc = useQueryClient()
