@@ -772,6 +772,44 @@ describe('mock api', () => {
     })
   })
 
+  describe('rider job limits', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('holds at most 5 jobs, and sends ones not collected within 2 hours back to the pool', async () => {
+      const c = { t: Date.parse('2026-11-02T10:00:00+01:00') }
+      const api = make(() => c.t)
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Many lamps', description: '', category: 'Home', priceKobo: k(5_000), stock: 6 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const ids: string[] = []
+      for (let i = 0; i < 6; i++) ids.push((await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null }))[0].id)
+      await as(api, 'store')
+      for (const id of ids) {
+        await api.sellerConfirmOrder(id, '/assets/c.jpg')
+        await api.dispatchOrder(id)
+      }
+      await as(api, 'rider')
+      for (const id of ids.slice(0, 5)) await api.takeDelivery(id)
+      await expect(api.takeDelivery(ids[5])).rejects.toThrow('5 jobs, the most')
+      const job = async (id: string) => (await api.listDeliveryJobs()).find((j) => j.id === id)!
+      expect((await job(ids[0])).collectBy).toBe(new Date(c.t + 2 * 3_600_000).toISOString())
+      expect((await job(ids[5])).collectBy).toBeNull() // not theirs
+
+      // Collected, it's theirs for as long as it takes.
+      await api.passCollection(ids[0], ['/assets/a.jpg'])
+      expect((await job(ids[0])).collectBy).toBeNull()
+      c.t += 119 * 60_000
+      expect((await job(ids[1])).mine).toBe(true)
+      c.t += 60_000
+      expect(await job(ids[0])).toMatchObject({ mine: true, collected: true })
+      for (const id of ids.slice(1, 5)) expect(await job(id)).toMatchObject({ mine: false, collectBy: null })
+      await api.takeDelivery(ids[5])
+    })
+  })
+
   describe('rider and door checks', () => {
     const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
     const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')

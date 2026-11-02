@@ -315,6 +315,8 @@ export interface DeliveryJob {
   deliveredAt: string | null
   /** This rider has taken it. The rest are in the pool for anyone to take. */
   mine: boolean
+  /** Taken but not yet collected: back to the pool at this time (riderLimits.ts). */
+  collectBy: string | null
   /** The address and number only reach the rider on the way there, or taking a refused item back. */
   collectFrom: { name: string; area: string; address?: string; location?: GeoPoint; contactPhone?: string }
   pickupPoint: PickupPoint | null
@@ -592,6 +594,8 @@ export interface ReturnJob {
   kind: ClaimKind
   status: ClaimStatus
   mine: boolean
+  /** Taken but not yet collected from the buyer: back to the pool at this time (riderLimits.ts). */
+  collectBy: string | null
   productCode: string
   listingTitle: string
   listingImage: string | null

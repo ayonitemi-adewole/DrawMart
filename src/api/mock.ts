@@ -67,6 +67,7 @@ import {
   topUpError,
 } from '@/domain/rules'
 import { checkPin, isDeliveryPin, newDeliveryPin, type PinState } from '@/domain/delivery'
+import { collectBy, collectionOverdue, takeJobError } from '@/domain/riderLimits'
 import { newProductCode } from '@/domain/productCode'
 import { MAX_SAVED_ADDRESSES, SAVED_ADDRESS_ERROR_TEXT, sortAddresses, validateSavedAddress, type SavedAddress, type SavedAddressInput } from '@/domain/addresses'
 import { CART_ERROR_TEXT, CHECKOUT_ERROR_TEXT, cartError, checkoutTotalKobo, isCar, isWonPrize, lineAmountKobo, validateCheckout } from '@/domain/cart'
@@ -116,7 +117,7 @@ const TOLU_SHOP = 'm-tolu'
 const DAY = 24 * 60 * 60 * 1000
 
 /** The PIN and who's carrying it stay out of the order everyone else sees. */
-type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState; paidCashKobo: Kobo; paidCreditKobo: Kobo; paidFeeCashKobo: Kobo; paidFeeCreditKobo: Kobo; checkoutId: string; confirmRemindedAt: string | null }
+type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState; paidCashKobo: Kobo; paidCreditKobo: Kobo; paidFeeCashKobo: Kobo; paidFeeCreditKobo: Kobo; checkoutId: string; confirmRemindedAt: string | null; riderTakenAt?: string | null }
 
 interface Db {
   users: User[]
@@ -139,7 +140,7 @@ interface Db {
   checkTickets: Record<string, { code: string; videoRequired: boolean; issuedAt: string }>
   listingChecks: Record<string, { code: string | null; videoKey: string | null; serial: string | null; proofKey: string | null }>
   /** The rest of each claim, by claim id: never sent to the buyer or seller. */
-  claimDetails: Record<string, { riderId: string | null; address: string; location: GeoPoint; phone: string; tripKobo: Kobo; sellerShareKobo: Kobo }>
+  claimDetails: Record<string, { riderId: string | null; takenAt?: string | null; address: string; location: GeoPoint; phone: string; tripKobo: Kobo; sellerShareKobo: Kobo }>
   shopPickups: Record<string, ShopPickup>
   excusedFailures: string[]
   deliveryPricing: DeliveryPricing
@@ -920,7 +921,18 @@ function processDeadlines(db: Db, now: number): boolean {
       notifyShop(db, o.merchantId, 'store_order_confirm_soon', o.listingId, iso(now))
     }
   }
+  // Taken but not collected in time: back in the pool (riderLimits.ts).
+  for (const o of db.orders) {
+    if (o.status === 'dispatched' && o.riderId && !o.collectedAt && o.riderTakenAt && collectionOverdue(collectBy(o.riderTakenAt), now)) Object.assign(o, { riderId: null, riderTakenAt: null, collectionPhotos: null })
+    const d = o.claim?.status === 'awaiting_pickup' ? db.claimDetails[o.claim.id] : null
+    if (d?.riderId && d.takenAt && collectionOverdue(collectBy(d.takenAt), now)) Object.assign(d, { riderId: null, takenAt: null })
+  }
   return changed
+}
+
+/** Everything a rider is holding: deliveries, refused items going back, and returns (private.rider_jobs_held). */
+function riderJobsHeld(db: Db, riderId: string): number {
+  return db.orders.filter((o) => (o.riderId === riderId && (o.status === 'dispatched' || o.returnState === 'returning')) || (o.claim && (o.claim.status === 'awaiting_pickup' || o.claim.status === 'returning') && db.claimDetails[o.claim.id]?.riderId === riderId)).length
 }
 
 /** payouts.ts payoutsFor decides; this records it. A line only ever moves forward. */
@@ -1092,7 +1104,7 @@ function accountFacts(db: Db, userId: string) {
 }
 
 function orderView(db: Db, order: MockOrder, forBuyer = false): OrderView {
-  const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, paidFeeCashKobo: _feeCash, paidFeeCreditKobo: _feeCredit, checkoutId: _checkoutId, confirmRemindedAt: _reminded, ...o } = order
+  const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, paidFeeCashKobo: _feeCash, paidFeeCreditKobo: _feeCredit, checkoutId: _checkoutId, confirmRemindedAt: _reminded, riderTakenAt: _taken, ...o } = order
   const l = db.listings.find((x) => x.id === o.listingId)!
   const merchant = db.merchants.find((m) => m.id === o.merchantId)!
   const r = db.reviews.find((x) => x.orderId === o.id)
@@ -1807,6 +1819,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
             return {
               id: o.id, quantity: o.quantity, confirmPhoto: o.confirmPhoto, collected: !!o.collectedAt, returning: o.returnState === 'returning', productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, fulfilment: o.fulfilment, status: o.status,
               dispatchedAt: o.dispatchedAt, deliveredAt: o.deliveredAt, mine: !!o.riderId,
+              collectBy: o.riderId === me && o.status === 'dispatched' && !o.collectedAt && o.riderTakenAt ? collectBy(o.riderTakenAt) : null,
               collectFrom: o.handledBy === 'drawmart' ? { name: 'DrawMart escrow', area: 'Lagos' } : { name: merchant.name, area: merchant.area, ...(o.riderId === me && ((o.status === 'dispatched' && !o.collectedAt) || o.returnState === 'returning') ? db.shopPickups[o.merchantId] : {}) },
               pickupPoint: o.pickupPoint,
               dropOff: carrying ? { buyerName: db.users.find((u) => u.id === o.buyerId)?.displayName ?? 'Buyer', address: o.delivery.address, location: o.delivery.location, contactPhone: o.delivery.contactPhone } : null,
@@ -1818,9 +1831,12 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     takeDelivery: (orderId) =>
       tx((db) => {
         const me = rider()
+        const full = takeJobError(riderJobsHeld(db, me))
+        if (full) throw new ApiError('invalid_input', full)
         const o = db.orders.find((x) => x.id === orderId && x.status === 'dispatched' && !x.riderId)
         if (!o) throw new ApiError('invalid_input', 'Another rider has taken this delivery.')
         o.riderId = me
+        o.riderTakenAt = iso(now())
         o.collectedAt = o.isPrize ? iso(now()) : null
       }),
 
@@ -1830,6 +1846,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const o = db.orders.find((x) => x.id === orderId && x.status === 'dispatched' && x.riderId === me)
         if (!o) throw new ApiError('invalid_input', 'Only deliveries you’re carrying can be handed back.')
         o.riderId = null
+        o.riderTakenAt = null
         o.collectedAt = null
         o.collectionPhotos = null
       }),
@@ -2403,7 +2420,9 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           const l = getListingOr404(db, o.listingId)
           const shop = db.merchants.find((m) => m.id === o.merchantId)!
           return [{
-            id: o.claim.id, kind: o.claim.kind, status: o.claim.status, mine: !!d.riderId, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, quantity: o.quantity, category: l.category,
+            id: o.claim.id, kind: o.claim.kind, status: o.claim.status, mine: !!d.riderId,
+            collectBy: d.riderId === me && o.claim.status === 'awaiting_pickup' && d.takenAt ? collectBy(d.takenAt) : null,
+            productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, quantity: o.quantity, category: l.category,
             returnTo: { name: shop.name, area: shop.area, ...(d.riderId === me && o.claim.status === 'returning' ? db.shopPickups[o.merchantId] : {}) },
             pickupFrom: d.riderId === me && o.claim.status === 'awaiting_pickup' ? { buyerName: db.users.find((u) => u.id === o.buyerId)?.displayName ?? 'Buyer', address: d.address, location: d.location, contactPhone: d.phone } : null,
           }]
@@ -2413,15 +2432,17 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     takeReturn: (claimId) =>
       tx((db) => {
         const o = db.orders.find((x) => x.claim?.id === claimId && x.claim.status === 'awaiting_pickup')
+        const full = takeJobError(riderJobsHeld(db, rider()))
+        if (full) throw new ApiError('invalid_input', full)
         if (!o || db.claimDetails[claimId].riderId) throw new ApiError('invalid_input', 'Another rider has taken this return.')
-        db.claimDetails[claimId].riderId = rider()
+        Object.assign(db.claimDetails[claimId], { riderId: rider(), takenAt: iso(now()) })
       }),
 
     releaseReturn: (claimId) =>
       tx((db) => {
         const o = db.orders.find((x) => x.claim?.id === claimId && x.claim.status === 'awaiting_pickup')
         if (!o || db.claimDetails[claimId].riderId !== rider()) throw new ApiError('invalid_input', 'Only returns you haven’t collected can be handed back.')
-        db.claimDetails[claimId].riderId = null
+        Object.assign(db.claimDetails[claimId], { riderId: null, takenAt: null })
       }),
 
     passReturnPickup: (claimId, photos) =>

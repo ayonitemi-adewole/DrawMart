@@ -2536,6 +2536,35 @@ describe('cart and checkout', () => {
       expect(o.delivered_at).not.toBeNull()
     })
 
+    it('holds a rider to 5 jobs, and sends uncollected ones back after 2 hours', async () => {
+      const busy = await newUser('busy-rider@example.com', { role: 'delivery' })
+      const ids: string[] = []
+      for (let i = 0; i < 6; i++) ids.push((await readyOrder(`limit${i}@example.com`)).id)
+      for (const id of ids.slice(0, 5)) await asUser(busy, `select public.take_delivery($1)`, [id])
+      expect((await expectFail(asUser(busy, `select public.take_delivery($1)`, [ids[5]]), 'invalid_input')).detail).toContain('5 jobs, the most')
+      const mine = async () => (await asUser<{ j: (Job & { collectBy: string | null; collected: boolean })[] }>(busy, `select public.delivery_jobs() j`))[0].j
+      expect((await mine()).find((j) => j.id === ids[0])?.collectBy).toBeTruthy()
+
+      // One collected, the rest taken over 2 hours ago.
+      await asUser(busy, `select public.pass_collection($1, array['/assets/check.jpg'])`, [ids[0]])
+      await admin(`update public.orders set rider_assigned_at = now() - interval '121 minutes' where id = any($1)`, [ids.slice(0, 4)])
+      await admin(`select private.process_deadlines()`)
+      const after = await mine()
+      expect(after.find((j) => j.id === ids[0])).toMatchObject({ mine: true, collected: true, collectBy: null })
+      for (const id of ids.slice(1, 4)) expect(after.find((j) => j.id === id)).toMatchObject({ mine: false, collectBy: null })
+      expect(after.find((j) => j.id === ids[4])?.mine).toBe(true) // still within its time
+      const why = await admin<{ order_id: string; reason: string }>(`select order_id, reason from private.job_releases where rider_id = $1`, [busy])
+      expect(why.map((r) => r.reason)).toEqual(['not_collected', 'not_collected', 'not_collected'])
+
+      // Room again, and admins can change the limit.
+      await asUser(busy, `select public.take_delivery($1)`, [ids[5]])
+      await admin(`update public.app_settings set rider_max_jobs = 3`)
+      expect((await expectFail(asUser(busy, `select public.take_delivery($1)`, [ids[1]]), 'invalid_input')).detail).toContain('3 jobs, the most')
+      await admin(`update public.app_settings set rider_max_jobs = 5`)
+      await asUser(busy, `select public.release_delivery($1)`, [ids[5]])
+      expect((await admin<{ reason: string }>(`select reason from private.job_releases where order_id = $1`, [ids[5]])).map((r) => r.reason)).toEqual(['handed_back'])
+    })
+
     describe('checks', () => {
       const SHOP = '11111111-1111-4111-8111-000000000005'
       let seller: string, staffUser: string

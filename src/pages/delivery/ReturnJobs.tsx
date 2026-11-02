@@ -9,6 +9,7 @@ import { Sheet } from '@/components/Sheet'
 import { useToast } from '@/components/toast'
 import { Badge, Button, Card, EmptyState, ErrorState, Field, Notice, ProductImage, Skeleton, cx, errorMessage, inputCls } from '@/components/ui'
 import { directionsUrl } from '@/domain/location'
+import { CollectByLine, CollectByNotice } from './CollectBy'
 
 /** The Returns tab: items going from a buyer back to a seller. */
 export function ReturnJobList() {
@@ -29,6 +30,7 @@ export function ReturnJobList() {
               <strong className="leading-tight">{j.listingTitle}{j.quantity > 1 ? ` × ${j.quantity}` : ''}</strong>
               <ProductId code={j.productCode} />
               <span className="text-xs text-subtle">Buyer → {j.returnTo.name}, {j.returnTo.area}</span>
+              {j.collectBy ? <CollectByLine at={j.collectBy} /> : null}
             </div>
           </div>
           {j.mine ? (
@@ -112,6 +114,7 @@ function CollectFromBuyer({ job: j }: { job: ReturnJob }) {
   return (
     <>
       <Place icon={UserIcon} title={`Collect from ${from?.buyerName ?? 'the buyer'}`} address={from?.address} location={from?.location} phone={from?.contactPhone} callLabel="Call the buyer" />
+      {j.collectBy ? <CollectByNotice at={j.collectBy} /> : null}
       <Card className="flex flex-col gap-4 p-4">
         <strong className="flex items-center gap-2">
           <CheckCircleIcon size={16} className="text-brand" /> Check it before you take it

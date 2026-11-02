@@ -11,9 +11,11 @@ import { DELIVERY_PIN_LENGTH, MAX_PIN_ATTEMPTS, PIN_LOCK_MINUTES, isDeliveryPin 
 import { COLLECTION_CHECKS, COLLECTION_PROBLEMS, COLLECTION_PROBLEM_TEXT, REFUSAL_REASONS, REFUSAL_TEXT, collectionFailError, photosError } from '@/domain/deliveryChecks'
 import type { CollectionProblem, RefusalReason } from '@/domain/types'
 import { RiderPhotos } from '@/components/RiderPhotos'
+import { CollectByLine, CollectByNotice } from './CollectBy'
 import { ReturnJobList } from './ReturnJobs'
 import { directionsUrl } from '@/domain/location'
 import { matchesProductSearch } from '@/domain/productCode'
+import { takeJobError } from '@/domain/riderLimits'
 import { dateTime, timeOfDay } from '@/lib/time'
 
 const RouteMap = lazy(() => import('@/components/RouteMap'))
@@ -33,6 +35,8 @@ export function DeliveryPage() {
   const [search, setSearch] = useState('')
   const jobs = q.data ?? []
   const mineCount = jobs.filter((j) => inTab(j, 'mine')).length
+  // The server has the final say: admins can change the limit.
+  const full = takeJobError(mineCount + (returns.data ?? []).filter((r) => r.mine).length)
   const tab = TABS.find((t) => t === params.get('tab')) ?? (q.data && !mineCount ? 'available' : 'mine')
   const shown = jobs.filter((j) => inTab(j, tab) && matchesProductSearch(search, j.productCode, j.listingTitle, j.collectFrom.name, destination(j)))
 
@@ -54,6 +58,7 @@ export function DeliveryPage() {
         ]}
       />
       {tab === 'returns' ? <ReturnJobList /> : null}
+      {full && (tab === 'available' || tab === 'returns') ? <Notice tone="ticket">{full}</Notice> : null}
       {jobs.length && tab !== 'returns' ? <ProductSearch value={search} onChange={setSearch} /> : null}
       {tab === 'returns' ? null : q.isPending ? (
         <Skeleton className="h-60" />
@@ -91,6 +96,7 @@ function JobCard({ job: j, tab }: { job: DeliveryJob; tab: Tab }) {
         <span className="text-xs text-subtle">
           {j.collectFrom.name} → {destination(j)}
         </span>
+        {tab === 'mine' && j.collectBy ? <CollectByLine at={j.collectBy} /> : null}
         {tab === 'done' && j.deliveredAt ? <span className="text-xs text-subtle">Delivered {dateTime(j.deliveredAt)}</span> : null}
       </div>
     </div>
@@ -212,7 +218,10 @@ function JobDetails({ job: j }: { job: DeliveryJob }) {
           <RefuseAtDoor job={j} />
         </>
       ) : (
-        <CollectionCheck job={j} />
+        <>
+          {j.collectBy ? <CollectByNotice at={j.collectBy} /> : null}
+          <CollectionCheck job={j} />
+        </>
       )}
       <HandBack job={j} />
     </>
