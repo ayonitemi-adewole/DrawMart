@@ -9,6 +9,7 @@ import type { StoreRole } from '@/domain/team'
 import type { Discount } from '@/domain/discounts'
 import type { PricingStats } from '@/domain/drawPricing'
 import { STORE_APPLICATION_ERROR_TEXT, validateStoreApplication } from '@/domain/storeApplications'
+import type { RiderEarning } from '@/domain/riderPay'
 import type { PayoutAccount, PayoutKind, PayoutStatus } from '@/domain/payouts'
 import type { ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews, StoreApplicationView, SupportMessage, SupportThreadSummary, QuickReply, BulkUploadResult, IncomingStoreInvite, StoreActivityEntry, StoreTeam } from './types'
 import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js'
@@ -40,6 +41,7 @@ import {
   type NewPickupInput,
   type DeliveryJob,
   type CounterItem,
+  type RiderPayDue,
   type NotificationView,
   type PickupItemInput,
   type SavedPickupView,
@@ -1160,6 +1162,11 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     },
 
     getPayoutAccount: async () => {
+      const p = await myProfile()
+      if (p.role === 'delivery') {
+        const row = unwrap(await client.from('rider_payout_accounts').select(PAYOUT_ACCOUNT_SELECT).eq('rider_id', p.id).maybeSingle<PayoutAccountRow>())
+        return row ? toPayoutAccount(row) : null
+      }
       const id = await myMerchantId()
       const row = unwrap(await client.from('payout_accounts').select(PAYOUT_ACCOUNT_SELECT).eq('merchant_id', id).maybeSingle<PayoutAccountRow>())
       return row ? toPayoutAccount(row) : null
@@ -1226,6 +1233,22 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       return { areas: unwrap(areas), prices: unwrap(prices).map((p) => ({ areaA: p.area_a, areaB: p.area_b, priceKobo: num(p.price_kobo) })), sizeExtras }
     },
     setDeliveryPrice: (areaA, areaB, priceKobo) => rpc('set_delivery_price', { p_area_a: areaA, p_area_b: areaB, p_price_kobo: priceKobo }),
+    getRiderPayRates: async () => {
+      const [pays, extras, settings] = await Promise.all([
+        client.from('rider_pay_rates').select('area_a, area_b, pay_kobo').returns<{ area_a: string; area_b: string; pay_kobo: number }[]>(),
+        client.from('rider_pay_size_extras').select('size, extra_kobo').returns<{ size: PackageSize; extra_kobo: number }[]>(),
+        client.from('app_settings').select('rider_attempt_pay_kobo').single<{ rider_attempt_pay_kobo: number }>(),
+      ])
+      const sizeExtras: Record<PackageSize, Kobo> = { small: 0, medium: 0, large: 0 }
+      for (const e of unwrap(extras)) sizeExtras[e.size] = num(e.extra_kobo)
+      return { pays: unwrap(pays).map((p) => ({ areaA: p.area_a, areaB: p.area_b, payKobo: num(p.pay_kobo) })), sizeExtras, attemptKobo: num(unwrap(settings).rider_attempt_pay_kobo) }
+    },
+    setRiderPay: (areaA, areaB, payKobo) => rpc('set_rider_pay', { p_area_a: areaA, p_area_b: areaB, p_pay_kobo: payKobo }),
+    setRiderSizeExtra: (size, extraKobo) => rpc('set_rider_size_extra', { p_size: size, p_extra_kobo: extraKobo }),
+    setRiderAttemptPay: (payKobo) => rpc('set_rider_attempt_pay', { p_kobo: payKobo }),
+    listMyEarnings: () => rpc<RiderEarning[]>('my_earnings'),
+    listRiderPayDue: () => rpc<RiderPayDue[]>('rider_pay_due').then((rows) => rows.map((r) => ({ ...r, lines: r.lines ?? [] }))),
+    markRiderPaid: (riderId, reference) => rpc('mark_rider_paid', { p_rider: riderId, p_reference: reference }),
     setDeliverySizeExtra: (size, extraKobo) => rpc('set_delivery_size_extra', { p_size: size, p_extra_kobo: extraKobo }),
     chooseRedelivery: (orderId, choice) =>
       rpc('choose_redelivery', { p_order_id: orderId, p_window_start: 'windowStart' in choice ? choice.windowStart : null, p_pickup_point_id: 'pickupPointId' in choice ? choice.pickupPointId : null }),

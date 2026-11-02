@@ -17,6 +17,7 @@ import type { PricingStats } from '@/domain/drawPricing'
 import type { CodeCheck, Discount, DiscountInput, ListingSale } from '@/domain/discounts'
 import type { StoreRole } from '@/domain/team'
 import type { PayoutAccount, PayoutLine } from '@/domain/payouts'
+import type { RiderEarning, RiderPayRates } from '@/domain/riderPay'
 import type { NotificationPreference, PushPreferences, PushSubscriptionKeys } from '@/domain/push'
 import type { OrderError } from '@/domain/orders'
 import type { PurchaseError } from '@/domain/rules'
@@ -334,6 +335,14 @@ export interface DeliveryJob {
   /** Only for the rider carrying it, once it's passed the check. Never in the pool, and gone once delivered. */
   dropOff: { buyerName: string; address: string; location: GeoPoint | null; contactPhone: string } | null
   pinLockedUntil: string | null
+}
+
+/** A rider with pay due from finished weeks, for admins (riderPay.ts). */
+export interface RiderPayDue {
+  riderId: string
+  riderName: string
+  account: PayoutAccount | null
+  lines: RiderEarning[]
 }
 
 /** An order as counter staff see it (counter.ts). The buyer's name only once it's on the shelf. */
@@ -879,6 +888,7 @@ export interface DrawMartApi {
   /** Orders for this store's items, with delivery details. */
   listMerchantOrders(): Promise<OrderView[]>
   listPayouts(): Promise<PayoutLineView[]>
+  /** The seller's account, or a rider's own. */
   getPayoutAccount(): Promise<PayoutAccount | null>
   listBanks(): Promise<BankOption[]>
   /** Asks the bank whose account this is. Saves nothing. */
@@ -981,6 +991,16 @@ export interface DrawMartApi {
   /** What delivery costs, for checkout and the admin page. Public, since it's only prices. */
   getDeliveryPricing(): Promise<DeliveryPricing>
   setDeliveryPrice(areaA: string, areaB: string, priceKobo: Kobo): Promise<void>
+  /** What riders are paid per trip, beside the delivery prices (riderPay.ts). */
+  getRiderPayRates(): Promise<RiderPayRates>
+  setRiderPay(areaA: string, areaB: string, payKobo: Kobo): Promise<void>
+  setRiderSizeExtra(size: PackageSize, extraKobo: Kobo): Promise<void>
+  setRiderAttemptPay(payKobo: Kobo): Promise<void>
+  /** The signed-in rider's earnings, newest first. */
+  listMyEarnings(): Promise<RiderEarning[]>
+  listRiderPayDue(): Promise<RiderPayDue[]>
+  /** Everything from finished weeks, sent by hand with this transfer reference. */
+  markRiderPaid(riderId: string, reference: string): Promise<void>
   setDeliverySizeExtra(size: PackageSize, extraKobo: Kobo): Promise<void>
   /** Where this seller's items leave from. */
   setShopDeliveryArea(area: string): Promise<void>

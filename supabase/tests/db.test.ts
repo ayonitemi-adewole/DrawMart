@@ -2621,6 +2621,69 @@ describe('cart and checkout', () => {
       expect(pushes.map((p) => p.body).join(' ')).not.toMatch(/Awolowo|[0-9]{6}/)
     })
 
+    it('pays riders per job from rates within the delivery price, weekly, into a held account', async () => {
+      const payee = await newUser('paid-rider@example.com', { role: 'delivery' })
+      // Rates: never more than the buyer pays, from either side.
+      await expectFail(asUser(payee, `select public.set_rider_pay('ikeja', 'epe', 10000)`), 'forbidden')
+      const [{ price }] = await admin<{ price: string }>(`select price_kobo price from public.delivery_prices where area_a = 'epe' and area_b = 'ikeja'`)
+      await expectFail(asUser(staff, `select public.set_rider_pay('ikeja', 'epe', $1)`, [Number(price) + 1]), 'invalid_input')
+      await asUser(staff, `select public.set_rider_pay('ikeja', 'epe', $1)`, [Number(price)])
+      await expectFail(asUser(staff, `select public.set_delivery_price('epe', 'ikeja', $1)`, [Number(price) - 10_000]), 'invalid_input')
+      await asUser(staff, `select public.set_rider_pay('ikeja', 'epe', $1)`, [Math.floor((Number(price) * 0.7) / 5000) * 5000])
+      await expectFail(asUser(staff, `select public.set_rider_size_extra('large', 10000000)`), 'invalid_input')
+      await asUser(staff, `select public.set_rider_attempt_pay(40000)`)
+      expect(await admin(`select count(*)::int n from public.rider_pay_rates r join public.delivery_prices d using (area_a, area_b) where r.pay_kobo > d.price_kobo`)).toEqual([{ n: 0 }])
+
+      // A delivery and a failed attempt earn, once each, at today's rates.
+      const { b, id } = await readyOrder('paid-buyer@example.com')
+      await asUser(payee, `select public.take_delivery($1)`, [id])
+      await asUser(payee, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+      await asUser(payee, `select public.mark_arrived($1)`, [id])
+      await admin(`update public.orders set arrived_at = now() - interval '11 minutes' where id = $1`, [id])
+      await asUser(payee, `select public.fail_delivery_attempt($1, '/assets/door.jpg', 6.45, 3.43)`, [id])
+      await asUser(b, `select public.choose_redelivery($1, null, 'ikeja')`, [id])
+      const counter = await newUser('paid-counter@example.com', { role: 'delivery' })
+      await admin(`update public.profiles set pickup_point_id = 'ikeja' where id = $1`, [counter])
+      const [{ code }] = await admin<{ code: string }>(`select l.product_code code from public.orders o join public.listings l on l.id = o.listing_id where o.id = $1`, [id])
+      await asUser(counter, `select public.receive_at_counter($1, $2)`, [id, code])
+      await asUser(counter, `select public.counter_hand_over($1, $2)`, [id, (await pinsOf(b))[id]])
+      const earned = await asUser<{ kind: string; amount_kobo: number; from_area: string | null; to_area: string | null }>(payee, `select kind, amount_kobo, from_area, to_area from public.rider_earnings order by kind`)
+      const [{ expected }] = await admin<{ expected: number }>(`select private.rider_pay('ikeja', 'ikeja', 'large') expected`)
+      expect(earned).toEqual([
+        { kind: 'delivery', amount_kobo: expected, from_area: 'ikeja', to_area: 'ikeja' },
+        { kind: 'failed_attempt', amount_kobo: 40000, from_area: null, to_area: null },
+      ])
+      // Nobody else sees them, and riders can't write them.
+      expect(await asUser(rider, `select id from public.rider_earnings`)).toEqual([])
+      await expect(asUser(payee, `update public.rider_earnings set amount_kobo = 1`)).rejects.toThrow(/permission denied/)
+
+      // Only finished weeks, only into a confirmed account, held after a change.
+      const due = async () => (await asUser<{ d: { riderId: string; lines: unknown[] }[] }>(staff, `select public.rider_pay_due() d`))[0].d.filter((x) => x.riderId === payee)
+      expect(await due()).toEqual([])
+      await admin(`update public.rider_earnings set earned_at = earned_at - interval '7 days' where rider_id = $1`, [payee])
+      expect((await due())[0].lines).toHaveLength(2)
+      await expectFail(asUser(staff, `select public.mark_rider_paid($1, 'TRF-1')`, [payee]), 'invalid_input') // no account
+      expect(await admin(`select public.note_bank_lookup($1) r`, [counter])).toEqual([{ r: 'not_seller' }])
+      expect(await admin(`select public.note_bank_lookup($1) r`, [payee])).toEqual([{ r: 'ok' }])
+      await admin(`select public.save_payout_account($1, '044', 'Access Bank', '0690000032', 'BAYO RIDER')`, [payee])
+      expect(await asUser(payee, `select account_name from public.rider_payout_accounts`)).toEqual([{ account_name: 'BAYO RIDER' }])
+      expect(await asUser(rider, `select account_name from public.rider_payout_accounts`)).toEqual([])
+      await expectFail(asUser(payee, `select public.mark_rider_paid($1, 'TRF-1')`, [payee]), 'forbidden')
+      await expectFail(asUser(staff, `select public.mark_rider_paid($1, 'x')`, [payee]), 'invalid_input')
+      await asUser(staff, `select public.mark_rider_paid($1, 'TRF-1')`, [payee])
+      expect(await due()).toEqual([])
+      expect(await asUser(payee, `select reference, paid_to from public.rider_earnings`)).toEqual([
+        { reference: 'TRF-1', paid_to: 'Access Bank •••• 0032' },
+        { reference: 'TRF-1', paid_to: 'Access Bank •••• 0032' },
+      ])
+      expect(await asUser(payee, `select kind from public.notifications where kind = 'rider_paid'`)).toHaveLength(1)
+
+      await admin(`select public.save_payout_account($1, '058', 'GTBank', '0123456789', 'BAYO RIDER')`, [payee])
+      expect(await asUser(payee, `select kind from public.notifications where kind = 'rider_bank_changed'`)).toHaveLength(1)
+      await admin(`insert into public.rider_earnings (rider_id, kind, source_id, amount_kobo, earned_at) values ($1, 'failed_attempt', gen_random_uuid(), 40000, now() - interval '8 days')`, [payee])
+      await expectFail(asUser(staff, `select public.mark_rider_paid($1, 'TRF-2')`, [payee]), 'invalid_input') // on hold
+    })
+
     it('records a missed buyer after the wait, rebooks once, then sends it back less delivery', async () => {
       const carrier = await newUser('missed-rider@example.com', { role: 'delivery' })
       const b = await newUser('missed-buyer@example.com')

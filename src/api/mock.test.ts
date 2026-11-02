@@ -1,5 +1,6 @@
 import type { NewProductInput } from './types'
 import { redeliveryWindows } from '@/domain/deliveryAttempts'
+import { areaPairPay, tripPay } from '@/domain/riderPay'
 import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO } from '@/domain/deliveryChecks'
 import { returnFeeKobo, sellerShareOfReturnFee } from '@/domain/claims'
 import { areaPairPrice, deliveryFeeKobo, placeholderPricing } from '@/domain/deliveryFees'
@@ -770,6 +771,95 @@ describe('mock api', () => {
       await api.reviewClaim(c.id, true, '')
       await as(api, 'store')
       expect((await api.listPayouts()).filter((l) => l.orderId === order.id)).toEqual([])
+    })
+  })
+
+  describe('rider pay', () => {
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+
+    it('pays each job from the rate table, weekly, into a confirmed account', async () => {
+      // A Monday morning in Lagos.
+      const c = { t: Date.parse('2026-11-02T10:00:00+01:00') }
+      const api = make(() => c.t)
+
+      // Rates stay within what the buyer pays, both ways round.
+      await as(api, 'admin')
+      const rates = await api.getRiderPayRates()
+      const pricing = await api.getDeliveryPricing()
+      await expect(api.setRiderPay('ikeja', 'vi', 600_000)).rejects.toThrow('can’t be more')
+      const far = areaPairPrice(pricing, 'ikeja', 'epe')
+      await api.setRiderPay('ikeja', 'epe', far)
+      await expect(api.setDeliveryPrice('ikeja', 'epe', far - 10_000)).rejects.toThrow('Lower the rider pay first')
+      await api.setRiderPay('epe', 'ikeja', areaPairPay(rates, 'ikeja', 'epe'))
+      await expect(api.setRiderSizeExtra('large', pricing.sizeExtras.large + 1)).rejects.toThrow('can’t be more')
+      await api.setRiderAttemptPay(k(400))
+      await as(api, 'rider')
+      await expect(api.setRiderAttemptPay(k(400))).rejects.toMatchObject({ code: 'forbidden' })
+
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Paid lamp', description: '', category: 'Home', priceKobo: k(20_000), stock: 2 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const [missed] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      const [made] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await as(api, 'store')
+      for (const o of [missed, made]) {
+        await api.sellerConfirmOrder(o.id, '/assets/c.jpg')
+        await api.dispatchOrder(o.id)
+      }
+      await as(api, 'rider')
+      for (const o of [missed, made]) {
+        await api.takeDelivery(o.id)
+        await api.passCollection(o.id, ['/assets/a.jpg'])
+      }
+      await api.confirmDelivery(made.id, made.deliveryPin!)
+      await api.markArrived(missed.id)
+      c.t += 10 * 60_000
+      await api.failDeliveryAttempt(missed.id, '/assets/door.jpg', delivery.location)
+
+      const lines = await api.listMyEarnings()
+      const trip = lines.find((l) => l.kind === 'delivery')!
+      expect(trip).toMatchObject({ productCode: p.productCode, fromArea: 'ikeja', paidAt: null })
+      expect(trip.amountKobo).toBe(tripPay(rates, trip.fromArea!, trip.toArea!, 'large'))
+      expect(lines.find((l) => l.kind === 'failed_attempt')?.amountKobo).toBe(k(400))
+      // Never more than the buyer paid for the trip.
+      expect(trip.amountKobo).toBeLessThanOrEqual(made.deliveryFeeKobo)
+
+      // Paid once the week is over, into an account the bank confirmed.
+      await as(api, 'admin')
+      expect(await api.listRiderPayDue()).toEqual([])
+      c.t += 7 * 86_400_000
+      const [due] = await api.listRiderPayDue()
+      expect(due).toMatchObject({ riderId: 'u-rider', account: null })
+      expect(due.lines).toHaveLength(2)
+      await expect(api.markRiderPaid('u-rider', 'TRF-123')).rejects.toThrow('bank account')
+      await as(api, 'counter')
+      await expect(api.savePayoutAccount('044', '0690000032')).rejects.toMatchObject({ code: 'forbidden' })
+      await as(api, 'rider')
+      await api.savePayoutAccount('044', '0690000032')
+      expect(await api.getPayoutAccount()).toMatchObject({ bankName: 'Access Bank', accountNumber: '0690000032' })
+      await as(api, 'admin')
+      await expect(api.markRiderPaid('u-rider', 'x')).rejects.toThrow('reference')
+      await api.markRiderPaid('u-rider', 'TRF-123')
+      expect(await api.listRiderPayDue()).toEqual([])
+
+      await as(api, 'rider')
+      expect((await api.listMyEarnings()).every((l) => l.reference === 'TRF-123' && l.paidTo?.includes('0032'))).toBe(true)
+      expect((await api.listNotifications()).some((n) => n.kind === 'rider_paid')).toBe(true)
+
+      // The buyer never chose a new time, so the rider takes it back: a return, to the seller's area.
+      await api.completeReturn(missed.id, '/assets/b.jpg')
+      c.t += 7 * 86_400_000
+      // A changed account holds pay, and the rider is told.
+      await api.savePayoutAccount('058', '0123456789')
+      expect((await api.listNotifications()).some((n) => n.kind === 'rider_bank_changed')).toBe(true)
+      await as(api, 'admin')
+      const [again] = await api.listRiderPayDue()
+      expect(again.lines.map((l) => l.kind)).toEqual(['return'])
+      expect(again.lines[0]).toMatchObject({ fromArea: trip.toArea, toArea: 'ikeja' })
+      await expect(api.markRiderPaid('u-rider', 'TRF-456')).rejects.toThrow('on hold')
     })
   })
 

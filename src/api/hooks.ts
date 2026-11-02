@@ -51,6 +51,9 @@ export const keys = {
   returnJobs: ['return-jobs'] as const,
   riderAreas: ['rider-areas'] as const,
   myCounter: ['my-counter'] as const,
+  riderPayRates: ['rider-pay-rates'] as const,
+  myEarnings: ['my-earnings'] as const,
+  riderPayDue: ['rider-pay-due'] as const,
   counterItems: ['counter-items'] as const,
   pending: ['pending'] as const,
   myOrders: ['my-orders'] as const,
@@ -627,7 +630,25 @@ export function useWithdrawListing() {
 }
 
 export const usePayouts = () => useQuery({ queryKey: keys.payouts, queryFn: () => api.listPayouts(), enabled: useHasShop() })
-export const usePayoutAccount = () => useQuery({ queryKey: keys.payoutAccount, queryFn: () => api.getPayoutAccount(), enabled: useHasShop() })
+export function usePayoutAccount() {
+  const hasShop = useHasShop()
+  const rider = useIs('delivery')
+  const enabled = hasShop || rider
+  return useQuery({ queryKey: keys.payoutAccount, queryFn: () => api.getPayoutAccount(), enabled })
+}
+export const useRiderPayRates = () => useQuery({ queryKey: keys.riderPayRates, queryFn: () => api.getRiderPayRates(), enabled: useIs('admin') })
+export const useMyEarnings = () => useQuery({ queryKey: keys.myEarnings, queryFn: () => api.listMyEarnings(), enabled: useIs('delivery') })
+export const useRiderPayDue = () => useQuery({ queryKey: keys.riderPayDue, queryFn: () => api.listRiderPayDue(), enabled: useIs('admin') })
+
+export function useRiderPayActions() {
+  const invalidate = useInvalidateAll()
+  return {
+    setPay: useMutation({ mutationFn: ({ areaA, areaB, payKobo }: { areaA: string; areaB: string; payKobo: Kobo }) => api.setRiderPay(areaA, areaB, payKobo), onSettled: invalidate }),
+    setExtra: useMutation({ mutationFn: ({ size, extraKobo }: { size: PackageSize; extraKobo: Kobo }) => api.setRiderSizeExtra(size, extraKobo), onSettled: invalidate }),
+    setAttempt: useMutation({ mutationFn: (payKobo: Kobo) => api.setRiderAttemptPay(payKobo), onSettled: invalidate }),
+    markPaid: useMutation({ mutationFn: ({ riderId, reference }: { riderId: string; reference: string }) => api.markRiderPaid(riderId, reference), onSettled: invalidate }),
+  }
+}
 export const useBanks = () => useQuery({ queryKey: keys.banks, queryFn: () => api.listBanks(), staleTime: 60 * 60_000 })
 export const useDuePayouts = () => useQuery({ queryKey: keys.duePayouts, queryFn: () => api.listDuePayouts(), enabled: useIs('admin') })
 

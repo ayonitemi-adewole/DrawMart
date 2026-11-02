@@ -2,7 +2,7 @@ import { NavLink, Outlet, ScrollRestoration, useLocation, useNavigate } from 're
 import { canDo } from '@/domain/team'
 import { api } from '@/api'
 import { cancelRateFlagged } from '@/domain/orderCancel'
-import { useStoreRole, useSupportInbox, useSupportUnread, useStoreApplications, useOpenClaims, useAccess, useCancelRates, useDuePayouts, useMerchant, usePendingListings, usePendingWinnerStories, usePriceReviews, usePrizeOrders, useSellerApplications, useSignOut, useUnreadMessages, useUnreadNotifications } from '@/api/hooks'
+import { useStoreRole, useSupportInbox, useSupportUnread, useStoreApplications, useOpenClaims, useAccess, useCancelRates, useDuePayouts, useMerchant, useMyCounter, useRiderPayDue, usePendingListings, usePendingWinnerStories, usePriceReviews, usePrizeOrders, useSellerApplications, useSignOut, useUnreadMessages, useUnreadNotifications } from '@/api/hooks'
 import { UsersIcon, GiftIcon, InfoIcon, StarIcon, StoreIcon, AlertIcon, XIcon, BellIcon, NairaIcon, HeartIcon, ChartIcon, ChatIcon, TrendingUpIcon, TrophyIcon, TruckIcon, CheckIcon, ClipboardIcon, DiceIcon, HashIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
 import { NavMenu } from '@/components/NavMenu'
 import { ThemeToggle } from '@/components/ThemeToggle'
@@ -45,12 +45,16 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
   const access = useAccess()
   const unreadNotifications = useUnreadNotifications()
   const duePayouts = useDuePayouts()
+  const riderPayDue = useRiderPayDue()
+  const counter = useMyCounter()
   const signOut = useSignOut()
 
   const nav: NavItem[] =
     app === 'delivery'
       ? [
-          { to: '/delivery', label: 'Deliveries', icon: TruckIcon },
+          { to: '/delivery', label: counter.data ? 'Counter' : 'Deliveries', icon: TruckIcon },
+          // Counter staff aren't paid per job.
+          ...(counter.data ? [] : [{ to: '/delivery/earnings', label: 'Earnings', icon: NairaIcon }]),
           { to: '/delivery/notifications', label: 'Notifications', icon: BellIcon, count: unreadNotifications },
         ]
       : app === 'store'
@@ -82,6 +86,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
           { to: '/admin/claims', label: 'Claims', icon: AlertIcon, count: claims.data?.length ?? 0 },
           { to: '/admin/reviews', label: 'Reviews', icon: StarIcon },
           { to: '/admin/cancellations', label: 'Cancellations', icon: XIcon, count: cancelRates.data?.filter((r) => cancelRateFlagged(r.orders, r.cancelled)).length ?? 0 },
+          { to: '/admin/rider-pay', label: 'Rider pay', icon: NairaIcon, count: riderPayDue.data?.length ?? 0 },
           { to: '/admin/delivery', label: 'Delivery prices', icon: TruckIcon },
           { to: '/admin/boosts', label: 'Boosts', icon: TrendingUpIcon },
           { to: '/admin/draws', label: api.testMode ? 'Live draws & demo' : 'Live draws', icon: DiceIcon },

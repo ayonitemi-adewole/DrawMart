@@ -1,25 +1,27 @@
 import { useState, type FormEvent } from 'react'
-import { useDeliveryPricing, useSetDeliveryPrice, useSetDeliverySizeExtra } from '@/api/hooks'
+import { useDeliveryPricing, useRiderPayActions, useRiderPayRates, useSetDeliveryPrice, useSetDeliverySizeExtra } from '@/api/hooks'
 import { InfoIcon } from '@/components/icons'
 import { useToast } from '@/components/toast'
 import { Button, Card, ErrorState, Field, Notice, PageTitle, Skeleton, errorMessage, inputCls } from '@/components/ui'
 import { PACKAGE_SIZES, PACKAGE_SIZE_TEXT, areaPairPrice, deliveryPriceError, sizeExtraError } from '@/domain/deliveryFees'
 import { formatNaira, parseNairaInput } from '@/domain/money'
+import { areaPairPay, attemptPayError, riderPayError } from '@/domain/riderPay'
 import type { Kobo, PackageSize } from '@/domain/types'
 
 /** /admin/delivery: what buyers pay for delivery. A change applies to the next checkout. */
 export function AdminDeliveryPage() {
   const q = useDeliveryPricing()
+  const rates = useRiderPayRates()
   const [from, setFrom] = useState<string | null>(null)
   const area = from ?? q.data?.areas[0]?.id
 
   return (
     <div className="flex flex-col gap-6">
-      <PageTitle eyebrow="Admin" sub="What buyers pay at checkout: the price between two areas, plus an extra for bigger packages, from ₦1,000 to ₦5,000 in all.">
+      <PageTitle eyebrow="Admin" sub="What buyers pay at checkout: the price between two areas, plus an extra for bigger packages, from ₦1,000 to ₦5,000 in all. Below each, what the rider is paid for the same trip, which can’t be more.">
         Delivery prices
       </PageTitle>
       <Notice tone="ticket" icon={InfoIcon} title="These are placeholders">
-        They’re worked out from distance. Replace them with what riders actually charge.
+        They’re worked out from distance, and rider pay starts at 70% of each. Replace them with what riders actually charge.
       </Notice>
       {q.isPending ? (
         <Skeleton className="h-60" />
@@ -43,6 +45,19 @@ export function AdminDeliveryPage() {
                 <PriceRow key={`${area}-${to.id}`} from={area!} to={to.id} name={to.name} priceKobo={areaPairPrice(q.data, area!, to.id)} />
               ))}
             </ul>
+            {rates.data ? (
+              <div className="flex flex-col gap-1 border-t border-line pt-4">
+                <strong>Rider pay</strong>
+                <p className="text-xs text-subtle">What the rider gets for each of these trips, for a small package.</p>
+                <ul className="flex flex-col divide-y divide-line">
+                  {q.data.areas.map((to) => (
+                    <PayRow key={`pay-${area}-${to.id}`} from={area!} to={to.id} name={to.name} payKobo={areaPairPay(rates.data, area!, to.id)} chargedKobo={areaPairPrice(q.data, area!, to.id)} />
+                  ))}
+                </ul>
+              </div>
+            ) : rates.isError ? (
+              <ErrorState error={rates.error} onRetry={() => rates.refetch()} />
+            ) : null}
           </Card>
           <Card className="flex flex-col gap-4 p-5">
             <strong>Extra for package size</strong>
@@ -51,6 +66,20 @@ export function AdminDeliveryPage() {
                 <ExtraRow key={s} size={s} extraKobo={q.data.sizeExtras[s]} />
               ))}
             </ul>
+            {rates.data ? (
+              <>
+                <strong className="border-t border-line pt-4">Rider extra for package size</strong>
+                <ul className="flex flex-col divide-y divide-line">
+                  {PACKAGE_SIZES.map((s) => (
+                    <RiderExtraRow key={s} size={s} extraKobo={rates.data.sizeExtras[s]} chargedKobo={q.data.sizeExtras[s]} />
+                  ))}
+                </ul>
+                <strong className="border-t border-line pt-4">Rider pay per failed attempt</strong>
+                <ul className="flex flex-col">
+                  <AttemptRow payKobo={rates.data.attemptKobo} />
+                </ul>
+              </>
+            ) : null}
           </Card>
         </div>
       )}
@@ -84,6 +113,39 @@ function ExtraRow({ size, extraKobo }: { size: PackageSize; extraKobo: Kobo }) {
       save={(extraKobo) => set.mutateAsync({ size, extraKobo })}
     />
   )
+}
+
+function PayRow({ from, to, name, payKobo, chargedKobo }: { from: string; to: string; name: string; payKobo: Kobo; chargedKobo: Kobo }) {
+  const { setPay } = useRiderPayActions()
+  return (
+    <AmountRow
+      id={`pay-${to}`}
+      label={`To ${name} (buyer pays ${formatNaira(chargedKobo)})`}
+      valueKobo={payKobo}
+      error={(k) => riderPayError(k, chargedKobo)}
+      pending={setPay.isPending}
+      save={(payKobo) => setPay.mutateAsync({ areaA: from, areaB: to, payKobo })}
+    />
+  )
+}
+
+function RiderExtraRow({ size, extraKobo, chargedKobo }: { size: PackageSize; extraKobo: Kobo; chargedKobo: Kobo }) {
+  const { setExtra } = useRiderPayActions()
+  return (
+    <AmountRow
+      id={`rider-extra-${size}`}
+      label={`${PACKAGE_SIZE_TEXT[size].label} (buyer pays ${formatNaira(chargedKobo)})`}
+      valueKobo={extraKobo}
+      error={(k) => riderPayError(k, chargedKobo)}
+      pending={setExtra.isPending}
+      save={(extraKobo) => setExtra.mutateAsync({ size, extraKobo })}
+    />
+  )
+}
+
+function AttemptRow({ payKobo }: { payKobo: Kobo }) {
+  const { setAttempt } = useRiderPayActions()
+  return <AmountRow id="rider-attempt" label="Each failed attempt" valueKobo={payKobo} error={attemptPayError} pending={setAttempt.isPending} save={(k) => setAttempt.mutateAsync(k)} />
 }
 
 function AmountRow({ id, label, valueKobo, error, pending, save }: { id: string; label: string; valueKobo: Kobo; error: (k: Kobo) => string | null; pending: boolean; save: (k: Kobo) => Promise<void> }) {

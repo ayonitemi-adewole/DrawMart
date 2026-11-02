@@ -149,7 +149,8 @@ function Statement({ lines }: { lines: PayoutLineView[] }) {
   )
 }
 
-function BankAccount({ owed }: { owed: boolean }) {
+/** Also on a rider's Earnings page: the same checks and hold. */
+export function BankAccount({ owed }: { owed: boolean }) {
   const account = usePayoutAccount()
   const [changing, setChanging] = useState(false)
   if (account.isPending) return <Skeleton className="h-32" />

@@ -14,6 +14,10 @@ import { dateTime, ticketNo } from '@/lib/time'
 function describe(n: NotificationView, store: boolean): { icon: IconComponent; title: string; body: string; to: string } {
   const home = store ? '/store' : '/sell'
   switch (n.kind) {
+    case 'rider_paid':
+      return { icon: NairaIcon, title: 'Pay sent', body: 'We’ve sent your pay to your bank account. See which jobs it covered.', to: '/delivery/earnings' }
+    case 'rider_bank_changed':
+      return { icon: LockIcon, title: 'Bank account changed', body: 'If this wasn’t you, contact DrawMart now. Pay is on hold for now.', to: '/delivery/earnings' }
     case 'order_delivery_failed':
       return { icon: AlertIcon, title: `We missed you: ${n.listingTitle}`, body: 'Your rider couldn’t reach you. Choose a new time or a pickup location within 24 hours.', to: '/tickets?view=orders' }
     case 'store_order_undelivered':

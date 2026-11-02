@@ -39,6 +39,8 @@ import { ResultPage } from '@/pages/ResultPage'
 import { ConversationPage, MessagesPage, NewConversationPage } from '@/pages/MessagesPage'
 import { NotificationsPage } from '@/pages/NotificationsPage'
 import { ReturnJobPage } from '@/pages/delivery/ReturnJobs'
+import { EarningsPage } from '@/pages/delivery/EarningsPage'
+import { AdminRiderPayPage } from '@/pages/admin/AdminRiderPayPage'
 import { AdminClaimsPage } from '@/pages/admin/AdminClaimsPage'
 import { AdminReviewsPage } from '@/pages/admin/AdminReviewsPage'
 import { StoreReviewsPage } from '@/pages/merchant/SellerReviews'
@@ -214,6 +216,7 @@ const router = createBrowserRouter([
       { path: 'claims', element: <AdminClaimsPage /> },
       { path: 'reviews', element: <AdminReviewsPage /> },
       { path: 'delivery', element: <AdminDeliveryPage /> },
+      { path: 'rider-pay', element: <AdminRiderPayPage /> },
       { path: 'prizes', element: <AdminPrizesPage /> },
       { path: 'stories', element: <AdminStoriesPage /> },
       { path: 'sellers', element: <AdminSellersPage /> },
@@ -229,6 +232,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <DeliveryHome /> },
       { path: 'notifications', element: <NotificationsPage /> },
+      { path: 'earnings', element: <EarningsPage /> },
       { path: 'returns/:id', element: <ReturnJobPage /> },
       { path: ':id', element: <DeliveryJobPage /> },
     ],

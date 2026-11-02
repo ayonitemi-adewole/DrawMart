@@ -46,14 +46,14 @@ import { MAX_OPEN_DISCOUNTS, bestPrice, discountActive, discountErrors, normaliz
 import { DUPLICATE_CAC_TEXT, STORE_APPLICATION_ERROR_TEXT, normalizeCac, storeAccountBlocker, validateStoreApplication } from '@/domain/storeApplications'
 import { REVIEWS_SHOWN_FROM, averageRating, canReview, hideReasonError, replyError, reviewError, reviewerName } from '@/domain/reviews'
 import { shopPickupErrorText, shopPickupErrors, type ShopPickup } from '@/domain/shopPickup'
-import { DELIVERY_AREAS, areaFromText, nearestArea, checkoutDeliveryFees, deliveryPriceError, placeholderPricing, sizeExtraError, type DeliveryPricing } from '@/domain/deliveryFees'
+import { DEFAULT_AREA, DELIVERY_AREAS, areaFromText, nearestArea, checkoutDeliveryFees, deliveryPriceError, placeholderPricing, sizeExtraError, type DeliveryPricing } from '@/domain/deliveryFees'
 import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO, REFUSAL_REASONS, SUSPEND_AFTER_FAILURES, collectionFailError, photosError } from '@/domain/deliveryChecks'
 import { CONFIRM_HOURS, addConfirmTime, confirmDeadline, confirmOverdue, confirmReminderDue, needsConfirming } from '@/domain/orderConfirm'
 import { canCancelOrder, cancelError, stockAfterCancel } from '@/domain/orderCancel'
 import { canControlProduct, repriceNeedsReview, statusAfterStock, stockChangeError } from '@/domain/productControls'
 import { closingReminderSent, pickupReminderDue } from '@/domain/storeNotifications'
 import type { PayoutLineView } from './types'
-import { PAYOUT_ACCOUNT_HOLD_HOURS, accountNumberError, markPaidError, maskAccountNumber, payoutsFor, type PayoutAccount, type PayoutLine } from '@/domain/payouts'
+import { MIN_REFERENCE_LENGTH, PAYOUT_ACCOUNT_HOLD_HOURS, accountNumberError, accountPayable, markPaidError, maskAccountNumber, payoutsFor, type PayoutAccount, type PayoutLine } from '@/domain/payouts'
 import { newRejection, REJECTION_ERROR_TEXT, rejectionError, resentCautionFee } from '@/domain/rejection'
 import { DEMO_ACCOUNTS } from './demoAccounts'
 import {
@@ -71,6 +71,7 @@ import { COLLECT_WARNING_MINUTES, collectBy, collectionOverdue, takeJobError } f
 import { riderAreasError, riderJobAlertAllowed } from '@/domain/riderAlerts'
 import { counterCodeError, counterReminderDue, counterReturnDue } from '@/domain/counter'
 import { CHOOSE_WITHIN_HOURS, attemptError, redeliveryWindowError } from '@/domain/deliveryAttempts'
+import { attemptPayError, pairPayError, payableNow, placeholderRiderPay, riderPayError, tripPay, type EarningKind, type RiderEarning, type RiderPayRates } from '@/domain/riderPay'
 import { newProductCode } from '@/domain/productCode'
 import { MAX_SAVED_ADDRESSES, SAVED_ADDRESS_ERROR_TEXT, sortAddresses, validateSavedAddress, type SavedAddress, type SavedAddressInput } from '@/domain/addresses'
 import { CART_ERROR_TEXT, CHECKOUT_ERROR_TEXT, cartError, checkoutTotalKobo, isCar, isWonPrize, lineAmountKobo, validateCheckout } from '@/domain/cart'
@@ -109,7 +110,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v52' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v53' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -150,6 +151,10 @@ interface Db {
   shopPickups: Record<string, ShopPickup>
   excusedFailures: string[]
   deliveryPricing: DeliveryPricing
+  /** riderPay.ts. */
+  riderPayRates: RiderPayRates
+  riderEarnings: (RiderEarning & { riderId: string; sourceKey: string; paidBy: string | null })[]
+  riderPayoutAccounts: Record<string, PayoutAccount>
   priceReviews: { listingId: string; newPriceKobo: Kobo; requestedAt: string }[]
   /** By buyer, then listing. Anything not in here is one. */
   cartQuantities: Record<string, Record<string, number>>
@@ -634,6 +639,9 @@ async function freshDb(): Promise<Db> {
       return [m.id, { address: `12 Market Road, ${m.area}, Lagos`, location: { lat: a.lat, lng: a.lng }, contactPhone: '0803 000 0000' }]
     })),
     deliveryPricing: placeholderPricing(),
+    riderPayRates: placeholderRiderPay(placeholderPricing()),
+    riderEarnings: [],
+    riderPayoutAccounts: {},
     priceReviews: [],
     cartQuantities: {},
     saved: {},
@@ -1003,6 +1011,22 @@ function returnUndelivered(db: Db, o: MockOrder, now: number) {
   notifyShop(db, o.merchantId, 'store_order_undelivered', o.listingId, iso(now))
 }
 
+/** One earning at today's rates, once per job (private.earn). */
+function earn(db: Db, riderId: string | null, kind: EarningKind, sourceKey: string, o: MockOrder, from: string | null, to: string | null, now: number) {
+  if (!riderId || db.riderEarnings.some((e) => e.sourceKey === sourceKey && e.kind === kind)) return
+  const l = db.listings.find((x) => x.id === o.listingId)!
+  const [a, b] = [from ?? to ?? DEFAULT_AREA, to ?? from ?? DEFAULT_AREA]
+  const amountKobo = kind === 'failed_attempt' ? db.riderPayRates.attemptKobo : tripPay(db.riderPayRates, a, b, packageSizeOf(l))
+  if (amountKobo <= 0) return
+  db.riderEarnings.push({
+    id: uid('R'), riderId, sourceKey, kind, amountKobo, productCode: l.productCode, listingTitle: l.title, fromArea: kind === 'failed_attempt' ? null : a, toArea: kind === 'failed_attempt' ? null : b,
+    earnedAt: iso(now), paidAt: null, reference: null, paidTo: null, paidBy: null,
+  })
+}
+const sellerArea = (db: Db, o: MockOrder) => sellerAreaOf(db.merchants.find((m) => m.id === o.merchantId)!)
+const buyerArea = (o: MockOrder) => (o.delivery.location ? nearestArea(o.delivery.location, DELIVERY_AREAS) : o.delivery.address ? areaFromText(o.delivery.address) : null)
+const pointArea = (o: MockOrder) => (o.pickupPoint ? nearestArea(o.pickupPoint.location, DELIVERY_AREAS) : null)
+
 /** Everything a rider is holding: deliveries, refused items going back, and returns (private.rider_jobs_held). */
 function riderJobsHeld(db: Db, riderId: string): number {
   return db.orders.filter((o) => (o.riderId === riderId && ((o.status === 'dispatched' && !o.atCounterAt) || o.returnState === 'returning')) || (o.claim && (o.claim.status === 'awaiting_pickup' || o.claim.status === 'returning') && db.claimDetails[o.claim.id]?.riderId === riderId)).length
@@ -1352,6 +1376,17 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     if (o.isPrize) throw new ApiError('invalid_input', 'Won items can’t be marked as not delivered. Contact DrawMart.')
     if (o.failedAttempts === 1 && o.redeliveryChoice !== 'redeliver') throw new ApiError('invalid_input', 'The buyer hasn’t chosen a new time yet.')
     return o
+  }
+  /** Admins, or nobody signed in (the demo). */
+  function requireAdmin() {
+    const role = readSession()?.role
+    if (role && role !== 'admin') throw new ApiError('forbidden', 'Only admins can do this.')
+  }
+  /** A rider paid through the app: not counter staff. */
+  function payee(): string {
+    const me = rider()
+    if (counterPoint()) throw new ApiError('forbidden', 'Only sellers can add a bank account.')
+    return me
   }
   function rider(): string {
     const s = readSession()
@@ -1973,6 +2008,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (result.confirmed) {
           o.status = 'delivered'
           o.deliveredAt = iso(now())
+          earn(db, me, 'delivery', o.id, o, sellerArea(db, o), buyerArea(o), now())
         }
         return result
       }),
@@ -1989,6 +2025,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const o = doorOrder(db, orderId)
         const problem = attemptError({ arrivedAt: o.arrivedAt ?? null, nowMs: now(), photos: [photo], at, dropOff: o.delivery.location }) ?? photosError([photo])
         if (problem) throw new ApiError('invalid_input', problem)
+        earn(db, rider(), 'failed_attempt', `${o.id}:${o.failedAttempts}`, o, null, null, now())
         if (o.failedAttempts === 0) {
           Object.assign(o, { failedAttempts: 1, lastFailedAt: iso(now()), arrivedAt: null, redeliveryChoice: null, redeliverAt: null })
           notify(db, o.buyerId, 'order_delivery_failed', o.listingId, iso(now()))
@@ -2014,6 +2051,73 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           Object.assign(o, { redeliveryChoice: 'redeliver', redeliverAt: new Date(choice.windowStart).toISOString() })
         }
         if (o.riderId) notify(db, o.riderId, 'rider_redelivery_chosen', o.listingId, iso(now()))
+      }),
+
+    getRiderPayRates: () =>
+      tx((db) => {
+        requireAdmin()
+        return db.riderPayRates
+      }),
+
+    setRiderPay: (areaA, areaB, payKobo) =>
+      tx((db) => {
+        requireAdmin()
+        const [a, b] = areaA <= areaB ? [areaA, areaB] : [areaB, areaA]
+        const row = db.riderPayRates.pays.find((p) => p.areaA === a && p.areaB === b)
+        if (!row) throw new ApiError('not_found', 'That area doesn’t exist.')
+        const problem = pairPayError(db.deliveryPricing, a, b, payKobo)
+        if (problem) throw new ApiError('invalid_input', problem)
+        row.payKobo = payKobo
+      }),
+
+    setRiderSizeExtra: (size, extraKobo) =>
+      tx((db) => {
+        requireAdmin()
+        const problem = riderPayError(extraKobo, db.deliveryPricing.sizeExtras[size])
+        if (problem) throw new ApiError('invalid_input', problem)
+        db.riderPayRates.sizeExtras[size] = extraKobo
+      }),
+
+    setRiderAttemptPay: (payKobo) =>
+      tx((db) => {
+        requireAdmin()
+        const problem = attemptPayError(payKobo)
+        if (problem) throw new ApiError('invalid_input', problem)
+        db.riderPayRates.attemptKobo = payKobo
+      }),
+
+    listMyEarnings: () =>
+      tx((db): RiderEarning[] => {
+        const me = rider()
+        return db.riderEarnings
+          .filter((e) => e.riderId === me)
+          .sort((a, b) => b.earnedAt.localeCompare(a.earnedAt))
+          .map(({ riderId: _r, sourceKey: _s, paidBy: _p, ...e }) => e)
+      }),
+
+    listRiderPayDue: () =>
+      tx((db) => {
+        requireAdmin()
+        const due = payableNow(db.riderEarnings, now()) as typeof db.riderEarnings
+        return [...new Set(due.map((e) => e.riderId))].map((riderId) => ({
+          riderId,
+          riderName: DEMO_ACCOUNTS.find((a) => a.mockId === riderId)?.name ?? 'Rider',
+          account: db.riderPayoutAccounts[riderId] ?? null,
+          lines: due.filter((e) => e.riderId === riderId).sort((a, b) => a.earnedAt.localeCompare(b.earnedAt)).map(({ riderId: _r, sourceKey: _s, paidBy: _p, ...e }) => e),
+        }))
+      }),
+
+    markRiderPaid: (riderId, reference) =>
+      tx((db) => {
+        requireAdmin()
+        const lines = (payableNow(db.riderEarnings, now()) as typeof db.riderEarnings).filter((e) => e.riderId === riderId)
+        if (!lines.length) throw new ApiError('invalid_input', 'This rider has nothing due from finished weeks.')
+        const a = db.riderPayoutAccounts[riderId]
+        if (!a) throw new ApiError('invalid_input', 'This rider hasn’t added a bank account yet.')
+        if (!accountPayable(a, now())) throw new ApiError('invalid_input', 'This rider changed their bank account recently, so pay is on hold.')
+        if (reference.trim().length < MIN_REFERENCE_LENGTH) throw new ApiError('invalid_input', 'Enter the transfer’s reference.')
+        for (const e of lines) Object.assign(e, { paidAt: iso(now()), reference: reference.trim(), paidTo: `${a.bankName} ${maskAccountNumber(a.accountNumber)}`, paidBy: readSession()!.userId })
+        notify(db, riderId, 'rider_paid', null, iso(now()))
       }),
 
     getMyCounter: () =>
@@ -2052,6 +2156,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (problem) throw new ApiError('invalid_input', problem)
         o.atCounterAt = iso(now())
         notify(db, o.buyerId, 'order_ready_to_collect', o.listingId, iso(now()))
+        earn(db, o.riderId, 'delivery', o.id, o, sellerArea(db, o), pointArea(o), now())
       }),
 
     counterHandOver: (orderId, pin) =>
@@ -2476,6 +2581,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     getPayoutAccount: () =>
       tx((db) => {
+        if (readSession()?.role === 'delivery') return db.riderPayoutAccounts[payee()] ?? null
         requireShopPermission(db, 'bank')
         return db.payoutAccounts[shopId(db)] ?? null
       }),
@@ -2484,6 +2590,10 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     lookupBankAccount: (bankCode, accountNumber) =>
       tx((db) => {
+        if (readSession()?.role === 'delivery') {
+          payee()
+          return { accountName: mockAccountName(bankCode, accountNumber) }
+        }
         requireShopPermission(db, 'bank')
         shopId(db)
         return { accountName: mockAccountName(bankCode, accountNumber) }
@@ -2491,6 +2601,17 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     savePayoutAccount: (bankCode, accountNumber) =>
       tx((db) => {
+        if (readSession()?.role === 'delivery') {
+          const me = payee()
+          const old = db.riderPayoutAccounts[me]
+          if (old?.bankCode === bankCode && old.accountNumber === accountNumber) return
+          const bankName = { '044': 'Access Bank', '058': 'GTBank', '057': 'Zenith Bank' }[bankCode]
+          if (!bankName) throw new ApiError('invalid_input', 'Pick a bank from the list.')
+          const at = now()
+          db.riderPayoutAccounts[me] = { bankCode, bankName, accountNumber, accountName: mockAccountName(bankCode, accountNumber), confirmedAt: iso(at), payableFrom: iso(old ? at + PAYOUT_ACCOUNT_HOLD_HOURS * 3_600_000 : at) }
+          if (old) notify(db, me, 'rider_bank_changed', null, iso(at))
+          return
+        }
         requireShopPermission(db, 'bank')
         const shop = shopId(db)
         const accountName = mockAccountName(bankCode, accountNumber)
@@ -2539,6 +2660,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const problem = deliveryPriceError(priceKobo)
         if (problem) throw new ApiError('invalid_input', problem)
         const [a, b] = areaA <= areaB ? [areaA, areaB] : [areaB, areaA]
+        if (priceKobo < (db.riderPayRates.pays.find((p) => p.areaA === a && p.areaB === b)?.payKobo ?? 0)) throw new ApiError('invalid_input', 'That’s less than the rider is paid for this trip. Lower the rider pay first.')
         const row = db.deliveryPricing.prices.find((p) => p.areaA === a && p.areaB === b)
         if (!row) throw new ApiError('not_found', 'That area doesn’t exist.')
         row.priceKobo = priceKobo
@@ -2548,6 +2670,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       tx((db) => {
         const problem = sizeExtraError(extraKobo)
         if (problem) throw new ApiError('invalid_input', problem)
+        if (extraKobo < db.riderPayRates.sizeExtras[size]) throw new ApiError('invalid_input', 'That’s less than the rider is paid for this size. Lower the rider pay first.')
         db.deliveryPricing.sizeExtras[size] = extraKobo
       }),
 
@@ -2698,6 +2821,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (!o?.claim || db.claimDetails[claimId].riderId !== rider()) throw new ApiError('invalid_input', 'Only returns you’re carrying can be finished.')
         const at = iso(now())
         o.claim.status = 'returned'
+        earn(db, rider(), 'return', claimId, o, nearestArea(db.claimDetails[claimId].location, DELIVERY_AREAS), sellerArea(db, o), now())
         if (o.claim.kind === 'change_of_mind') {
           const l = getListingOr404(db, o.listingId)
           l.stock += o.quantity
@@ -3059,6 +3183,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           o.refusalPhoto = photo
           o.returnState = 'returning'
           penaliseSeller(db, o, now())
+          earn(db, me, 'delivery', o.id, o, sellerArea(db, o), buyerArea(o), now())
         }
         return result
       }),
@@ -3072,6 +3197,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (!o) throw new ApiError('invalid_input', 'Only items you’re taking back can be returned.')
         o.returnState = 'returned'
         o.returnedAt = iso(now())
+        earn(db, me, 'return', o.id, o, o.atCounterAt ? pointArea(o) : buyerArea(o), sellerArea(db, o), now())
       }),
 
     liftSuspension: (merchantId) =>
