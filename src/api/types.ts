@@ -21,6 +21,8 @@ import type { SellerApplicationInput, SellerApplicationStatus } from '@/domain/s
 import type {
   CancelReason,
   Category,
+  ClaimKind,
+  ClaimStatus,
   CollectionProblem,
   RefusalReason,
   PackageSize,
@@ -140,6 +142,8 @@ export interface NewProductInput {
   stock?: number
   /** Left out by older callers: the usual size for its category. */
   packageSize?: PackageSize
+  /** Proof the seller has it (listingChecks.ts). */
+  check?: ListingProofInput
   /** The platform fee follows from this (platformFeeBps) and comes out of the seller's payout. */
   priceKobo: Kobo
 }
@@ -370,6 +374,76 @@ export interface CartLine {
   /** What can be bought now. Below `wanted` if stock has run low since it was added. */
   quantity: number
   wanted: number
+}
+
+export interface ListingProofInput {
+  code: string
+  video?: Blob | null
+  serial?: string
+  /** A photo of a receipt, as a data URL. */
+  proof?: string | null
+}
+
+export interface ListingCheckPlan {
+  code: string
+  videoRequired: boolean
+  individual: boolean
+  /** Only for new individual sellers, with their progress towards the limits ending. */
+  newSeller: { deliveries: number; live: number } | null
+}
+
+/** Only for the seller and admins. */
+export interface ListingCheckView {
+  code: string | null
+  /** A video was sent, whether or not this link still works. */
+  hasVideo: boolean
+  videoUrl: string | null
+  serial: string | null
+  proofUrl: string | null
+}
+
+export interface ClaimInput {
+  kind: ClaimKind
+  description: string
+  photos: string[]
+  /** Only when the order has no delivery address to collect from. */
+  address?: string
+  location?: GeoPoint | null
+  phone?: string
+}
+
+export interface ClaimReview {
+  id: string
+  kind: ClaimKind
+  description: string
+  photos: string[]
+  createdAt: string
+  orderId: string
+  productCode: string
+  listingTitle: string
+  listingImage: string | null
+  priceKobo: Kobo
+  merchantName: string
+  confirmPhoto: string | null
+  collectionPhotos: string[]
+  refusalPhoto: string | null
+  cancelReason: CancelReason | null
+}
+
+export interface ReturnJob {
+  id: string
+  kind: ClaimKind
+  status: ClaimStatus
+  mine: boolean
+  productCode: string
+  listingTitle: string
+  listingImage: string | null
+  quantity: number
+  category: Category
+  /** Details only for the rider carrying it back. */
+  returnTo: { name: string; area: string; address?: string; location?: GeoPoint; contactPhone?: string }
+  /** Only for the rider on the way to collect it. */
+  pickupFrom: { buyerName: string; address: string; location: GeoPoint; contactPhone: string } | null
 }
 
 export interface CancelRateView {
@@ -629,6 +703,23 @@ export interface DrawMartApi {
   /** A refused item is back with the seller. */
   completeReturn(orderId: string, photo: string): Promise<void>
   liftSuspension(merchantId: string): Promise<void>
+  /** A fault report or a return, within 48 hours of delivery. Only needs an address if it was collected from a pickup location. */
+  openClaim(orderId: string, input: ClaimInput): Promise<void>
+  /** A seller who thinks a failed check or refusal was wrong. */
+  contestFailure(orderId: string, note: string): Promise<void>
+  /** Fault reports and contests waiting for an admin. */
+  listOpenClaims(): Promise<ClaimReview[]>
+  reviewClaim(claimId: string, approve: boolean, note: string): Promise<void>
+  listReturnJobs(): Promise<ReturnJob[]>
+  takeReturn(claimId: string): Promise<void>
+  releaseReturn(claimId: string): Promise<void>
+  /** The rider has it: this is when the buyer is refunded. */
+  passReturnPickup(claimId: string, photos: string[]): Promise<void>
+  failReturnPickup(claimId: string, note: string, photos: string[]): Promise<void>
+  finishReturn(claimId: string, photo: string): Promise<void>
+  /** Issues the code to show in the video, and says what the listing form must ask for. */
+  getListingCheckPlan(): Promise<ListingCheckPlan>
+  getListingCheck(listingId: string): Promise<ListingCheckView | null>
   /** Where riders collect from this seller. Null until they've said. */
   getShopPickup(): Promise<ShopPickup | null>
   /** Also sets the shop's delivery area from the pin. */

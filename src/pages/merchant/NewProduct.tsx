@@ -2,7 +2,10 @@ import { useState, type FormEvent } from 'react'
 import { api } from '@/api'
 import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
 import { matchesProductSearch } from '@/domain/productCode'
-import { useCreateProduct, useMerchant, useMerchantOrders, useResubmitListing, useUpdateListing } from '@/api/hooks'
+import { ProofSection } from './ProofSection'
+import { isPhoneOrTablet, thisDevice } from '@/lib/device'
+import { newSellerLimitError, proofErrors } from '@/domain/listingChecks'
+import { useListingCheckPlan, useCreateProduct, useMerchant, useMerchantOrders, useResubmitListing, useUpdateListing } from '@/api/hooks'
 import type { ListingView } from '@/api/types'
 import { CheckIcon, ClipboardIcon, ShieldIcon, StoreIcon, TicketIcon, TruckIcon, type IconComponent } from '@/components/icons'
 import { OrderCard } from '@/components/OrderCard'
@@ -90,6 +93,11 @@ export function NewProduct({ onBack, onDone, form }: { onBack: () => void; onDon
   const [stock, setStock] = useState(String(source && source.stock > 0 ? source.stock : 1))
   const [chosenSize, setChosenSize] = useState<PackageSize | null>(source?.packageSize ?? null)
   const size = chosenSize ?? defaultSizeFor(category)
+  const plan = useListingCheckPlan(!changing)
+  const [video, setVideo] = useState<Blob | null>(null)
+  const [serial, setSerial] = useState('')
+  const [proof, setProof] = useState<string | null>(null)
+  const [onPhone] = useState(() => isPhoneOrTablet(thisDevice()))
   const [showErrors, setShowErrors] = useState(false)
   const [created, setCreated] = useState<ListingView | null>(null)
 
@@ -102,11 +110,16 @@ export function NewProduct({ onBack, onDone, form }: { onBack: () => void; onDon
   // DrawMart sets the rate from the price; the seller never picks it.
   const { feeKobo, payoutKobo } = saleEconomics(input.priceKobo, platformFeeBps(input.priceKobo))
 
+  const proofProblems = changing || !plan.data
+    ? []
+    : proofErrors({ videoRequired: plan.data.videoRequired, individual: plan.data.individual, hasVideo: !!video, hasProof: !!proof, category, priceKobo: input.priceKobo, serial })
+  const limit = !changing && plan.data?.newSeller ? newSellerLimitError({ individual: true, ...plan.data.newSeller, priceKobo: input.priceKobo, adding: 1 }) : null
+
   function onSubmit(e: FormEvent) {
     e.preventDefault()
-    if (errors.length) {
+    if (errors.length || proofProblems.length || limit || (!changing && !plan.data)) {
       setShowErrors(true)
-      toast('A few details need fixing first.', 'error')
+      toast(limit ?? proofProblems[0] ?? (plan.data ? 'A few details need fixing first.' : 'Still loading your code. Try again in a moment.'), 'error')
       return
     }
     const details = { title, description, category, images: photos, priceKobo: input.priceKobo, stock: input.stock, packageSize: size }
@@ -122,7 +135,7 @@ export function NewProduct({ onBack, onDone, form }: { onBack: () => void; onDon
       return
     }
     create.mutate(
-      details,
+      { ...details, check: plan.data ? { code: plan.data.code, video, serial, proof } : undefined },
       { onSuccess: setCreated, onError: (err) => toast(errorMessage(err), 'error') },
     )
   }
@@ -172,6 +185,23 @@ export function NewProduct({ onBack, onDone, form }: { onBack: () => void; onDon
           </fieldset>
           <ShopPickupCard />
         </Section>
+
+        {!changing && plan.data ? (
+          <ProofSection
+            plan={plan.data}
+            category={category}
+            priceKobo={input.priceKobo}
+            onPhone={onPhone}
+            video={video}
+            onVideo={setVideo}
+            serial={serial}
+            onSerial={setSerial}
+            proof={proof}
+            onProof={setProof}
+            problems={showErrors ? proofProblems : []}
+          />
+        ) : null}
+        {limit ? <Notice tone="hot">{limit}</Notice> : null}
 
         <Notice icon={ShieldIcon} title="No escrow, no caution fee">
           The product stays with you. A DrawMart admin reviews the listing, then it goes on sale. When someone buys it, you get their delivery address here and send it.

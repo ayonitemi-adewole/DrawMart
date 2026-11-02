@@ -24,6 +24,10 @@ function describe(n: NotificationView, store: boolean): { icon: IconComponent; t
       return { icon: ClockIcon, title: `Confirm soon: ${n.listingTitle}`, body: 'Add a photo of the item, or this order will be cancelled.', to: `${home}?tab=orders` }
     case 'store_order_expired':
       return { icon: XIcon, title: `Order cancelled: ${n.listingTitle}`, body: 'It wasn’t confirmed or made ready in time. The buyer was refunded and the product is paused until you resume it.', to: `${home}?tab=orders` }
+    case 'order_claim_update':
+      return { icon: BellIcon, title: `Your return or claim: ${n.listingTitle}`, body: 'There’s an update. See your order.', to: '/tickets?view=orders' }
+    case 'store_order_claim':
+      return { icon: BellIcon, title: `A return or claim: ${n.listingTitle}`, body: 'There’s an update. See the order.', to: `${home}?tab=orders` }
     case 'store_order_failed':
       return { icon: AlertIcon, title: `Order failed: ${n.listingTitle}`, body: 'It failed the rider’s check or was refused at the door. The buyer was refunded, and a charge comes off your next payout.', to: `${home}?tab=orders` }
     case 'store_suspended':

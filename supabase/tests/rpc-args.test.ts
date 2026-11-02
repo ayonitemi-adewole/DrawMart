@@ -31,7 +31,7 @@ function clientCalls() {
     name,
     keys: [...new Set([...body.matchAll(/\b(p_\w+|p)\b\s*:/g)].map((m) => m[1]))],
     // `{ p_id }` passes a variable of the same name.
-    shorthand: [...body.matchAll(/(?:^|,)\s*(p_\w+)\s*(?=,|$)/g)].map((m) => m[1]),
+    shorthand: [...body.matchAll(/(?:^|,)\s*(p_\w+|p)\s*(?=,|$)/g)].map((m) => m[1]),
   }))
 }
 

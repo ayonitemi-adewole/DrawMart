@@ -194,6 +194,20 @@ export interface LedgerEntry {
 /** paid → the seller has it ready for a rider → the rider confirms it with the buyer's PIN. */
 export type OrderStatus = 'paid' | 'dispatched' | 'delivered' | 'cancelled'
 
+export type ClaimKind = 'fault' | 'change_of_mind' | 'contest'
+export type ClaimStatus = 'open' | 'declined' | 'upheld' | 'awaiting_pickup' | 'returning' | 'returned' | 'pickup_failed'
+
+/** A buyer's fault report or return, or a seller contesting a failure (claims.ts). */
+export interface OrderClaim {
+  id: string
+  kind: ClaimKind
+  status: ClaimStatus
+  description: string
+  photos: string[]
+  returnFeeKobo: Kobo
+  reviewNote: string | null
+}
+
 /** Why a seller cancelled an order (orderCancel.ts). */
 export type RefusalReason = 'refused_wrong' | 'refused_damaged'
 export type CollectionProblem = 'wrong_item' | 'wrong_quantity' | 'damaged' | 'wont_power_on' | 'no_item'
@@ -244,6 +258,9 @@ export interface Order {
   collectionPhotos: string[] | null
   collectionProblems: CollectionProblem[] | null
   refusalPhoto: string | null
+  /** Set when a return or fault was refunded. Status stays delivered. */
+  refundedAt: ISODate | null
+  claim: OrderClaim | null
   /** A refused item goes back to the seller. */
   returnState: 'returning' | 'returned' | null
   returnedAt: ISODate | null
@@ -265,7 +282,7 @@ export interface Order {
 }
 
 export type NotificationKind =
-  | 'order_cancelled' | 'store_order_failed' | 'store_suspended' | 'store_order_confirm_soon' | 'store_order_expired' | 'store_price_approved' | 'store_price_rejected' | 'store_new_order' | 'store_listing_approved' | 'store_listing_rejected' | 'store_draw_sold_out'
+  | 'order_cancelled' | 'order_claim_update' | 'store_order_claim' | 'store_order_failed' | 'store_suspended' | 'store_order_confirm_soon' | 'store_order_expired' | 'store_price_approved' | 'store_price_rejected' | 'store_new_order' | 'store_listing_approved' | 'store_listing_rejected' | 'store_draw_sold_out'
   | 'store_winner_picked' | 'store_draw_closing' | 'store_pickup_tomorrow' | 'store_new_message'
   | 'store_payout_sent' | 'store_bank_changed'
   | 'draw_sold_out' | 'draw_won' | 'draw_lost' | 'saved_almost_sold' | 'saved_closing_soon' | 'saved_relisted' | 'saved_back_on_sale' | 'saved_price_drop'

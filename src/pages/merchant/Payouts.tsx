@@ -40,7 +40,7 @@ export function Payouts() {
   return (
     <div className="flex flex-col gap-5">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <StatTile icon={ClockIcon} tone="ticket" label="Waiting for delivery" value={formatNaira(totals.waiting)} hint="Due once the buyer or winner has it" />
+        <StatTile icon={ClockIcon} tone="ticket" label="Waiting for delivery" value={formatNaira(totals.waiting)} hint="Sales are due 48 hours after delivery" />
         <StatTile icon={NairaIcon} tone="sky" label="Due to you" value={formatNaira(totals.due)} hint="Delivered. We send these by bank transfer" />
         <StatTile icon={CheckIcon} label="Paid" value={formatNaira(totals.paid)} hint="All time" />
       </div>

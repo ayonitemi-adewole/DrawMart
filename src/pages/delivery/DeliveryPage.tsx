@@ -1,24 +1,25 @@
 import { Suspense, lazy, useState, type FormEvent } from 'react'
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router'
-import { useDeliveryActions, useDeliveryJobs } from '@/api/hooks'
+import { useDeliveryActions, useDeliveryJobs, useReturnJobs } from '@/api/hooks'
 import type { DeliveryJob } from '@/api/types'
-import { AlertIcon, BackIcon, CameraIcon, CheckCircleIcon, ChevronRightIcon, LockIcon, MapPinIcon, PhoneIcon, StoreIcon, TruckIcon, UserIcon, XIcon } from '@/components/icons'
+import { AlertIcon, BackIcon, CheckCircleIcon, ChevronRightIcon, LockIcon, MapPinIcon, PhoneIcon, StoreIcon, TruckIcon, UserIcon } from '@/components/icons'
 import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
 import { Sheet } from '@/components/Sheet'
 import { useToast } from '@/components/toast'
 import { Badge, Button, Card, EmptyState, ErrorState, Field, Notice, PageTitle, ProductImage, Segmented, Skeleton, cx, errorMessage, inputCls } from '@/components/ui'
 import { DELIVERY_PIN_LENGTH, MAX_PIN_ATTEMPTS, PIN_LOCK_MINUTES, isDeliveryPin } from '@/domain/delivery'
-import { COLLECTION_CHECKS, COLLECTION_PROBLEMS, COLLECTION_PROBLEM_TEXT, MAX_DELIVERY_PHOTOS, REFUSAL_REASONS, REFUSAL_TEXT, collectionFailError, photosError } from '@/domain/deliveryChecks'
+import { COLLECTION_CHECKS, COLLECTION_PROBLEMS, COLLECTION_PROBLEM_TEXT, REFUSAL_REASONS, REFUSAL_TEXT, collectionFailError, photosError } from '@/domain/deliveryChecks'
 import type { CollectionProblem, RefusalReason } from '@/domain/types'
-import { photoToDataUrl } from '@/lib/image'
+import { RiderPhotos } from '@/components/RiderPhotos'
+import { ReturnJobList } from './ReturnJobs'
 import { directionsUrl } from '@/domain/location'
 import { matchesProductSearch } from '@/domain/productCode'
 import { dateTime, timeOfDay } from '@/lib/time'
 
 const RouteMap = lazy(() => import('@/components/RouteMap'))
 
-type Tab = 'mine' | 'available' | 'done'
-const TABS: Tab[] = ['mine', 'available', 'done']
+type Tab = 'mine' | 'available' | 'returns' | 'done'
+const TABS: Tab[] = ['mine', 'available', 'returns', 'done']
 
 const inTab = (j: DeliveryJob, t: Tab) => (t === 'done' ? j.status === 'delivered' : t === 'mine' ? j.mine && j.status !== 'delivered' : !j.mine)
 
@@ -27,6 +28,7 @@ const destination = (j: DeliveryJob) => (j.fulfilment === 'pickup' ? (j.pickupPo
 /** /delivery: orders ready to go, the ones this rider has taken, and what they've finished. */
 export function DeliveryPage() {
   const q = useDeliveryJobs()
+  const returns = useReturnJobs()
   const [params, setParams] = useSearchParams()
   const [search, setSearch] = useState('')
   const jobs = q.data ?? []
@@ -47,11 +49,13 @@ export function DeliveryPage() {
         options={[
           { value: 'mine', label: 'Yours', count: mineCount },
           { value: 'available', label: 'To take', count: jobs.filter((j) => inTab(j, 'available')).length },
+          { value: 'returns', label: 'Returns', count: returns.data?.length ?? 0 },
           { value: 'done', label: 'Done' },
         ]}
       />
-      {jobs.length ? <ProductSearch value={search} onChange={setSearch} /> : null}
-      {q.isPending ? (
+      {tab === 'returns' ? <ReturnJobList /> : null}
+      {jobs.length && tab !== 'returns' ? <ProductSearch value={search} onChange={setSearch} /> : null}
+      {tab === 'returns' ? null : q.isPending ? (
         <Skeleton className="h-60" />
       ) : q.isError ? (
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
@@ -320,47 +324,6 @@ function HandBack({ job: j }: { job: DeliveryJob }) {
         </div>
       </Sheet>
     </>
-  )
-}
-
-/** Pictures only from here: these go to the seller and admins as proof. */
-function RiderPhotos({ photos, onChange, max = MAX_DELIVERY_PHOTOS, label = 'Take photos' }: { photos: string[]; onChange: (p: string[]) => void; max?: number; label?: string }) {
-  const toast = useToast()
-  const [reading, setReading] = useState(false)
-
-  async function onPick(file: File | undefined) {
-    if (!file) return
-    setReading(true)
-    try {
-      onChange([...photos, await photoToDataUrl(file)].slice(-max))
-    } catch (e) {
-      toast(errorMessage(e), 'error')
-    } finally {
-      setReading(false)
-    }
-  }
-
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap gap-2">
-        {photos.map((src, i) => (
-          <div key={i} className="relative">
-            <img src={src} alt={`Photo ${i + 1}`} className="size-20 rounded-xl border border-line bg-photo object-cover" />
-            <button type="button" aria-label={`Remove photo ${i + 1}`} onClick={() => onChange(photos.filter((_, n) => n !== i))} className="absolute -top-2 -right-2 flex size-11 items-center justify-center">
-              <span className="flex size-7 items-center justify-center rounded-full bg-ink text-ground shadow-card">
-                <XIcon size={14} />
-              </span>
-            </button>
-          </div>
-        ))}
-      </div>
-      {photos.length < max ? (
-        <label className="flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-xl border border-line-strong px-4 text-sm font-bold">
-          <CameraIcon size={16} /> {reading ? 'Reading…' : photos.length ? 'Take another' : label}
-          <input type="file" accept="image/*" capture="environment" className="sr-only" onChange={(e) => void onPick(e.target.files?.[0])} />
-        </label>
-      ) : null}
-    </div>
   )
 }
 

@@ -19,6 +19,8 @@ import { verifyDraw, winningTicketNumber, createSeed } from '@/domain/draw'
 import { computeListingEconomics, platformFeeBps } from '@/domain/fees'
 import { DELIVERY_AREAS, areaFromText, defaultSizeFor, deliveryFeeKobo, placeholderPriceKobo, placeholderPricing } from '@/domain/deliveryFees'
 import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO } from '@/domain/deliveryChecks'
+import { imeiValid } from '@/domain/listingChecks'
+import { returnFeeKobo, sellerShareOfReturnFee } from '@/domain/claims'
 import { addConfirmTime, confirmDeadline } from '@/domain/orderConfirm'
 import { addDays, cautionFeeFor, localDate } from '@/domain/listing'
 import { DEMO_ACCOUNTS } from '@/api/demoAccounts'
@@ -99,6 +101,14 @@ const balance = async (userId: string) =>
 
 const IKEJA = '11111111-1111-4111-8111-000000000001'
 
+/** What an individual seller now sends with a listing: the code and a video in their own folder. */
+async function withProof(who: string, product: Record<string, unknown>) {
+  const [{ plan }] = await asUser<{ plan: { code: string } }>(who, `select public.listing_check_plan() plan`)
+  const [{ shop }] = await admin<{ shop: string }>(`select coalesce(merchant_id, seller_id) shop from public.profiles where id = $1`, [who])
+  return { ...product, check: { code: plan.code, videoPath: `${shop}/proof.webm` } }
+}
+
+
 function listingInput(overrides: Record<string, unknown> = {}) {
   return {
     title: 'Blender, 1.5L',
@@ -122,6 +132,8 @@ beforeAll(async () => {
   // Every migration, in order, like `supabase db push`.
   for (const f of readdirSync(new URL('../migrations', import.meta.url)).sort()) await db.exec(sql(`migrations/${f}`))
   await db.exec(sql('seed.sql'))
+  // Stores' proof on their first listings and spot checks are off, except where a test turns them on.
+  await db.exec(`update public.app_settings set check_first_listings = 0, spot_check_percent = 0 where id`)
   // Riders need somewhere to collect from, or no order can be made ready.
   await db.exec(`insert into public.shop_pickups (merchant_id, address, lat, lng, contact_phone) select id, '12 Market Road, Lagos', 6.5, 3.37, '0803 000 0000' from public.merchants`)
 }, 60_000)
@@ -1151,7 +1163,7 @@ describe('individual sellers', () => {
     expect(p).toMatchObject({ role: 'buyer', kind: 'individual', name: 'Tolu’s Gadgets', cac_number: '' })
 
     await expectFail(asUser(seller, `select public.create_listing($1)`, [listingInput()]), 'forbidden')
-    const [{ id }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [product])
+    const [{ id }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [await withProof(seller, product)])
     expect((await asUser(seller, `select status from public.listings where id = $1`, [id]))).toEqual([{ status: 'pending_review' }])
     await asUser(staff, `select public.approve_listing($1)`, [id])
 
@@ -1281,7 +1293,7 @@ describe('seller metrics', () => {
     staff = await newUser('staff6@example.com', { role: 'admin' })
     const [{ id: shop }] = await admin<{ id: string }>(`insert into public.merchants (kind, name, area, cac_number, verified) values ('individual', 'Stat Shop', 'Yaba', '', true) returning id`)
     await admin(`update public.profiles set seller_id = $2 where id = $1`, [seller, shop])
-    ;[{ id: productId }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [{ title: 'Desk lamp', category: 'Home', priceKobo: 2_000_000 }])
+    ;[{ id: productId }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [await withProof(seller, { title: 'Desk lamp', category: 'Home', priceKobo: 2_000_000 })])
   })
 
   it('counts views once per visitor per day, and never the seller’s own', async () => {
@@ -1404,7 +1416,7 @@ describe('boost results', () => {
     const staff = await newUser('staff8@example.com', { role: 'admin' })
     const [{ id: shop }] = await admin<{ id: string }>(`insert into public.merchants (kind, name, area, cac_number, verified) values ('individual', 'Result Shop', 'Ikeja', '', true) returning id`)
     await admin(`update public.profiles set seller_id = $2 where id = $1`, [seller, shop])
-    const [{ id }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [{ title: 'Rug', category: 'Home', priceKobo: 3_000_000 }])
+    const [{ id }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [await withProof(seller, { title: 'Rug', category: 'Home', priceKobo: 3_000_000 })])
     await asUser(staff, `select public.approve_listing($1)`, [id])
     // Two visitors yesterday, three today.
     await admin(`insert into public.listing_views (listing_id, visitor, day) select $1, 'v:old-' || n, (now() at time zone 'Africa/Lagos')::date - 1 from generate_series(1, 2) n`, [id])
@@ -1680,6 +1692,92 @@ describe('delivery fees', () => {
     const anyone = await newUser('fee-nobody@example.com')
     await expectFail(asUser(anyone, `select public.set_shop_delivery_area('ikeja')`), 'forbidden')
     await expectFail(asUser(ikeja, `select public.create_product($1)`, [{ title: 'Bad', description: '', category: 'Home', priceKobo: 500_000, packageSize: 'huge' }]), 'invalid_input')
+  })
+})
+
+describe('listing checks', () => {
+  const VI = '11111111-1111-4111-8111-000000000005'
+  let individual: string, shop: string, store: string, staff: string
+  const plan = async (who: string) => (await asUser<{ p: { code: string; videoRequired: boolean; individual: boolean; newSeller: { deliveries: number; live: number } | null } }>(who, `select public.listing_check_plan() p`))[0].p
+  const create = (who: string, item: Record<string, unknown>) => asUser<{ id: string }>(who, `select public.create_product($1) id`, [item])
+  const item = (over: Record<string, unknown> = {}) => ({ title: 'Checked chair', description: '', category: 'Home', priceKobo: 5_000_000, ...over })
+
+  beforeAll(async () => {
+    individual = await newUser('checks-seller@example.com')
+    await asUser(individual, `select public.submit_seller_application($1)`, [{ shopName: 'Checks Shop', legalName: 'Checks Seller', nin: '123 4567 8901', phone: '0803 123 4567', address: '12 Herbert Macaulay Way, Yaba', area: 'Yaba', idPhoto: `${individual}/id.jpg`, selfie: `${individual}/selfie.jpg` }])
+    const [{ id: app }] = await admin<{ id: string }>(`select id from public.seller_applications where user_id = $1`, [individual])
+    staff = await newUser('checks-staff@example.com', { role: 'admin' })
+    await asUser(staff, `select public.approve_seller($1)`, [app])
+    ;[{ shop }] = await admin<{ shop: string }>(`select seller_id shop from public.profiles where id = $1`, [individual])
+    store = await newUser('checks-store@example.com', { merchantId: VI })
+  })
+
+  it('needs a live video with the code from an individual, on every listing', async () => {
+    const p = await plan(individual)
+    expect(p).toMatchObject({ videoRequired: true, individual: true, newSeller: { deliveries: 0 } })
+    expect((await plan(individual)).code).toBe(p.code) // asking again gives the same code
+    await expectFail(create(individual, item()), 'invalid_input')
+    await expectFail(create(individual, item({ check: { code: 'XXXX', videoPath: `${shop}/v.webm` } })), 'invalid_input')
+    await expectFail(create(individual, item({ check: { code: p.code, videoPath: `someone-else/v.webm` } })), 'invalid_input')
+    const [{ id }] = await create(individual, item({ check: { code: p.code, videoPath: `${shop}/v.webm` } }))
+    expect((await plan(individual)).code).not.toBe(p.code) // a fresh code for the next one
+
+    // Only the seller and admins can see it.
+    const read = `select code, video_path from public.listing_checks where listing_id = $1`
+    expect(await asUser(individual, read, [id])).toEqual([{ code: p.code, video_path: `${shop}/v.webm` }])
+    expect(await asUser(staff, read, [id])).toHaveLength(1)
+    expect(await asUser(store, read, [id])).toEqual([])
+    const buyer = await newUser('checks-buyer@example.com')
+    expect(await asUser(buyer, read, [id])).toEqual([])
+    await asUser(staff, `select public.reject_listing($1, 'photos_unclear')`, [id])
+  })
+
+  it('needs a serial on dearer phones, and proof of purchase from individuals over ₦100,000', async () => {
+    const proof = async (over: Record<string, unknown>) => ({ code: (await plan(individual)).code, videoPath: `${shop}/v.webm`, ...over })
+    await expectFail(create(individual, item({ category: 'Phones', check: await proof({}) })), 'invalid_input')
+    await expectFail(create(individual, item({ category: 'Phones', check: await proof({ serial: '490154203237519' }) })), 'invalid_input')
+    const [{ id }] = await create(individual, item({ category: 'Phones', check: await proof({ serial: '490154203237518' }) }))
+    await asUser(staff, `select public.reject_listing($1, 'photos_unclear')`, [id])
+    const e = await expectFail(create(individual, item({ priceKobo: 15_000_000, check: await proof({}) })), 'invalid_input')
+    expect(e.detail).toContain('proof you bought it')
+    const [{ id: dear }] = await create(individual, item({ priceKobo: 15_000_000, check: await proof({ proofPath: `${shop}/receipt.jpg` }) }))
+    await asUser(staff, `select public.reject_listing($1, 'photos_unclear')`, [dear])
+  })
+
+  it('limits a new individual seller on price and how many are live', async () => {
+    const proof = async () => ({ code: (await plan(individual)).code, videoPath: `${shop}/v.webm` })
+    const e = await expectFail(create(individual, item({ priceKobo: 20_000_001, check: { ...(await proof()), proofPath: `${shop}/r.jpg` } })), 'invalid_input')
+    expect(e.detail).toContain('₦200,000')
+    const ids: string[] = []
+    for (let i = 0; i < 5; i++) ids.push((await create(individual, item({ title: `Chair ${i}`, check: await proof() })))[0].id)
+    const full = await expectFail(create(individual, item({ check: await proof() })), 'invalid_input')
+    expect(full.detail).toContain('5 items')
+    await asUser(staff, `select public.approve_listing($1)`, [ids[0]])
+    await expectFail(asUser(individual, `select public.change_price($1, 20000001)`, [ids[0]]), 'invalid_input')
+    for (const id of ids.slice(1)) await asUser(staff, `select public.reject_listing($1, 'photos_unclear')`, [id])
+  })
+
+  it('asks a store on its first listings, then on spot checks', async () => {
+    await admin(`update public.app_settings set check_first_listings = 1000, spot_check_percent = 0 where id`)
+    expect((await plan(store)).videoRequired).toBe(true)
+    await expectFail(create(store, item()), 'invalid_input')
+    await admin(`update public.app_settings set check_first_listings = 0, spot_check_percent = 100 where id`)
+    await admin(`delete from private.listing_check_tickets where merchant_id = $1`, [VI])
+    const p = await plan(store)
+    expect(p).toMatchObject({ videoRequired: true, individual: false, newSeller: null })
+    await expectFail(create(store, item()), 'invalid_input')
+    await admin(`update public.app_settings set spot_check_percent = 0 where id`)
+    expect((await plan(store)).videoRequired).toBe(true) // asking again doesn't dodge it
+    await create(store, item({ check: { code: p.code, videoPath: `${VI}/v.webm` } }))
+    expect((await plan(store)).videoRequired).toBe(false)
+    await create(store, item())
+  })
+
+  it('checks IMEIs the same way as src/domain', async () => {
+    for (const imei of ['490154203237518', '490154203237519', '35693803564380', '356938035643809']) {
+      const [{ ok }] = await admin<{ ok: boolean }>(`select private.imei_valid($1) ok`, [imei])
+      expect(ok).toBe(imeiValid(imei))
+    }
   })
 })
 
@@ -2056,6 +2154,167 @@ describe('cart and checkout', () => {
       await asUser(rider, `select public.refuse_delivery($1, $2, 'refused_wrong', '', '/assets/x.jpg')`, [id, pin])
       expect((await from(rider))?.collectFrom.address).toBe(details[0]) // taking it back
       await asUser(rider, `select public.complete_return($1, '/assets/x.jpg')`, [id])
+    })
+
+    describe('claims and returns', () => {
+      const SHOP = '11111111-1111-4111-8111-000000000005'
+      let seller: string, staffUser: string
+      const delivered = async (email: string, category = 'Home') => {
+        const shopper = await newUser(email)
+        await asUser(shopper, `select public.top_up(5000000)`)
+        const [{ id: listing }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [{ title: 'Claim lamp', description: '', category, priceKobo: 2_000_000, stock: 1 }])
+        await asUser(staffUser, `select public.approve_listing($1)`, [listing])
+        const start = await balance(shopper)
+        const [{ ids }] = await asUser<{ ids: string[] }>(shopper, `select public.checkout($1) ids`, [{ listingIds: [listing], fulfilment: 'delivery', address: '15 Awolowo Road, Ikoyi', phone: '0803 123 4567', lat: 6.45, lng: 3.43 }])
+        const id = ids[0]
+        await asUser(seller, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+        await asUser(seller, `select public.dispatch_order($1)`, [id])
+        await asUser(rider, `select public.take_delivery($1)`, [id])
+        await asUser(rider, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+        await tryPin(rider, id, (await pinsOf(shopper))[id])
+        return { shopper, listing, id, start }
+      }
+      const open = (who: string, id: string, kind: string, description = '', photos: string[] = []) =>
+        asUser<{ c: string }>(who, `select public.open_claim($1, $2, $3, $4, null, null, null, null) c`, [id, kind, description, photos])
+      const sale = (id: string) => admin<{ status: string }>(`select status from public.payouts where order_id = $1 and kind = 'sale'`, [id])
+      const run = () => admin(`select private.process_deadlines()`)
+      type RJob = { id: string; mine: boolean; status: string; pickupFrom: { address: string } | null; returnTo: { address?: string } }
+      const returns = async (who: string) => (await asUser<{ r: RJob[] }>(who, `select public.return_jobs() r`))[0].r
+
+      beforeAll(async () => {
+        seller = await newUser('claim-store@example.com', { merchantId: SHOP })
+        staffUser = await newUser('claim-staff@example.com', { role: 'admin' })
+      })
+      // Each test can count as a failure, and three would suspend this shop.
+      beforeEach(async () => {
+        await admin(`update public.merchants set suspended_at = null where id = $1`, [SHOP])
+        await admin(`update public.orders set failure_excused = true where merchant_id = $1`, [SHOP])
+      })
+
+      it('holds a sale for 48 hours after delivery', async () => {
+        const { id } = await delivered('claim-wait@example.com')
+        await run()
+        expect(await sale(id)).toEqual([{ status: 'waiting' }])
+        await admin(`update public.orders set delivered_at = now() - interval '49 hours' where id = $1`, [id])
+        await run()
+        expect(await sale(id)).toEqual([{ status: 'due' }])
+      })
+
+      it('has the same fee bands as src/domain', async () => {
+        for (const [price, qty] of [[9_999_999, 1], [10_000_000, 1], [49_999_999, 1], [50_000_000, 1], [30_000_000, 3], [15_000_000, 3], [333, 1]]) {
+          const [{ f }] = await admin<{ f: string }>(`select private.return_fee_kobo($1, $2) f`, [price, qty])
+          expect(Number(f)).toBe(returnFeeKobo(price, qty))
+        }
+      })
+
+      it('returns a changed mind for a fee, refunding when the rider has it', async () => {
+        const { shopper, listing, id } = await delivered('claim-mind@example.com')
+        await expectFail(open(seller, id, 'change_of_mind'), 'not_found')
+        await expectFail(open(shopper, id, 'nonsense'), 'invalid_input')
+        await open(shopper, id, 'change_of_mind')
+        await expectFail(open(shopper, id, 'change_of_mind'), 'invalid_input')
+        const paid = await balance(shopper)
+        await admin(`update public.orders set delivered_at = now() - interval '49 hours' where id = $1`, [id])
+        await run()
+        expect(await sale(id)).toEqual([{ status: 'waiting' }]) // held by the claim
+
+        // The address is private: seller and buyer can't read it from the table, and only the rider who took it gets it.
+        await expect(asUser(seller, `select return_address from public.order_claims where order_id = $1`, [id])).rejects.toThrow()
+        const [pool] = (await returns(otherRider)).filter((j) => !j.mine)
+        expect(pool.pickupFrom).toBeNull()
+        await expectFail(asUser(shopper, `select public.take_return($1)`, [pool.id]), 'forbidden')
+        await asUser(rider, `select public.take_return($1)`, [pool.id])
+        await expectFail(asUser(otherRider, `select public.take_return($1)`, [pool.id]), 'invalid_input')
+        expect((await returns(rider)).find((j) => j.id === pool.id)?.pickupFrom?.address).toBe('15 Awolowo Road, Ikoyi')
+        expect((await returns(otherRider)).some((j) => j.id === pool.id)).toBe(false)
+        await expectFail(asUser(otherRider, `select public.pass_return_pickup($1, array['/assets/x.jpg'])`, [pool.id]), 'invalid_input')
+        await expectFail(asUser(rider, `select public.pass_return_pickup($1, '{}')`, [pool.id]), 'invalid_input')
+        await asUser(rider, `select public.pass_return_pickup($1, array['/assets/x.jpg'])`, [pool.id])
+
+        const fee = returnFeeKobo(2_000_000, 1)
+        expect(Number((await balance(shopper)).cash)).toBe(Number(paid.cash) + 2_000_000 - fee)
+        expect(await sale(id)).toEqual([])
+        await run()
+        expect(await sale(id)).toEqual([]) // doesn't come back
+        expect((await returns(rider)).find((j) => j.id === pool.id)?.returnTo.address).toBeTruthy()
+        await asUser(rider, `select public.finish_return($1, '/assets/y.jpg')`, [pool.id])
+        const [{ trip }] = await admin<{ trip: string }>(`select trip_kobo trip from public.order_claims where order_id = $1`, [id])
+        const lines = await admin<{ amount_kobo: string }>(`select amount_kobo from public.payouts where order_id = $1 and kind = 'return_fee'`, [id])
+        expect(Number(lines[0].amount_kobo)).toBe(sellerShareOfReturnFee(fee, Number(trip)))
+        expect(await admin(`select stock, status from public.listings where id = $1`, [listing])).toEqual([{ stock: 1, status: 'for_sale' }])
+        expect((await asUser<{ m: { listings: { listingId: string; units: number }[] } }>(seller, `select public.merchant_metrics(7) m`))[0].m.listings.find((l) => l.listingId === listing)?.units).toBe(0)
+      })
+
+      it('sends a fault to an admin, then refunds everything and charges the seller', async () => {
+        const { shopper, id, start } = await delivered('claim-fault@example.com')
+        await expectFail(open(shopper, id, 'fault', 'short', ['/assets/x.jpg']), 'invalid_input')
+        await expectFail(open(shopper, id, 'fault', 'The base is cracked'), 'invalid_input')
+        const [{ c }] = await open(shopper, id, 'fault', 'The base is cracked', ['/assets/x.jpg'])
+        await expectFail(asUser(seller, `select public.review_claim($1, true, '')`, [c]), 'forbidden')
+        await expectFail(asUser(seller, `select public.open_claims()`), 'forbidden')
+        expect((await returns(rider)).some((j) => j.id === c)).toBe(false) // not until it's approved
+        const [{ r }] = await asUser<{ r: { id: string; description: string }[] }>(staffUser, `select public.open_claims() r`)
+        expect(r.find((x) => x.id === c)?.description).toBe('The base is cracked')
+        await expectFail(asUser(staffUser, `select public.review_claim($1, false, '')`, [c]), 'invalid_input')
+        await asUser(staffUser, `select public.review_claim($1, true, '')`, [c])
+        await asUser(rider, `select public.take_return($1)`, [c])
+        await asUser(rider, `select public.pass_return_pickup($1, array['/assets/x.jpg'])`, [c])
+        expect(await balance(shopper)).toEqual({ cash: start.cash, credit: String(Number(start.credit) + APOLOGY_CREDIT_KOBO) })
+        expect(await admin(`select kind, amount_kobo from public.payouts where order_id = $1`, [id])).toEqual([{ kind: 'charge', amount_kobo: -FAILURE_CHARGE_KOBO }])
+        await asUser(rider, `select public.finish_return($1, '/assets/y.jpg')`, [c])
+      })
+
+      it('lets the payout go ahead if a claim is turned down or the item isn’t as described', async () => {
+        const first = await delivered('claim-down@example.com')
+        const [{ c }] = await open(first.shopper, first.id, 'fault', 'The base is cracked', ['/assets/x.jpg'])
+        await asUser(staffUser, `select public.review_claim($1, false, 'No damage in the photo')`, [c])
+        await admin(`update public.orders set delivered_at = now() - interval '49 hours' where id = $1`, [first.id])
+        await run()
+        expect(await sale(first.id)).toEqual([{ status: 'due' }])
+
+        const second = await delivered('claim-used@example.com')
+        const [{ c: c2 }] = await open(second.shopper, second.id, 'change_of_mind')
+        const before = await balance(second.shopper)
+        await asUser(rider, `select public.take_return($1)`, [c2])
+        await expectFail(asUser(rider, `select public.fail_return_pickup($1, 'no', '{}')`, [c2]), 'invalid_input')
+        await asUser(rider, `select public.fail_return_pickup($1, 'It has been used', '{}')`, [c2])
+        expect(await balance(second.shopper)).toEqual(before)
+        await admin(`update public.orders set delivered_at = now() - interval '49 hours' where id = $1`, [second.id])
+        await run()
+        expect(await sale(second.id)).toEqual([{ status: 'due' }])
+      })
+
+      it('closes after 48 hours, and isn’t for cars', async () => {
+        const { shopper, id } = await delivered('claim-late@example.com')
+        await admin(`update public.orders set delivered_at = now() - interval '48 hours' where id = $1`, [id])
+        await expectFail(open(shopper, id, 'change_of_mind'), 'invalid_input')
+        const car = await delivered('claim-car@example.com', 'Cars')
+        await expectFail(open(car.shopper, car.id, 'change_of_mind'), 'invalid_input')
+      })
+
+      it('lets a seller contest a failure: the charge goes and it stops counting', async () => {
+        const shopper = await newUser('claim-contest@example.com')
+        await asUser(shopper, `select public.top_up(5000000)`)
+        const [{ id: listing }] = await asUser<{ id: string }>(seller, `select public.create_product($1) id`, [{ title: 'Contested', description: '', category: 'Home', priceKobo: 2_000_000, stock: 2 }])
+        await asUser(staffUser, `select public.approve_listing($1)`, [listing])
+        const [{ ids }] = await asUser<{ ids: string[] }>(shopper, `select public.checkout($1) ids`, [{ listingIds: [listing], fulfilment: 'delivery', address: '15 Awolowo Road, Ikoyi', phone: '0803 123 4567', lat: 6.45, lng: 3.43 }])
+        const id = ids[0]
+        const contest = (who: string, note = 'I had it ready, the rider never came') => asUser(who, `select public.contest_failure($1, $2)`, [id, note])
+        await expectFail(contest(seller), 'invalid_input') // nothing's failed
+        await asUser(seller, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+        await asUser(seller, `select public.dispatch_order($1)`, [id])
+        await asUser(rider, `select public.take_delivery($1)`, [id])
+        await asUser(rider, `select public.fail_collection($1, array['no_item'], '', '{}')`, [id])
+        await expectFail(contest(shopper), 'not_found')
+        await expectFail(contest(seller, 'short'), 'invalid_input')
+        await contest(seller)
+        await expectFail(contest(seller), 'invalid_input')
+        const [{ c }] = await admin<{ c: string }>(`select id c from public.order_claims where order_id = $1`, [id])
+        await asUser(staffUser, `select public.review_claim($1, true, '')`, [c])
+        expect(await admin(`select kind from public.payouts where order_id = $1`, [id])).toEqual([])
+        expect(await admin(`select failure_excused from public.orders where id = $1`, [id])).toEqual([{ failure_excused: true }])
+        expect(await asUser(seller, `select status from public.order_claims where id = $1`, [c])).toEqual([{ status: 'upheld' }])
+      })
     })
 
     it('can’t be delivered before it’s dispatched', async () => {
@@ -2486,6 +2745,9 @@ describe('payouts', () => {
     expect((await lines(id)).map((l) => [l.kind, l.status, Number(l.amount_kobo)])).toEqual([['sale', 'waiting', 4_750_000]])
     await deliver(o)
     await deliver(o) // nothing changes the second time
+    expect((await lines(id)).map((l) => [l.status])).toEqual([['waiting']]) // the claim window
+    await admin(`update public.orders set delivered_at = now() - interval '49 hours' where id = $1`, [o])
+    await admin(`select private.process_deadlines()`)
     expect((await lines(id)).map((l) => [l.status])).toEqual([['due']])
     expect(await admin(`select 1 from public.payouts where listing_id = $1`, [id])).toHaveLength(1)
 

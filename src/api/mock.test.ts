@@ -1,4 +1,6 @@
+import type { NewProductInput } from './types'
 import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO } from '@/domain/deliveryChecks'
+import { returnFeeKobo, sellerShareOfReturnFee } from '@/domain/claims'
 import { areaPairPrice, deliveryFeeKobo, placeholderPricing } from '@/domain/deliveryFees'
 import { isProductCode } from '@/domain/productCode'
 import { describe, expect, it } from 'vitest'
@@ -9,7 +11,8 @@ import type { Delivery } from '@/domain/types'
 import { createMockApi, memoryStore } from './mock'
 import { ApiError, type NewListingInput } from './types'
 
-const make = (now = () => Date.now()) => createMockApi({ store: memoryStore(), latencyMs: 0, now })
+// Proof on stores' first listings and spot checks are off, except where a test turns them on.
+const make = (now = () => Date.now(), listingChecks = { firstListings: 0, spotPercent: 0 }) => createMockApi({ store: memoryStore(), latencyMs: 0, now, listingChecks })
 
 const buyNow = async (api: ReturnType<typeof make>, listingId: string, delivery: Delivery) =>
   (await api.checkout({ listingIds: [listingId], fulfilment: 'delivery', delivery, pickupPointId: null }))[0]
@@ -576,6 +579,199 @@ describe('mock api', () => {
     expect((await api.getWallet()).balance.cashKobo).toBe(start - k(5_000) - onTime.deliveryFeeKobo)
   })
 
+  describe('listing checks', () => {
+    const video = () => new Blob(['v'], { type: 'video/webm' })
+    const item = (over: Partial<NewProductInput> = {}): NewProductInput => ({ title: 'Checked chair', description: '', category: 'Home', priceKobo: k(50_000), ...over })
+
+    it('needs a live video with the code from an individual, and shows it only to them and admins', async () => {
+      const api = make()
+      await api.auth.signInWithPassword('seller@drawmart.test', 'drawmart-demo')
+      const plan = await api.getListingCheckPlan()
+      expect(plan).toMatchObject({ videoRequired: true, individual: true, newSeller: { deliveries: 0 } })
+      expect((await api.getListingCheckPlan()).code).toBe(plan.code)
+      await expect(api.createProduct(item())).rejects.toThrow('Record a short video')
+      await expect(api.createProduct(item({ check: { code: 'XXXX', video: video() } }))).rejects.toThrow('new code')
+      const p = await api.createProduct(item({ check: { code: plan.code, video: video() } }))
+      expect((await api.getListingCheckPlan()).code).not.toBe(plan.code)
+      await api.auth.signInWithPassword('admin@drawmart.test', 'drawmart-demo')
+      expect(await api.getListingCheck(p.id)).toMatchObject({ code: plan.code })
+    })
+
+    it('needs a serial on dearer phones, proof over ₦100,000, and keeps new sellers within limits', async () => {
+      const api = make()
+      await api.auth.signInWithPassword('seller@drawmart.test', 'drawmart-demo')
+      const check = async (over = {}) => ({ code: (await api.getListingCheckPlan()).code, video: video(), ...over })
+      await expect(api.createProduct(item({ category: 'Phones', check: await check() }))).rejects.toThrow('serial')
+      await api.createProduct(item({ category: 'Phones', check: await check({ serial: '490154203237518' }) }))
+      await expect(api.createProduct(item({ priceKobo: k(150_000), check: await check() }))).rejects.toThrow('proof you bought it')
+      await expect(api.createProduct(item({ priceKobo: k(200_001), check: await check({ proof: 'data:image/png;base64,x' }) }))).rejects.toThrow('₦200,000')
+      const live = (await api.getListingCheckPlan()).newSeller!.live
+      for (let i = live; i < 5; i++) await api.createProduct(item({ title: `Chair ${i}`, check: await check() }))
+      await expect(api.createProduct(item({ check: await check() }))).rejects.toThrow('5 items')
+    })
+
+    it('asks a store on its first listings, then on spot checks it can’t dodge', async () => {
+      const first = make(undefined, { firstListings: 1000, spotPercent: 0 })
+      await first.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+      expect((await first.getListingCheckPlan()).videoRequired).toBe(true)
+      const spot = make(undefined, { firstListings: 0, spotPercent: 100 })
+      await spot.auth.signInWithPassword('store@drawmart.test', 'drawmart-demo')
+      const p = await spot.getListingCheckPlan()
+      expect(p).toMatchObject({ videoRequired: true, newSeller: null })
+      await expect(spot.createProduct(item())).rejects.toThrow('Record a short video')
+      await spot.createProduct(item({ check: { code: p.code, video: video() } }))
+    })
+  })
+
+  describe('claims and returns', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+    const PHOTOS = ['/assets/a.jpg']
+    const clock = () => {
+      const c = { t: Date.parse('2026-11-02T10:00:00+01:00') }
+      return { c, api: make(() => c.t) }
+    }
+    /** A delivered ₦20,000 order. Leaves the buyer signed in. */
+    const delivered = async (api: ReturnType<typeof make>, category: 'Home' | 'Cars' = 'Home') => {
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Claim lamp', description: '', category, priceKobo: k(20_000), stock: 1 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const start = (await api.getWallet()).balance
+      const [order] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await as(api, 'store')
+      await api.sellerConfirmOrder(order.id, '/assets/c.jpg')
+      await api.dispatchOrder(order.id)
+      await as(api, 'rider')
+      await api.takeDelivery(order.id)
+      await api.passCollection(order.id, PHOTOS)
+      await api.confirmDelivery(order.id, order.deliveryPin!)
+      await as(api, 'funke')
+      return { p, order, start }
+    }
+    const saleLine = async (api: ReturnType<typeof make>, id: string) => (await api.listPayouts()).find((l) => l.orderId === id && l.kind === 'sale')
+
+    it('returns a changed mind for a fee: refunded when the rider has it, back in stock, seller gets a share', async () => {
+      const { c, api } = clock()
+      const { p, order, start } = await delivered(api)
+      const fee = returnFeeKobo(k(20_000), 1)
+      expect(fee).toBe(k(6_000))
+      await api.openClaim(order.id, { kind: 'change_of_mind', description: '', photos: [] })
+      await expect(api.openClaim(order.id, { kind: 'change_of_mind', description: '', photos: [] })).rejects.toThrow('already')
+      const paid = (await api.getWallet()).balance.cashKobo
+      expect(paid).toBe(start.cashKobo - k(20_000) - order.deliveryFeeKobo) // not yet
+
+      await as(api, 'store')
+      c.t += 49 * 3_600_000
+      expect((await saleLine(api, order.id))?.status).toBe('waiting') // held by the claim
+
+      await as(api, 'rider')
+      const pool = (await api.listReturnJobs())[0]
+      expect(pool).toMatchObject({ mine: false, pickupFrom: null })
+      await api.takeReturn(pool.id)
+      expect((await api.listReturnJobs())[0].pickupFrom).toMatchObject({ address: delivery.address, contactPhone: delivery.contactPhone })
+      await api.passReturnPickup(pool.id, PHOTOS)
+      const going = (await api.listReturnJobs())[0]
+      expect(going).toMatchObject({ status: 'returning', pickupFrom: null })
+      expect(going.returnTo.address).toBeTruthy()
+      await api.finishReturn(pool.id, '/assets/b.jpg')
+      expect(await api.listReturnJobs()).toEqual([])
+
+      await as(api, 'funke')
+      expect((await api.getWallet()).balance.cashKobo).toBe(paid + k(20_000) - fee) // delivery isn't refunded
+      await as(api, 'store')
+      expect(await saleLine(api, order.id)).toBeUndefined()
+      const trip = deliveryFeeKobo(placeholderPricing(), 'ikeja', delivery.location, 'large')
+      expect((await api.listPayouts()).find((l) => l.orderId === order.id && l.kind === 'return_fee')?.amountKobo).toBe(sellerShareOfReturnFee(fee, trip))
+      expect(await api.getListing(p.id)).toMatchObject({ stock: 1, status: 'for_sale' })
+    })
+
+    it('sends a fault to an admin, then refunds everything and charges the seller', async () => {
+      const { api } = clock()
+      const { order, start } = await delivered(api)
+      await expect(api.openClaim(order.id, { kind: 'fault', description: 'short', photos: PHOTOS })).rejects.toThrow('few words')
+      await api.openClaim(order.id, { kind: 'fault', description: 'The base is cracked', photos: PHOTOS })
+      await as(api, 'admin')
+      const [c] = await api.listOpenClaims()
+      expect(c).toMatchObject({ kind: 'fault', description: 'The base is cracked', confirmPhoto: '/assets/c.jpg' })
+      await api.reviewClaim(c.id, true, '')
+      expect(await api.listOpenClaims()).toEqual([])
+      await as(api, 'rider')
+      await api.takeReturn(c.id)
+      await api.passReturnPickup(c.id, PHOTOS)
+      await as(api, 'funke')
+      const after = (await api.getWallet()).balance
+      expect(after.cashKobo).toBe(start.cashKobo)
+      expect(after.creditKobo).toBe(start.creditKobo + APOLOGY_CREDIT_KOBO)
+      await as(api, 'store')
+      expect((await api.listPayouts()).find((l) => l.orderId === order.id)).toMatchObject({ kind: 'charge', amountKobo: -FAILURE_CHARGE_KOBO })
+    })
+
+    it('lets the seller’s payout go ahead if a claim is turned down, or the item isn’t as described', async () => {
+      const { c, api } = clock()
+      const { order } = await delivered(api)
+      await api.openClaim(order.id, { kind: 'fault', description: 'The base is cracked', photos: PHOTOS })
+      await as(api, 'admin')
+      const [claim] = await api.listOpenClaims()
+      await expect(api.reviewClaim(claim.id, false, '')).rejects.toThrow('Say why')
+      await api.reviewClaim(claim.id, false, 'The photo shows no damage')
+      c.t += 49 * 3_600_000
+      await as(api, 'store')
+      expect((await saleLine(api, order.id))?.status).toBe('due')
+
+      const second = await delivered(api)
+      const buyerBefore = (await api.getWallet()).balance.cashKobo
+      await api.openClaim(second.order.id, { kind: 'change_of_mind', description: '', photos: [] })
+      await as(api, 'rider')
+      const [job] = await api.listReturnJobs()
+      await api.takeReturn(job.id)
+      await expect(api.failReturnPickup(job.id, 'no', [])).rejects.toThrow('Say what')
+      await api.failReturnPickup(job.id, 'It’s been used', [])
+      await as(api, 'funke')
+      expect((await api.getWallet()).balance.cashKobo).toBe(buyerBefore)
+      expect((await api.listMyOrders()).find((o) => o.id === second.order.id)?.claim).toMatchObject({ status: 'pickup_failed', reviewNote: 'It’s been used' })
+    })
+
+    it('closes after 48 hours, and isn’t for cars or other people’s orders', async () => {
+      const { c, api } = clock()
+      const { order } = await delivered(api)
+      await as(api, 'chidi')
+      await expect(api.openClaim(order.id, { kind: 'change_of_mind', description: '', photos: [] })).rejects.toMatchObject({ code: 'not_found' })
+      await as(api, 'funke')
+      c.t += 48 * 3_600_000
+      await expect(api.openClaim(order.id, { kind: 'change_of_mind', description: '', photos: [] })).rejects.toThrow('48 hours')
+      const car = await delivered(api, 'Cars')
+      await expect(api.openClaim(car.order.id, { kind: 'change_of_mind', description: '', photos: [] })).rejects.toThrow('cars')
+    })
+
+    it('lets a seller contest a failure: the charge goes and it stops counting', async () => {
+      const { api } = clock()
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Contested', description: '', category: 'Home', priceKobo: k(20_000), stock: 2 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const [order] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await as(api, 'store')
+      await expect(api.contestFailure(order.id, 'It was the right item')).rejects.toThrow('7 days')
+      await api.sellerConfirmOrder(order.id, '/assets/c.jpg')
+      await api.dispatchOrder(order.id)
+      await as(api, 'rider')
+      await api.takeDelivery(order.id)
+      await api.failCollection(order.id, ['no_item'], '', [])
+      await as(api, 'store')
+      await expect(api.contestFailure(order.id, 'short')).rejects.toThrow('10 to 500')
+      await api.contestFailure(order.id, 'I had it ready, the rider never came')
+      await as(api, 'admin')
+      const [c] = await api.listOpenClaims()
+      expect(c).toMatchObject({ kind: 'contest', cancelReason: 'failed_check' })
+      await api.reviewClaim(c.id, true, '')
+      await as(api, 'store')
+      expect((await api.listPayouts()).filter((l) => l.orderId === order.id)).toEqual([])
+    })
+  })
+
   describe('rider and door checks', () => {
     const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
     const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
@@ -812,7 +1008,8 @@ describe('mock api', () => {
 
     expect(await api.getMyMerchant()).toMatchObject({ kind: 'individual', name: 'Tolu’s Gadgets', cacNumber: '' })
     await expect(api.createListing(newListing())).rejects.toMatchObject({ code: 'forbidden' })
-    const p = await api.createProduct({ title: 'PS5', description: '', category: 'Electronics', priceKobo: k(15_000) })
+    const { code } = await api.getListingCheckPlan()
+    const p = await api.createProduct({ title: 'PS5', description: '', category: 'Electronics', priceKobo: k(15_000), check: { code, video: new Blob(['v'], { type: 'video/webm' }) } })
     expect((await api.listMerchantListings()).map((l) => l.id)).toEqual([p.id])
     await api.approveListing(p.id)
     await expect(buyNow(api, p.id, { address: '12 Herbert Macaulay Way, Yaba', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' })).rejects.toThrow(/your own item/)
@@ -1031,7 +1228,8 @@ describe('mock api', () => {
     })
 
     it('follows a sale from waiting to paid, once, and tells the store', async () => {
-      const api = make()
+      let t = Date.now()
+      const api = make(() => t)
       const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
       await sign(api, 'store')
       const p = await api.createProduct({ title: 'Payout chair', description: '', category: 'Home', priceKobo: k(50_000) })
@@ -1053,6 +1251,8 @@ describe('mock api', () => {
       await api.confirmDelivery(placed.id, placed.deliveryPin!)
 
       await sign(api, 'store')
+      expect((await line()).status).toBe('waiting') // the claim window
+      t += 48 * 3_600_000 + 1000
       expect((await line()).status).toBe('due')
       const { id } = await line()
 

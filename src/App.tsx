@@ -35,6 +35,8 @@ import { MerchantPage } from '@/pages/merchant/MerchantPage'
 import { ResultPage } from '@/pages/ResultPage'
 import { ConversationPage, MessagesPage, NewConversationPage } from '@/pages/MessagesPage'
 import { NotificationsPage } from '@/pages/NotificationsPage'
+import { ReturnJobPage } from '@/pages/delivery/ReturnJobs'
+import { AdminClaimsPage } from '@/pages/admin/AdminClaimsPage'
 import { AdminDeliveryPage } from '@/pages/admin/AdminDeliveryPage'
 import { AdminCancellationsPage } from '@/pages/admin/AdminCancellationsPage'
 import { AdminPayoutsPage } from '@/pages/admin/AdminPayoutsPage'
@@ -185,6 +187,7 @@ const router = createBrowserRouter([
       { path: 'boosts', element: <AdminBoostsPage /> },
       { path: 'payouts', element: <AdminPayoutsPage /> },
       { path: 'cancellations', element: <AdminCancellationsPage /> },
+      { path: 'claims', element: <AdminClaimsPage /> },
       { path: 'delivery', element: <AdminDeliveryPage /> },
       { path: 'prizes', element: <AdminPrizesPage /> },
       { path: 'stories', element: <AdminStoriesPage /> },
@@ -198,6 +201,7 @@ const router = createBrowserRouter([
     errorElement: <RouteError />,
     children: [
       { index: true, element: <DeliveryPage /> },
+      { path: 'returns/:id', element: <ReturnJobPage /> },
       { path: ':id', element: <DeliveryJobPage /> },
     ],
   },

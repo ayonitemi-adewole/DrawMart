@@ -1,3 +1,4 @@
+import type { ClaimInput } from './types'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import type { ShopPickup } from '@/domain/shopPickup'
@@ -25,6 +26,10 @@ export const keys = {
   cancelRates: ['cancel-rates'] as const,
   deliveryPricing: ['delivery-pricing'] as const,
   shopPickup: ['shop-pickup'] as const,
+  openClaims: ['open-claims'] as const,
+  listingCheckPlan: ['listing-check-plan'] as const,
+  listingCheck: (id: string) => ['listing-check', id] as const,
+  returnJobs: ['return-jobs'] as const,
   pending: ['pending'] as const,
   myOrders: ['my-orders'] as const,
   merchantOrders: ['merchant-orders'] as const,
@@ -89,6 +94,10 @@ export function useHasShop() {
   return role === 'store' || (role === 'buyer' && application.data?.status === 'approved')
 }
 export const useShopPickup = () => useQuery({ queryKey: keys.shopPickup, queryFn: () => api.getShopPickup(), enabled: useHasShop() })
+export const useListingCheckPlan = (enabled: boolean) => useQuery({ queryKey: keys.listingCheckPlan, queryFn: () => api.getListingCheckPlan(), enabled: useHasShop() && enabled, staleTime: Infinity })
+export const useListingCheck = (id: string | null) => useQuery({ queryKey: keys.listingCheck(id ?? ''), queryFn: () => api.getListingCheck(id!), enabled: !!id, staleTime: 5 * 60_000 })
+export const useOpenClaims = () => useQuery({ queryKey: keys.openClaims, queryFn: () => api.listOpenClaims(), enabled: useIs('admin') })
+export const useReturnJobs = () => useQuery({ queryKey: keys.returnJobs, queryFn: () => api.listReturnJobs(), enabled: useIs('delivery'), refetchInterval: 30_000 })
 export const useMerchant = () => useQuery({ queryKey: keys.merchant, queryFn: () => api.getMyMerchant(), enabled: useHasShop() })
 export const useMerchantListings = () =>
   useQuery({ queryKey: keys.merchantListings, queryFn: () => api.listMerchantListings(), enabled: useHasShop() })
@@ -404,6 +413,26 @@ export function useSellerConfirmOrder() {
 export function useLiftSuspension() {
   const invalidate = useInvalidateAll()
   return useMutation({ mutationFn: (merchantId: string) => api.liftSuspension(merchantId), onSettled: invalidate })
+}
+
+export function useClaimActions() {
+  const invalidate = useInvalidateAll()
+  return {
+    open: useMutation({ mutationFn: ({ id, input }: { id: string; input: ClaimInput }) => api.openClaim(id, input), onSettled: invalidate }),
+    contest: useMutation({ mutationFn: ({ id, note }: { id: string; note: string }) => api.contestFailure(id, note), onSettled: invalidate }),
+    review: useMutation({ mutationFn: ({ id, approve, note }: { id: string; approve: boolean; note: string }) => api.reviewClaim(id, approve, note), onSettled: invalidate }),
+  }
+}
+
+export function useReturnActions() {
+  const invalidate = useInvalidateAll()
+  return {
+    take: useMutation({ mutationFn: (id: string) => api.takeReturn(id), onSettled: invalidate }),
+    release: useMutation({ mutationFn: (id: string) => api.releaseReturn(id), onSettled: invalidate }),
+    pass: useMutation({ mutationFn: ({ id, photos }: { id: string; photos: string[] }) => api.passReturnPickup(id, photos), onSettled: invalidate }),
+    fail: useMutation({ mutationFn: ({ id, note, photos }: { id: string; note: string; photos: string[] }) => api.failReturnPickup(id, note, photos), onSettled: invalidate }),
+    finish: useMutation({ mutationFn: ({ id, photo }: { id: string; photo: string }) => api.finishReturn(id, photo), onSettled: invalidate }),
+  }
 }
 
 export function useCancelOrder() {

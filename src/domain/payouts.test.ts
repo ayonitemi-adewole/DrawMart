@@ -1,3 +1,4 @@
+import type { ClaimStatus } from './types'
 import { describe, expect, it } from 'vitest'
 import { computeListingEconomics } from './fees'
 import { accountNumberError, accountPayable, markPaidError, maskAccountNumber, payoutsFor, payoutTotals, statementCsv, statementMonths, type PayoutLine } from './payouts'
@@ -12,6 +13,18 @@ describe('what a seller is owed', () => {
   it('pays a sale its price less the fee, due once delivered', () => {
     expect(payoutsFor([], [order()])).toEqual([{ merchantId: 'm', listingId: 'a', orderId: 'o', kind: 'sale', amountKobo: 4_750_000, due: false }])
     expect(payoutsFor([], [order({ status: 'delivered' })])[0].due).toBe(true)
+  })
+
+  it('holds a sale for 48 hours after delivery, and while a claim is being dealt with', () => {
+    const deliveredAt = '2026-11-02T10:00:00Z'
+    const at = (hours: number) => Date.parse(deliveredAt) + hours * 3_600_000
+    const o = order({ status: 'delivered', deliveredAt })
+    expect(payoutsFor([], [o], at(47.9))[0].due).toBe(false)
+    expect(payoutsFor([], [o], at(48))[0].due).toBe(true)
+    const claim = (status: ClaimStatus) => ({ claim: { id: 'q', kind: 'fault' as const, status, description: '', photos: [], returnFeeKobo: 0, reviewNote: null } })
+    for (const status of ['open', 'awaiting_pickup', 'returning'] as const) expect(payoutsFor([], [{ ...o, ...claim(status) }], at(49))[0].due).toBe(false)
+    for (const status of ['declined', 'pickup_failed'] as const) expect(payoutsFor([], [{ ...o, ...claim(status) }], at(49))[0].due).toBe(true)
+    expect(payoutsFor([], [{ ...o, refundedAt: deliveredAt }], at(49))).toEqual([])
   })
 
   it('pays nothing for a won item’s own order, but the draw once it’s delivered', () => {

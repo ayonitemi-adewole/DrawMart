@@ -5,11 +5,12 @@
  * waiting: earned, but not delivered yet. due: delivered, so DrawMart owes it.
  * paid: an admin has sent it. A line only ever moves forward.
  */
+import { CLAIM_HOLDS_PAYOUT, claimWindowOpen } from './claims'
 import { computeListingEconomics } from './fees'
 import { lagosDay } from './metrics'
 import type { Kobo, Listing, Order } from './types'
 
-export type PayoutKind = 'sale' | 'draw' | 'caution_fee' | 'charge'
+export type PayoutKind = 'sale' | 'draw' | 'caution_fee' | 'charge' | 'return_fee' | 'charge_refund'
 export type PayoutStatus = 'waiting' | 'due' | 'paid'
 
 export interface PayoutLine {
@@ -46,8 +47,8 @@ export interface PayoutAccount {
 export const PAYOUT_ACCOUNT_HOLD_HOURS = 48
 export const MIN_REFERENCE_LENGTH = 3
 
-export const PAYOUT_KIND_TEXT: Record<PayoutKind, string> = { charge: 'Charge for a failed order', sale: 'Sale', draw: 'Draw payout', caution_fee: 'Caution fee back' }
-export const PAYOUT_STATUS_TEXT: Record<PayoutStatus, string> = { waiting: 'Waiting for delivery', due: 'Due', paid: 'Paid' }
+export const PAYOUT_KIND_TEXT: Record<PayoutKind, string> = { charge: 'Charge for a failed order', return_fee: 'Your share of a return fee', charge_refund: 'Charge taken back', sale: 'Sale', draw: 'Draw payout', caution_fee: 'Caution fee back' }
+export const PAYOUT_STATUS_TEXT: Record<PayoutStatus, string> = { waiting: 'Not due yet', due: 'Due', paid: 'Paid' }
 
 export function accountNumberError(accountNumber: string): string | null {
   return /^[0-9]{10}$/.test(accountNumber) ? null : 'Enter the 10-digit account number.'
@@ -72,7 +73,7 @@ export interface DesiredPayout {
 }
 
 type PayoutListing = Pick<Listing, 'id' | 'merchantId' | 'kind' | 'status' | 'priceKobo' | 'ticketPriceKobo' | 'feeBps' | 'feeMode' | 'cautionFee' | 'pickupBatchId'>
-type PayoutOrder = Pick<Order, 'id' | 'listingId' | 'merchantId' | 'priceKobo' | 'feeKobo' | 'isPrize' | 'status'>
+type PayoutOrder = Pick<Order, 'id' | 'listingId' | 'merchantId' | 'priceKobo' | 'feeKobo' | 'isPrize' | 'status'> & Partial<Pick<Order, 'deliveredAt' | 'refundedAt' | 'claim'>>
 
 /**
  * The lines these listings and orders should have.
@@ -82,12 +83,18 @@ type PayoutOrder = Pick<Order, 'id' | 'listingId' | 'merchantId' | 'priceKobo' |
  *   fee, so one line, due once all its draws are delivered. A withdrawn listing's
  *   is due straight away, since nothing is left to deliver.
  */
-export function payoutsFor(listings: readonly PayoutListing[], orders: readonly PayoutOrder[]): DesiredPayout[] {
+/** A sale waits out the claim window, and any claim still being dealt with. */
+function saleDue(o: PayoutOrder, nowMs: number): boolean {
+  if (o.status !== 'delivered' || (o.claim && CLAIM_HOLDS_PAYOUT.includes(o.claim.status))) return false
+  return !o.deliveredAt || !claimWindowOpen(o.deliveredAt, nowMs)
+}
+
+export function payoutsFor(listings: readonly PayoutListing[], orders: readonly PayoutOrder[], nowMs = Infinity): DesiredPayout[] {
   const lines: DesiredPayout[] = []
   const prizeDelivered = (id: string) => orders.some((o) => o.listingId === id && o.isPrize && o.status === 'delivered')
 
   for (const o of orders) {
-    if (!o.isPrize && o.status !== 'cancelled') lines.push({ merchantId: o.merchantId, listingId: o.listingId, orderId: o.id, kind: 'sale', amountKobo: o.priceKobo - o.feeKobo, due: o.status === 'delivered' })
+    if (!o.isPrize && o.status !== 'cancelled' && !o.refundedAt) lines.push({ merchantId: o.merchantId, listingId: o.listingId, orderId: o.id, kind: 'sale', amountKobo: o.priceKobo - o.feeKobo, due: saleDue(o, nowMs) })
   }
   for (const l of listings) {
     if (l.kind === 'raffle' && (l.status === 'sold_out' || l.status === 'drawn')) {

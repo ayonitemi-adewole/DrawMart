@@ -1,8 +1,8 @@
 import { NavLink, Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router'
 import { api } from '@/api'
 import { cancelRateFlagged } from '@/domain/orderCancel'
-import { useAccess, useCancelRates, useDuePayouts, useMerchant, usePendingListings, usePendingWinnerStories, usePriceReviews, usePrizeOrders, useSellerApplications, useSignOut, useUnreadMessages, useUnreadNotifications } from '@/api/hooks'
-import { XIcon, BellIcon, NairaIcon, HeartIcon, ChartIcon, ChatIcon, TrendingUpIcon, TrophyIcon, TruckIcon, CheckIcon, ClipboardIcon, DiceIcon, HashIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
+import { useOpenClaims, useAccess, useCancelRates, useDuePayouts, useMerchant, usePendingListings, usePendingWinnerStories, usePriceReviews, usePrizeOrders, useSellerApplications, useSignOut, useUnreadMessages, useUnreadNotifications } from '@/api/hooks'
+import { AlertIcon, XIcon, BellIcon, NairaIcon, HeartIcon, ChartIcon, ChatIcon, TrendingUpIcon, TrophyIcon, TruckIcon, CheckIcon, ClipboardIcon, DiceIcon, HashIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
 import { NavMenu } from '@/components/NavMenu'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { cx } from '@/components/ui'
@@ -36,6 +36,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
   const stories = usePendingWinnerStories()
   const priceReviews = usePriceReviews()
   const cancelRates = useCancelRates()
+  const claims = useOpenClaims()
   const access = useAccess()
   const unreadNotifications = useUnreadNotifications()
   const duePayouts = useDuePayouts()
@@ -59,6 +60,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
           { to: '/admin/prizes', label: 'Won items', icon: TrophyIcon, count: prizes.data?.filter((o) => o.status === 'paid').length ?? 0 },
           { to: '/admin/stories', label: 'Winner stories', icon: HeartIcon, count: stories.data?.length ?? 0 },
           { to: '/admin/payouts', label: 'Payouts', icon: NairaIcon, count: duePayouts.data?.length ?? 0 },
+          { to: '/admin/claims', label: 'Claims', icon: AlertIcon, count: claims.data?.length ?? 0 },
           { to: '/admin/cancellations', label: 'Cancellations', icon: XIcon, count: cancelRates.data?.filter((r) => cancelRateFlagged(r.orders, r.cancelled)).length ?? 0 },
           { to: '/admin/delivery', label: 'Delivery prices', icon: TruckIcon },
           { to: '/admin/boosts', label: 'Boosts', icon: TrendingUpIcon },

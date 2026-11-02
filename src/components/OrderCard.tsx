@@ -1,6 +1,10 @@
 import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router'
-import { useCancelOrder, useDispatchOrder, useSellerConfirmOrder, useShopPickup } from '@/api/hooks'
+import { useCancelOrder, useClaimActions, useDispatchOrder, useSellerConfirmOrder, useShopPickup } from '@/api/hooks'
+import { canClaim, canContest, claimError, claimStatusText, contestError, returnFeeKobo, returnFeePercent, CLAIM_WINDOW_HOURS } from '@/domain/claims'
+import type { ClaimKind, GeoPoint } from '@/domain/types'
+import { AddressPicker } from './AddressPicker'
+import { RiderPhotos } from './RiderPhotos'
 import { ShopPickupSheet } from './ShopPickup'
 import { needsConfirming } from '@/domain/orderConfirm'
 import { isPhoneOrTablet, thisDevice } from '@/lib/device'
@@ -14,7 +18,7 @@ import { dateTime } from '@/lib/time'
 import { ProductId } from './ProductId'
 import { DeliveryPin } from './DeliveryPin'
 import { CameraCapture } from './CameraCapture'
-import { CameraIcon, ClockIcon, CopyIcon, MapPinIcon, PhoneIcon, StoreIcon, TruckIcon, XIcon } from './icons'
+import { AlertIcon, CameraIcon, ClockIcon, CopyIcon, MapPinIcon, PhoneIcon, StoreIcon, TruckIcon, XIcon } from './icons'
 import { Sheet } from './Sheet'
 import { useToast } from './toast'
 import { Badge, Button, Card, Field, Notice, ProductImage, buttonClass, cx, errorMessage, inputCls, type Tone } from './ui'
@@ -50,6 +54,9 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
   const [cancelling, setCancelling] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [addingPickup, setAddingPickup] = useState(false)
+  const [claiming, setClaiming] = useState(false)
+  const [contesting, setContesting] = useState(false)
+  const claimText = o.claim ? claimStatusText(o.claim.kind, o.claim.status, audience === 'buyer' ? 'buyer' : 'seller') : null
   const pickupDetails = useShopPickup()
   const needsPickupDetails = audience === 'store' && pickupDetails.data === null
   const waiting = needsConfirming(o)
@@ -193,6 +200,25 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
         </Button>
       ) : null}
       {cancelling ? <CancelSheet order={o} onClose={() => setCancelling(false)} /> : null}
+      {claimText && (audience !== 'buyer' || o.claim?.kind !== 'contest') ? (
+        <Notice tone={o.claim?.status === 'declined' || o.claim?.status === 'pickup_failed' ? 'hot' : 'ticket'} icon={ClockIcon} title={claimText.title}>
+          {claimText.body}
+          {o.claim?.reviewNote ? ` “${o.claim.reviewNote}”` : ''}
+          {o.claim?.kind === 'change_of_mind' && audience === 'buyer' && (o.claim.status === 'returning' || o.claim.status === 'returned') ? ` We kept a ${formatNaira(o.claim.returnFeeKobo)} return fee.` : ''}
+        </Notice>
+      ) : null}
+      {audience === 'buyer' && !o.claim && canClaim(o, Date.now()) ? (
+        <Button variant="ghost" onClick={() => setClaiming(true)}>
+          <AlertIcon size={16} /> Problem with it, or want to return it?
+        </Button>
+      ) : null}
+      {claiming ? <ClaimSheet order={o} onClose={() => setClaiming(false)} /> : null}
+      {audience === 'store' && !o.claim && canContest(o, Date.now()) ? (
+        <Button variant="ghost" onClick={() => setContesting(true)}>
+          <AlertIcon size={16} /> I don’t think this is right
+        </Button>
+      ) : null}
+      {contesting ? <ContestSheet order={o} onClose={() => setContesting(false)} /> : null}
       {o.status === 'delivered' && o.deliveredAt ? <span className="text-xs text-subtle">{pickup ? 'Collected' : 'Delivered'} {dateTime(o.deliveredAt)}</span> : null}
       {audience === 'buyer' && o.isPrize && o.status === 'delivered' ? (
         <Link to={`/draws/${o.listingId}`} className="flex min-h-11 w-fit items-center text-sm">
@@ -200,6 +226,129 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
         </Link>
       ) : null}
     </Card>
+  )
+}
+
+function ClaimSheet({ order: o, onClose }: { order: OrderView; onClose: () => void }) {
+  const { open } = useClaimActions()
+  const toast = useToast()
+  const [kind, setKind] = useState<ClaimKind | null>(null)
+  const [description, setDescription] = useState('')
+  const [photos, setPhotos] = useState<string[]>([])
+  const [unused, setUnused] = useState(false)
+  const [address, setAddress] = useState(o.delivery.address)
+  const [location, setLocation] = useState<GeoPoint | null>(o.delivery.location)
+  const [showError, setShowError] = useState(false)
+  const needsAddress = !o.delivery.address
+  const fee = returnFeeKobo(o.priceKobo, o.quantity)
+  const problem = claimError(kind, description, photos) ?? (kind === 'change_of_mind' && !unused ? 'Confirm it’s unused to return it.' : null)
+
+  function onSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (problem || !kind) {
+      setShowError(true)
+      return
+    }
+    open
+      .mutateAsync({ id: o.id, input: { kind, description, photos, address, location, phone: o.delivery.contactPhone } })
+      .then(() => {
+        toast(kind === 'fault' ? 'Sent. DrawMart will look at it.' : 'A rider will come to collect it. You’re refunded when they have it.')
+        onClose()
+      })
+      .catch((err) => toast(errorMessage(err), 'error'))
+  }
+
+  return (
+    <Sheet open onClose={() => !open.isPending && onClose()} title="Problem or return">
+      <h2 className="pr-10 font-display text-2xl font-extrabold">What’s happened?</h2>
+      <p className="text-sm text-muted">You have {CLAIM_WINDOW_HOURS} hours from delivery. {o.listingTitle}{o.quantity > 1 ? ` × ${o.quantity}` : ''}.</p>
+      <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
+        <fieldset className="flex flex-col gap-1">
+          <legend className="sr-only">What’s happened</legend>
+          {([['fault', 'It’s faulty or not as described'], ['change_of_mind', 'I’ve changed my mind']] as const).map(([value, label]) => (
+            <label key={value} className={cx('flex min-h-11 cursor-pointer items-center gap-3 rounded-xl border px-3 text-sm transition', kind === value ? 'border-brand bg-brand-soft' : 'border-line hover:border-line-strong')}>
+              <input type="radio" name={`claim-${o.id}`} checked={kind === value} onChange={() => setKind(value)} className="size-4 shrink-0 accent-brand" />
+              {label}
+            </label>
+          ))}
+        </fieldset>
+        {kind === 'fault' ? (
+          <>
+            <Field label="What’s wrong?" htmlFor={`claim-text-${o.id}`}>
+              <textarea id={`claim-text-${o.id}`} value={description} maxLength={500} onChange={(e) => setDescription(e.target.value)} rows={3} className={cx(inputCls, 'py-3')} />
+            </Field>
+            <RiderPhotos photos={photos} onChange={setPhotos} label="Add a photo of the problem" />
+            <p className="text-xs text-subtle">DrawMart checks it first. If it’s accepted, a rider collects it and you get everything back, delivery included.</p>
+          </>
+        ) : null}
+        {kind === 'change_of_mind' ? (
+          <>
+            <Notice tone="ticket" icon={AlertIcon} title={`You’d get back ${formatNaira(o.priceKobo - fee)}`}>
+              A {returnFeePercent(Math.floor(o.priceKobo / o.quantity))}% return fee of {formatNaira(fee)} comes off, and the delivery fee isn’t refunded.
+            </Notice>
+            <label className="flex min-h-11 cursor-pointer items-start gap-3 text-sm">
+              <input type="checkbox" checked={unused} onChange={(e) => setUnused(e.target.checked)} className="mt-0.5 size-5 shrink-0 accent-brand" />
+              It’s unused, complete and in its packaging. If it isn’t, the rider won’t take it and I won’t be refunded.
+            </label>
+          </>
+        ) : null}
+        {kind && needsAddress ? (
+          <AddressPicker id={`claim-address-${o.id}`} label="Where should the rider collect it?" address={address} onAddress={setAddress} location={location} onLocation={setLocation} showPinError={showError} />
+        ) : null}
+        {showError && problem ? <p className="text-sm font-semibold text-hot-ink" role="alert">{problem}</p> : null}
+        <div className="flex gap-2">
+          <Button type="button" variant="outline" className="flex-1" onClick={onClose} disabled={open.isPending}>
+            Go back
+          </Button>
+          <Button type="submit" className="flex-1" loading={open.isPending}>
+            {kind === 'change_of_mind' ? 'Return it' : 'Send'}
+          </Button>
+        </div>
+      </form>
+    </Sheet>
+  )
+}
+
+function ContestSheet({ order: o, onClose }: { order: OrderView; onClose: () => void }) {
+  const { contest } = useClaimActions()
+  const toast = useToast()
+  const [note, setNote] = useState('')
+  const [showError, setShowError] = useState(false)
+  const problem = contestError(note)
+
+  function onSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (problem) {
+      setShowError(true)
+      return
+    }
+    contest
+      .mutateAsync({ id: o.id, note })
+      .then(() => {
+        toast('Sent. DrawMart will look at it.')
+        onClose()
+      })
+      .catch((err) => toast(errorMessage(err), 'error'))
+  }
+
+  return (
+    <Sheet open onClose={() => !contest.isPending && onClose()} title="Contest this">
+      <h2 className="pr-10 font-display text-2xl font-extrabold">What happened?</h2>
+      <p className="text-sm text-muted">If DrawMart agrees, your charge is taken back and this won’t count against your shop. The buyer keeps their refund either way.</p>
+      <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
+        <Field label="Your side" htmlFor={`contest-${o.id}`} error={showError && problem ? problem : undefined}>
+          <textarea id={`contest-${o.id}`} value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} rows={4} className={cx(inputCls, 'py-3')} />
+        </Field>
+        <div className="flex gap-2">
+          <Button type="button" variant="outline" className="flex-1" onClick={onClose} disabled={contest.isPending}>
+            Go back
+          </Button>
+          <Button type="submit" className="flex-1" loading={contest.isPending}>
+            Send
+          </Button>
+        </div>
+      </form>
+    </Sheet>
   )
 }
 

@@ -6,7 +6,7 @@
  * supabase/migrations, which enforces the same rules as src/domain.
  */
 import type { PayoutAccount, PayoutKind, PayoutStatus } from '@/domain/payouts'
-import type { BankOption, CancelRateView, PayoutLineView } from './types'
+import type { ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob } from './types'
 import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js'
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
@@ -19,7 +19,7 @@ import { DEFAULT_PUSH_PREFERENCES } from '@/domain/push'
 import { ORDER_ERROR_TEXT, clampQuantity } from '@/domain/orders'
 import { SELLER_APPLICATION_ERROR_TEXT, validateSellerApplication } from '@/domain/sellers'
 import type { DeliveryArea } from '@/domain/deliveryFees'
-import type { CollectionProblem, CancelReason, Category, Kobo, PackageSize, Fulfilment, PickupPoint, FeeMode, Handover, LedgerEntry, LedgerKind, ListingKind, ListingStatus, Merchant, OrderStatus, RejectionReason, UnsoldPolicy, User } from '@/domain/types'
+import type { ClaimKind, ClaimStatus, CollectionProblem, CancelReason, Category, Kobo, PackageSize, Fulfilment, PickupPoint, FeeMode, Handover, LedgerEntry, LedgerKind, ListingKind, ListingStatus, Merchant, OrderStatus, RejectionReason, UnsoldPolicy, User } from '@/domain/types'
 import { DEMO_ACCOUNTS } from './demoAccounts'
 import {
   type AccountRole,
@@ -207,6 +207,8 @@ interface OrderRow {
   confirm_by: string | null
   confirmed_at: string | null
   confirm_photo: string | null
+  refunded_at: string | null
+  claim: { id: string; kind: ClaimKind; status: ClaimStatus; description: string; photos: string[] | null; return_fee_kobo: number; review_note: string | null } | null
   ready_by: string | null
   collected_at: string | null
   collection_photos: string[] | null
@@ -249,8 +251,9 @@ interface LedgerRow {
 // draw_results.winner_user_id isn't readable by clients, so name the columns.
 const RESULT_COLUMNS = 'listing_id, commitment, seed, closing_ref, winning_number, drawn_at'
 const LISTING_SELECT = `*, merchant:merchants(*), result:draw_results(${RESULT_COLUMNS}), handover:listing_handovers(*)`
-const ORDER_SELECT = '*, listing:listings(product_code, title, images, category), merchant:merchants(name), pickup_point:pickup_points(*)'
+const ORDER_SELECT = '*, claim:order_claims(id, kind, status, description, photos, return_fee_kobo, review_note), listing:listings(product_code, title, images, category), merchant:merchants(name), pickup_point:pickup_points(*)'
 const PHOTO_BUCKET = 'listing-photos'
+const CHECK_BUCKET = 'listing-checks'
 /** Private: ID photos for seller checks. */
 const ID_BUCKET = 'seller-ids'
 
@@ -400,6 +403,8 @@ function toOrderView(o: OrderRow): OrderView {
     priceKobo: num(o.price_kobo),
     feeKobo: num(o.fee_kobo),
     quantity: o.quantity,
+    refundedAt: o.refunded_at,
+    claim: o.claim ? { id: o.claim.id, kind: o.claim.kind, status: o.claim.status, description: o.claim.description, photos: o.claim.photos ?? [], returnFeeKobo: num(o.claim.return_fee_kobo), reviewNote: o.claim.review_note } : null,
     confirmBy: o.confirm_by,
     confirmedAt: o.confirmed_at,
     confirmPhoto: o.confirm_photo,
@@ -503,6 +508,15 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
   }
 
   /** Photos picked in the browser arrive as data: URLs; store them in Supabase Storage. */
+  /** Into the private bucket: only the seller and admins can open these. */
+  async function uploadCheckFile(merchantId: string, blob: Blob): Promise<string> {
+    const ext = blob.type.includes('mp4') ? 'mp4' : blob.type.includes('webm') ? 'webm' : blob.type === 'image/png' ? 'png' : 'jpg'
+    const path = `${merchantId}/${crypto.randomUUID()}.${ext}`
+    const { error } = await client.storage.from(CHECK_BUCKET).upload(path, blob, { contentType: blob.type || undefined, upsert: false })
+    if (error) throw new ApiError('invalid_input', `Couldn’t upload that: ${error.message}`)
+    return path
+  }
+
   async function uploadPhotos(merchantId: string, images: string[]): Promise<string[]> {
     return Promise.all(
       images.map(async (src) => {
@@ -1066,11 +1080,23 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       return getListing(id)
     },
 
-    createProduct: async (input: NewProductInput) => {
+    createProduct: async ({ check, ...input }: NewProductInput) => {
       const merchantId = await myMerchantId()
       const images = await uploadPhotos(merchantId, input.images ?? [])
-      const id = await rpc<string>('create_product', { p: { ...input, images } })
+      const videoPath = check?.video ? await uploadCheckFile(merchantId, check.video) : null
+      const proofPath = check?.proof ? await uploadCheckFile(merchantId, await (await fetch(check.proof)).blob()) : null
+      const p = { ...input, images, check: check ? { code: check.code, serial: check.serial ?? '', videoPath, proofPath } : undefined }
+      const id = await rpc<string>('create_product', { p })
       return getListing(id)
+    },
+
+    getListingCheckPlan: () => rpc<ListingCheckPlan>('listing_check_plan'),
+    getListingCheck: async (listingId) => {
+      const row = unwrap(await client.from('listing_checks').select('code, video_path, serial, proof_path').eq('listing_id', listingId).maybeSingle<{ code: string | null; video_path: string | null; serial: string | null; proof_path: string | null }>())
+      if (!row) return null
+      // Private bucket: links that run out after an hour.
+      const signed = async (path: string | null) => (path ? (await client.storage.from(CHECK_BUCKET).createSignedUrl(path, 3600)).data?.signedUrl ?? null : null)
+      return { code: row.code, hasVideo: !!row.video_path, serial: row.serial, videoUrl: await signed(row.video_path), proofUrl: await signed(row.proof_path) }
     },
 
     listMerchantOrders: async () => {
@@ -1090,6 +1116,26 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     },
     setDeliveryPrice: (areaA, areaB, priceKobo) => rpc('set_delivery_price', { p_area_a: areaA, p_area_b: areaB, p_price_kobo: priceKobo }),
     setDeliverySizeExtra: (size, extraKobo) => rpc('set_delivery_size_extra', { p_size: size, p_extra_kobo: extraKobo }),
+    openClaim: async (orderId, input) => {
+      const photos = await uploadPhotos(`claims/${await requireId()}`, input.photos)
+      await rpc('open_claim', { p_order_id: orderId, p_kind: input.kind, p_description: input.description, p_photos: photos, p_address: input.address ?? null, p_lat: input.location?.lat ?? null, p_lng: input.location?.lng ?? null, p_phone: input.phone ?? null })
+    },
+    contestFailure: (orderId, note) => rpc('contest_failure', { p_order_id: orderId, p_note: note }),
+    listOpenClaims: () => rpc<ClaimReview[]>('open_claims'),
+    reviewClaim: (claimId, approve, note) => rpc('review_claim', { p_claim_id: claimId, p_approve: approve, p_note: note }),
+    listReturnJobs: () => rpc<ReturnJob[]>('return_jobs'),
+    takeReturn: (claimId) => rpc('take_return', { p_claim_id: claimId }),
+    releaseReturn: (claimId) => rpc('release_return', { p_claim_id: claimId }),
+    passReturnPickup: async (claimId, photos) => {
+      await rpc('pass_return_pickup', { p_claim_id: claimId, p_photos: await uploadPhotos(`riders/${await requireId()}`, photos) })
+    },
+    failReturnPickup: async (claimId, note, photos) => {
+      await rpc('fail_return_pickup', { p_claim_id: claimId, p_note: note, p_photos: await uploadPhotos(`riders/${await requireId()}`, photos) })
+    },
+    finishReturn: async (claimId, photo) => {
+      const [url] = await uploadPhotos(`riders/${await requireId()}`, [photo])
+      await rpc('finish_return', { p_claim_id: claimId, p_photo: url })
+    },
     getShopPickup: async () => {
       const row = unwrap(await client.from('shop_pickups').select('address, lat, lng, contact_phone').eq('merchant_id', await myMerchantId()).maybeSingle<{ address: string; lat: number; lng: number; contact_phone: string }>())
       return row ? { address: row.address, location: { lat: row.lat, lng: row.lng }, contactPhone: row.contact_phone } : null

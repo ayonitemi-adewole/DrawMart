@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { usePendingListings, usePriceReviews, useReviewListing, useReviewPriceChange } from '@/api/hooks'
+import { useListingCheck, usePendingListings, usePriceReviews, useReviewListing, useReviewPriceChange } from '@/api/hooks'
 import type { ListingView } from '@/api/types'
 import { CalendarIcon, CarIcon, CheckIcon, ClipboardIcon, LockIcon, MapPinIcon, TruckIcon, XIcon } from '@/components/icons'
 import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
@@ -133,7 +133,10 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
   const [note, setNote] = useState('')
   const [showRejectError, setShowRejectError] = useState(false)
   const rejectProblem = rejectionError(l.kind, { reason, note })
-  const ready = checked.every(Boolean)
+  const proof = useListingCheck(product ? l.id : null)
+  const [videoOk, setVideoOk] = useState(false)
+  // Locked whenever a video was sent, even if it won't play: nobody approves one they haven't watched.
+  const ready = checked.every(Boolean) && (!proof.data?.hasVideo || videoOk)
   const econ = computeListingEconomics(l)
   const busy = review.isPending
 
@@ -233,6 +236,32 @@ function ReviewCard({ listing: l }: { listing: ListingView }) {
           </div>
         ) : null}
       </div>
+
+      {proof.data && (proof.data.hasVideo || proof.data.serial || proof.data.proofUrl) ? (
+        <div className="flex flex-col gap-3 rounded-2xl border border-line p-4 text-sm">
+          <strong>Proof from the seller</strong>
+          {proof.data.hasVideo ? (
+            <>
+              {proof.data.videoUrl ? (
+                <video src={proof.data.videoUrl} controls playsInline className="max-h-72 w-full rounded-xl bg-ink" aria-label="The seller’s video" />
+              ) : (
+                <p className="text-hot-ink">The video won’t load. Don’t approve until you’ve seen it: reload, or reject with a note asking them to send it again.</p>
+              )}
+              <label className="flex min-h-11 cursor-pointer items-center gap-3">
+                <input type="checkbox" checked={videoOk} disabled={!proof.data.videoUrl} onChange={(e) => setVideoOk(e.target.checked)} className="size-5 shrink-0 accent-brand" />
+                The video shows this item with the code <span className="font-mono font-extrabold">{proof.data.code}</span>
+              </label>
+            </>
+          ) : null}
+          {proof.data.serial ? <p>Serial or IMEI: <span className="font-mono font-bold">{proof.data.serial}</span></p> : null}
+          {proof.data.proofUrl ? (
+            <a href={proof.data.proofUrl} target="_blank" rel="noreferrer" className="flex w-fit flex-col gap-1 text-xs">
+              <img src={proof.data.proofUrl} alt="Proof of purchase" className="size-24 rounded-xl border border-line object-cover" />
+              Proof of purchase
+            </a>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="flex flex-col gap-3 rounded-2xl border border-line bg-ground/60 p-4">
         <span className="flex items-center gap-2 text-sm font-bold">
