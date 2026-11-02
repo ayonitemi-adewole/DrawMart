@@ -294,6 +294,29 @@ export interface OrderView extends Order {
   merchantName: string
   /** What the buyer gives the rider on delivery. Only ever sent to the buyer, until it's delivered. */
   deliveryPin: string | null
+  /** Who's bringing it: only to the buyer, only while a rider has it on the way (deliveryChat.ts). */
+  rider?: RiderCard | null
+}
+
+/** All a buyer learns about their rider. Never a phone number. */
+export interface RiderCard {
+  firstName: string
+  photo: string | null
+}
+
+export interface DeliveryChatMessage {
+  id: string
+  sender: 'buyer' | 'rider'
+  body: string
+  createdAt: string
+}
+
+/** A chat between a buyer and the rider carrying their order, open until it arrives. */
+export interface DeliveryChatView {
+  open: boolean
+  me: 'buyer' | 'rider'
+  rider: RiderCard | null
+  messages: DeliveryChatMessage[]
 }
 
 /** An order as a delivery account sees it. */
@@ -1027,6 +1050,13 @@ export interface DrawMartApi {
   releaseDelivery(orderId: string): Promise<void>
   /** The only way an order becomes delivered. A wrong PIN isn't an error: see the result. */
   confirmDelivery(orderId: string, pin: string): Promise<PinResult>
+  /** The rider's own first name and photo, as buyers see them. */
+  getRiderProfile(): Promise<RiderCard>
+  /** A photo of the rider, from the camera. */
+  setRiderPhoto(photo: string): Promise<void>
+  /** For the buyer, or the rider carrying it. Empty once it's closed. */
+  getDeliveryChat(orderId: string): Promise<DeliveryChatView>
+  sendDeliveryMessage(orderId: string, body: string): Promise<void>
   /** The rider is at the door: starts the wait. Returns when it started. */
   markArrived(orderId: string): Promise<string>
   /** The buyer couldn't be reached, with a photo and where the rider is. */

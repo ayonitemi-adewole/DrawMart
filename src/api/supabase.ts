@@ -41,6 +41,8 @@ import {
   type NewPickupInput,
   type DeliveryJob,
   type CounterItem,
+  type DeliveryChatView,
+  type RiderCard,
   type RiderPayDue,
   type NotificationView,
   type PickupItemInput,
@@ -274,6 +276,7 @@ interface OrderRow {
   return_state: 'returning' | 'returned' | null
   returned_at: string | null
   counter_at: string | null
+  arrived_at: string | null
   failed_attempts: number
   last_failed_at: string | null
   redelivery_choice: 'redeliver' | 'pickup' | null
@@ -483,6 +486,7 @@ function toOrderView(o: OrderRow): OrderView {
     returnState: o.return_state,
     returnedAt: o.returned_at,
     atCounterAt: o.counter_at,
+    arrivedAt: o.arrived_at ?? null,
     failedAttempts: o.failed_attempts ?? 0,
     lastFailedAt: o.last_failed_at ?? null,
     redeliveryChoice: o.redelivery_choice ?? null,
@@ -612,9 +616,10 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
   }
 
   /** The buyer's own PINs, which the orders table doesn't hold. */
+  /** The buyer's PINs, and who's bringing each order now. */
   async function withPins(orders: OrderView[]): Promise<OrderView[]> {
-    const pins = await rpc<Record<string, string>>('my_delivery_pins')
-    return orders.map((o) => ({ ...o, deliveryPin: pins[o.id] ?? null }))
+    const [pins, riders] = await Promise.all([rpc<Record<string, string>>('my_delivery_pins'), rpc<Record<string, RiderCard>>('my_order_riders')])
+    return orders.map((o) => ({ ...o, deliveryPin: pins[o.id] ?? null, rider: riders[o.id] ?? null }))
   }
 
   /** Row security limits these to the signed-in buyer's own. */
@@ -1433,6 +1438,13 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     takeDelivery: (orderId) => rpc('take_delivery', { p_order_id: orderId }),
     releaseDelivery: (orderId) => rpc('release_delivery', { p_order_id: orderId }),
     confirmDelivery: (orderId, pin) => rpc<PinResult>('confirm_delivery', { p_order_id: orderId, p_pin: pin }),
+    getRiderProfile: () => rpc<RiderCard>('my_rider_profile'),
+    setRiderPhoto: async (photo) => {
+      const [url] = await uploadPhotos(`riders/${await requireId()}`, [photo])
+      await rpc('set_rider_photo', { p_photo: url })
+    },
+    getDeliveryChat: (orderId) => rpc<DeliveryChatView>('delivery_chat', { p_order_id: orderId }),
+    sendDeliveryMessage: (orderId, body) => rpc('send_delivery_message', { p_order_id: orderId, p_body: body }),
     markArrived: (orderId) => rpc<string>('mark_arrived', { p_order_id: orderId }),
     failDeliveryAttempt: async (orderId, photo, at) => {
       const [url] = await uploadPhotos(`riders/${await requireId()}`, [photo])

@@ -71,6 +71,7 @@ import { COLLECT_WARNING_MINUTES, collectBy, collectionOverdue, takeJobError } f
 import { riderAreasError, riderJobAlertAllowed } from '@/domain/riderAlerts'
 import { counterCodeError, counterReminderDue, counterReturnDue } from '@/domain/counter'
 import { CHOOSE_WITHIN_HOURS, attemptError, redeliveryWindowError } from '@/domain/deliveryAttempts'
+import { deliveryMessageError, firstName } from '@/domain/deliveryChat'
 import { attemptPayError, pairPayError, payableNow, placeholderRiderPay, riderPayError, tripPay, type EarningKind, type RiderEarning, type RiderPayRates } from '@/domain/riderPay'
 import { newProductCode } from '@/domain/productCode'
 import { MAX_SAVED_ADDRESSES, SAVED_ADDRESS_ERROR_TEXT, sortAddresses, validateSavedAddress, type SavedAddress, type SavedAddressInput } from '@/domain/addresses'
@@ -110,7 +111,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v53' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v54' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -122,7 +123,7 @@ const TOLU_SHOP = 'm-tolu'
 const DAY = 24 * 60 * 60 * 1000
 
 /** The PIN and who's carrying it stay out of the order everyone else sees. */
-type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState; paidCashKobo: Kobo; paidCreditKobo: Kobo; paidFeeCashKobo: Kobo; paidFeeCreditKobo: Kobo; checkoutId: string; confirmRemindedAt: string | null; riderTakenAt?: string | null; counterRemindedAt?: string | null; counterOutAt?: string | null; arrivedAt?: string | null }
+type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState; paidCashKobo: Kobo; paidCreditKobo: Kobo; paidFeeCashKobo: Kobo; paidFeeCreditKobo: Kobo; checkoutId: string; confirmRemindedAt: string | null; riderTakenAt?: string | null; counterRemindedAt?: string | null; counterOutAt?: string | null }
 
 interface Db {
   users: User[]
@@ -155,6 +156,9 @@ interface Db {
   riderPayRates: RiderPayRates
   riderEarnings: (RiderEarning & { riderId: string; sourceKey: string; paidBy: string | null })[]
   riderPayoutAccounts: Record<string, PayoutAccount>
+  /** deliveryChat.ts: riders' photos, and buyer ↔ rider chats. */
+  riderPhotos: Record<string, string>
+  deliveryMessages: { id: string; orderId: string; riderId: string; sender: 'buyer' | 'rider'; body: string; createdAt: string }[]
   priceReviews: { listingId: string; newPriceKobo: Kobo; requestedAt: string }[]
   /** By buyer, then listing. Anything not in here is one. */
   cartQuantities: Record<string, Record<string, number>>
@@ -642,6 +646,8 @@ async function freshDb(): Promise<Db> {
     riderPayRates: placeholderRiderPay(placeholderPricing()),
     riderEarnings: [],
     riderPayoutAccounts: {},
+    riderPhotos: {},
+    deliveryMessages: [],
     priceReviews: [],
     cartQuantities: {},
     saved: {},
@@ -1200,13 +1206,17 @@ function accountFacts(db: Db, userId: string) {
   }
 }
 
+/** Open from collection until it's delivered, handed in, or goes back (private.delivery_chat_open). */
+const chatOpen = (o: MockOrder) => o.status === 'dispatched' && o.fulfilment === 'delivery' && !!o.riderId && !!o.collectedAt && !o.atCounterAt
+const riderCard = (db: Db, riderId: string) => ({ firstName: firstName(DEMO_ACCOUNTS.find((a) => a.mockId === riderId)?.name ?? ''), photo: db.riderPhotos[riderId] ?? null })
+
 function orderView(db: Db, order: MockOrder, forBuyer = false): OrderView {
-  const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, paidFeeCashKobo: _feeCash, paidFeeCreditKobo: _feeCredit, checkoutId: _checkoutId, confirmRemindedAt: _reminded, riderTakenAt: _taken, counterRemindedAt: _counterReminded, counterOutAt: _counterOut, arrivedAt: _arrived, ...o } = order
+  const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, paidFeeCashKobo: _feeCash, paidFeeCreditKobo: _feeCredit, checkoutId: _checkoutId, confirmRemindedAt: _reminded, riderTakenAt: _taken, counterRemindedAt: _counterReminded, counterOutAt: _counterOut, ...o } = order
   const l = db.listings.find((x) => x.id === o.listingId)!
   const merchant = db.merchants.find((m) => m.id === o.merchantId)!
   const r = db.reviews.find((x) => x.orderId === o.id)
   const review = r ? { id: r.id, rating: r.rating, sellerComment: r.sellerComment, productComment: r.productComment, reply: r.reply, repliedAt: r.repliedAt, hidden: !!r.hiddenAt, createdAt: r.createdAt } : null
-  return { ...o, review, deliveryPin: forBuyer && o.status !== 'delivered' && o.status !== 'cancelled' ? pin : null, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, merchantName: merchant.name }
+  return { ...o, review, rider: forBuyer && chatOpen(order) ? riderCard(db, order.riderId!) : null, deliveryPin: forBuyer && o.status !== 'delivered' && o.status !== 'cancelled' ? pin : null, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, merchantName: merchant.name }
 }
 
 // -------------------------------------------------------------------- API
@@ -1367,6 +1377,14 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     const point = counterPoint()
     if (!point) throw new ApiError('forbidden', 'Only pickup counter staff can do this.')
     return point
+  }
+  /** The buyer, or the rider carrying it: nobody else has this chat. */
+  function chatParty(db: Db, orderId: string): { o: MockOrder; me: 'buyer' | 'rider' } {
+    const s = readSession()
+    const o = db.orders.find((x) => x.id === orderId)
+    const me = !o ? null : s?.role === 'delivery' ? (o.riderId === s.userId ? 'rider' : null) : o.buyerId === buyer() && (!s || s.role === 'buyer') ? 'buyer' : null
+    if (!o || !me) throw new ApiError('not_found', 'That order doesn’t exist.')
+    return { o, me }
   }
   /** The order this rider is at the door with (private.door_order). */
   function doorOrder(db: Db, orderId: string): MockOrder {
@@ -1906,7 +1924,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           }
           const order: MockOrder = {
             pin: newDeliveryPin(), riderId: null, pinState: { attempts: 0, lockedUntil: null }, paidCashKobo: paid.fromCash, paidCreditKobo: paid.fromCredit, paidFeeCashKobo: paidFee.fromCash, paidFeeCreditKobo: paidFee.fromCredit, checkoutId, deliveryFeeKobo,
-            cancelledAt: null, cancelReason: null, cancelNote: null, confirmRemindedAt: null, atCounterAt: null, failedAttempts: 0, lastFailedAt: null, redeliveryChoice: null, redeliverAt: null,
+            cancelledAt: null, cancelReason: null, cancelNote: null, confirmRemindedAt: null, atCounterAt: null, arrivedAt: null, failedAttempts: 0, lastFailedAt: null, redeliveryChoice: null, redeliverAt: null,
             confirmBy: prize ? null : confirmDeadline(now()), confirmedAt: null, confirmPhoto: null,
             refundedAt: null, claim: null, readyBy: null, collectedAt: null, collectionPhotos: null, collectionProblems: null, refusalPhoto: null, returnState: null, returnedAt: null,
             discountKobo: used ? quantity * l.priceKobo - price : 0,
@@ -2011,6 +2029,38 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           earn(db, me, 'delivery', o.id, o, sellerArea(db, o), buyerArea(o), now())
         }
         return result
+      }),
+
+    getRiderProfile: () => tx((db) => riderCard(db, rider())),
+
+    setRiderPhoto: (photo) =>
+      tx((db) => {
+        const me = rider()
+        if (!/^(https:\/\/|\/assets\/|data:image\/)/.test(photo)) throw new ApiError('invalid_input', 'Take a photo of yourself.')
+        db.riderPhotos[me] = photo
+      }),
+
+    getDeliveryChat: (orderId) =>
+      tx((db) => {
+        const { o, me } = chatParty(db, orderId)
+        if (!chatOpen(o)) return { open: false, me, rider: null, messages: [] }
+        return {
+          open: true,
+          me,
+          rider: riderCard(db, o.riderId!),
+          messages: db.deliveryMessages.filter((m) => m.orderId === o.id && m.riderId === o.riderId).map(({ id, sender, body, createdAt }) => ({ id, sender, body, createdAt })),
+        }
+      }),
+
+    sendDeliveryMessage: (orderId, body) =>
+      tx((db) => {
+        const { o, me } = chatParty(db, orderId)
+        if (!chatOpen(o)) throw new ApiError('invalid_input', 'This chat has closed.')
+        const problem = deliveryMessageError(body)
+        if (problem) throw new ApiError('invalid_input', problem)
+        const recent = db.deliveryMessages.filter((m) => m.orderId === o.id && m.sender === me && Date.parse(m.createdAt) > now() - 60_000).length
+        if (recent >= MAX_MESSAGES_PER_MINUTE) throw new ApiError('invalid_input', 'You’re sending messages too quickly. Wait a moment.')
+        db.deliveryMessages.push({ id: uid('D'), orderId: o.id, riderId: o.riderId!, sender: me, body: body.trim(), createdAt: iso(now()) })
       }),
 
     markArrived: (orderId) =>

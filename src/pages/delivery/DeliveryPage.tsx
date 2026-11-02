@@ -2,7 +2,7 @@ import { Suspense, lazy, useState, type FormEvent } from 'react'
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router'
 import { useDeliveryActions, useDeliveryJobs, useMyCounter, useReturnJobs } from '@/api/hooks'
 import type { DeliveryJob } from '@/api/types'
-import { AlertIcon, BackIcon, CheckCircleIcon, ChevronRightIcon, LockIcon, MapPinIcon, PhoneIcon, StoreIcon, TruckIcon, UserIcon } from '@/components/icons'
+import { AlertIcon, BackIcon, ChatIcon, CheckCircleIcon, ChevronRightIcon, LockIcon, MapPinIcon, PhoneIcon, StoreIcon, TruckIcon, UserIcon } from '@/components/icons'
 import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
 import { Sheet } from '@/components/Sheet'
 import { useToast } from '@/components/toast'
@@ -14,6 +14,9 @@ import { RiderPhotos } from '@/components/RiderPhotos'
 import { CollectByLine, CollectByNotice } from './CollectBy'
 import { CounterPage } from './CounterPage'
 import { NotHome } from './NotHome'
+import { RiderPhoto } from './RiderPhoto'
+import { DeliveryChatSheet } from '@/components/DeliveryChat'
+import { firstName } from '@/domain/deliveryChat'
 import { ReturnJobList } from './ReturnJobs'
 import { directionsUrl } from '@/domain/location'
 import { matchesProductSearch } from '@/domain/productCode'
@@ -59,6 +62,7 @@ export function DeliveryPage() {
       <PageTitle eyebrow="Delivery" sub="Take an order, collect it, and get the buyer’s PIN when you hand it over. A delivery only counts once the PIN is entered.">
         Deliveries
       </PageTitle>
+      <RiderPhoto />
       <Segmented<Tab>
         label="Show"
         value={tab}
@@ -220,6 +224,7 @@ function JobDetails({ job: j }: { job: DeliveryJob }) {
             <a href={`tel:${j.dropOff.contactPhone.replace(/\s/g, '')}`} className="flex min-h-11 w-fit items-center gap-2 font-bold">
               <PhoneIcon size={16} /> Call {j.dropOff.contactPhone}
             </a>
+            {j.fulfilment === 'delivery' ? <MessageBuyer orderId={j.id} name={firstName(j.dropOff.buyerName)} /> : null}
           </div>
         ) : null}
       </Card>
@@ -241,6 +246,18 @@ function JobDetails({ job: j }: { job: DeliveryJob }) {
         </>
       )}
       <HandBack job={j} />
+    </>
+  )
+}
+
+function MessageBuyer({ orderId, name }: { orderId: string; name: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <Button variant="outline" className="w-fit" onClick={() => setOpen(true)}>
+        <ChatIcon size={16} /> Message {name}
+      </Button>
+      <DeliveryChatSheet orderId={orderId} title={`Message ${name}`} open={open} onClose={() => setOpen(false)} />
     </>
   )
 }

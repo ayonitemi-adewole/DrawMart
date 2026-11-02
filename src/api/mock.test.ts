@@ -774,6 +774,64 @@ describe('mock api', () => {
     })
   })
 
+  describe('rider shown to the buyer', () => {
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+
+    it('shows the rider’s first name and photo once collected, with a chat that closes on delivery', async () => {
+      const api = make()
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Chat lamp', description: '', category: 'Home', priceKobo: k(20_000), stock: 1 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const [o] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await as(api, 'store')
+      await api.sellerConfirmOrder(o.id, '/assets/c.jpg')
+      await api.dispatchOrder(o.id)
+      await as(api, 'rider')
+      await api.takeDelivery(o.id)
+      await api.setRiderPhoto('/assets/bayo.jpg')
+      expect(await api.getRiderProfile()).toEqual({ firstName: 'Bayo', photo: '/assets/bayo.jpg' })
+
+      // Not before it's collected.
+      await as(api, 'funke')
+      expect((await api.listMyOrders()).find((x) => x.id === o.id)?.rider).toBeNull()
+      expect(await api.getDeliveryChat(o.id)).toMatchObject({ open: false, messages: [] })
+      await expect(api.sendDeliveryMessage(o.id, 'Hello')).rejects.toThrow('closed')
+
+      await as(api, 'rider')
+      await api.passCollection(o.id, ['/assets/a.jpg'])
+      await as(api, 'funke')
+      const mine = (await api.listMyOrders()).find((x) => x.id === o.id)!
+      expect(mine.rider).toEqual({ firstName: 'Bayo', photo: '/assets/bayo.jpg' })
+      expect(JSON.stringify(mine.rider)).not.toMatch(/\d{4}/) // never a phone number
+      await expect(api.sendDeliveryMessage(o.id, 'Call me on 0803 999 8888')).rejects.toThrow('phone numbers')
+      await api.sendDeliveryMessage(o.id, 'Blue gate, ring twice')
+
+      // Only the buyer and the rider carrying it.
+      for (const who of ['chidi', 'store']) {
+        await as(api, who)
+        await expect(api.getDeliveryChat(o.id)).rejects.toMatchObject({ code: 'not_found' })
+      }
+      await as(api, 'rider')
+      expect(await api.getDeliveryChat(o.id)).toMatchObject({ open: true, me: 'rider', messages: [{ sender: 'buyer', body: 'Blue gate, ring twice' }] })
+      await api.sendDeliveryMessage(o.id, 'At the gate now')
+      await api.markArrived(o.id)
+      await as(api, 'funke')
+      const chat = await api.getDeliveryChat(o.id)
+      expect(chat.messages.map((m) => m.sender)).toEqual(['buyer', 'rider'])
+      expect((await api.listMyOrders()).find((x) => x.id === o.id)?.arrivedAt).toBeTruthy()
+
+      await as(api, 'rider')
+      await api.confirmDelivery(o.id, o.deliveryPin!)
+      await expect(api.sendDeliveryMessage(o.id, 'Thanks')).rejects.toThrow('closed')
+      await as(api, 'funke')
+      expect(await api.getDeliveryChat(o.id)).toMatchObject({ open: false, rider: null, messages: [] })
+      expect((await api.listMyOrders()).find((x) => x.id === o.id)?.rider).toBeNull()
+    })
+  })
+
   describe('rider pay', () => {
     const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
     const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }

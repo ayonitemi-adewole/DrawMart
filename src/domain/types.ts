@@ -280,6 +280,8 @@ export interface Order {
   returnedAt: ISODate | null
   /** A pickup order counter staff have taken in: ready to collect (counter.ts). */
   atCounterAt: ISODate | null
+  /** The rider said they're at the door (deliveryAttempts.ts). */
+  arrivedAt: ISODate | null
   /** Times the rider couldn't reach the buyer (deliveryAttempts.ts). */
   failedAttempts: number
   lastFailedAt: ISODate | null

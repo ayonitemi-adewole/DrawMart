@@ -51,6 +51,8 @@ export const keys = {
   returnJobs: ['return-jobs'] as const,
   riderAreas: ['rider-areas'] as const,
   myCounter: ['my-counter'] as const,
+  riderProfile: ['rider-profile'] as const,
+  deliveryChat: (orderId: string) => ['delivery-chat', orderId] as const,
   riderPayRates: ['rider-pay-rates'] as const,
   myEarnings: ['my-earnings'] as const,
   riderPayDue: ['rider-pay-due'] as const,
@@ -436,6 +438,21 @@ export function useCounterActions() {
     handOver: useMutation({ mutationFn: ({ id, pin }: { id: string; pin: string }) => api.counterHandOver(id, pin), onSettled: invalidate }),
     release: useMutation({ mutationFn: (id: string) => api.releaseToRider(id), onSettled: invalidate }),
   }
+}
+
+export const useRiderProfile = () => useQuery({ queryKey: keys.riderProfile, queryFn: () => api.getRiderProfile(), enabled: useIs('delivery') })
+
+export function useSetRiderPhoto() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (photo: string) => api.setRiderPhoto(photo), onSettled: () => qc.invalidateQueries({ queryKey: keys.riderProfile }) })
+}
+
+/** Polls like an open chat while it's on screen. */
+export const useDeliveryChat = (orderId: string) => useQuery({ queryKey: keys.deliveryChat(orderId), queryFn: () => api.getDeliveryChat(orderId), refetchInterval: 4_000 })
+
+export function useSendDeliveryMessage(orderId: string) {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (body: string) => api.sendDeliveryMessage(orderId, body), onSettled: () => qc.invalidateQueries({ queryKey: keys.deliveryChat(orderId) }) })
 }
 
 export const useRiderAreas = () => useQuery({ queryKey: keys.riderAreas, queryFn: () => api.getRiderAreas(), enabled: useIs('delivery') })

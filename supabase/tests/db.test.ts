@@ -2621,6 +2621,49 @@ describe('cart and checkout', () => {
       expect(pushes.map((p) => p.body).join(' ')).not.toMatch(/Awolowo|[0-9]{6}/)
     })
 
+    it('shows the buyer their rider once collected, with a chat only the two of them can read', async () => {
+      const carrier = await newUser('chat-rider@example.com', { role: 'delivery' })
+      await admin(`update public.profiles set display_name = 'Bayo Adeyemi' where id = $1`, [carrier])
+      await asUser(carrier, `select public.set_rider_photo('/assets/bayo.jpg')`)
+      await expectFail(asUser(carrier, `select public.set_rider_photo('data:image/png;base64,x')`), 'invalid_input')
+      expect(await asUser(carrier, `select public.my_rider_profile() p`)).toEqual([{ p: { firstName: 'Bayo', photo: '/assets/bayo.jpg' } }])
+
+      const { b, id } = await readyOrder('chat-buyer@example.com')
+      const riders = async () => (await asUser<{ r: Record<string, unknown> }>(b, `select public.my_order_riders() r`))[0].r
+      const chat = async (who: string) => (await asUser<{ c: { open: boolean; me: string; rider: unknown; messages: { sender: string; body: string }[] } }>(who, `select public.delivery_chat($1) c`, [id]))[0].c
+      const send = (who: string, body: string) => asUser(who, `select public.send_delivery_message($1, $2)`, [id, body])
+
+      await asUser(carrier, `select public.take_delivery($1)`, [id])
+      expect((await riders())[id]).toBeUndefined()
+      await expectFail(send(b, 'Hello'), 'invalid_input')
+      await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+      expect((await riders())[id]).toEqual({ firstName: 'Bayo', photo: '/assets/bayo.jpg' })
+
+      await expectFail(send(b, 'Call 0803 999 8888'), 'invalid_input')
+      await expectFail(send(b, '+2348039998888 please'), 'invalid_input')
+      await send(b, 'Blue gate, ring twice')
+      await send(carrier, 'At the gate now')
+      expect((await chat(b)).messages.map((m) => m.sender)).toEqual(['buyer', 'rider'])
+      expect(await chat(carrier)).toMatchObject({ open: true, me: 'rider' })
+      // Nobody else: not the shop, another rider, or another buyer, and not the table itself.
+      for (const who of [store, staff, rider]) await expectFail(asUser(who, `select public.delivery_chat($1)`, [id]), 'not_found')
+      await expectFail(send(store, 'Hi'), 'not_found')
+      await expect(asUser(b, `select * from public.delivery_messages`)).rejects.toThrow(/permission denied/)
+
+      // A rider who takes over starts afresh; the one who let go loses it.
+      await asUser(carrier, `select public.release_delivery($1)`, [id])
+      await expectFail(asUser(carrier, `select public.delivery_chat($1)`, [id]), 'not_found')
+      await asUser(otherRider, `select public.take_delivery($1)`, [id])
+      await asUser(otherRider, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+      expect((await chat(otherRider)).messages).toEqual([])
+
+      // Closed on delivery, with nothing left to read.
+      expect((await tryPin(otherRider, id, (await pinsOf(b))[id])).confirmed).toBe(true)
+      expect(await chat(b)).toMatchObject({ open: false, rider: null, messages: [] })
+      await expectFail(send(b, 'Thanks'), 'invalid_input')
+      expect((await riders())[id]).toBeUndefined()
+    })
+
     it('pays riders per job from rates within the delivery price, weekly, into a held account', async () => {
       const payee = await newUser('paid-rider@example.com', { role: 'delivery' })
       // Rates: never more than the buyer pays, from either side.
