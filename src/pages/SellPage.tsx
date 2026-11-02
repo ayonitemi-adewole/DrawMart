@@ -1,5 +1,5 @@
 import { useRef, useState, type FormEvent } from 'react'
-import { useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import { useMe, useMerchant, useMerchantListings, useMySellerApplication, useSubmitSellerApplication } from '@/api/hooks'
 import type { SellerApplicationView } from '@/api/types'
 import { AlertIcon, CameraIcon, ChartIcon, CheckIcon, ClockIcon, IdCardIcon, LayoutIcon, PlusIcon, ShieldIcon, StoreIcon, TruckIcon, XIcon, type IconComponent } from '@/components/icons'
@@ -71,7 +71,11 @@ function HowSellingWorks() {
         </ol>
       </Card>
       <Notice tone="neutral" icon={ShieldIcon}>
-        Raffle draws are only for CAC-registered stores. As an individual you sell at a fixed price, with a platform fee taken from each sale.
+        Raffle draws are only for CAC-registered stores. As an individual you sell at a fixed price, with a platform fee taken from each sale. A registered business?{' '}
+        <Link to="/sell/business" className="font-bold">
+          Open a store
+        </Link>
+        .
       </Notice>
     </aside>
   )
@@ -219,7 +223,7 @@ function ApplicationForm({ previous }: { previous: SellerApplicationView | null 
   )
 }
 
-function IdPhoto({
+export function IdPhoto({
   label,
   icon: Icon,
   value,

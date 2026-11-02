@@ -20,6 +20,7 @@ import type { PurchaseError } from '@/domain/rules'
 import type { BoostPackage, BoostWindow } from '@/domain/boosts'
 import type { DayMetrics, ListingMetricsInput, MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput, SellerApplicationStatus } from '@/domain/sellers'
+import type { StoreApplicationInput, StoreApplicationStatus } from '@/domain/storeApplications'
 import type {
   CancelReason,
   Category,
@@ -238,6 +239,26 @@ export interface DeliveryJob {
   /** Only for the rider carrying it, once it's passed the check. Never in the pool, and gone once delivered. */
   dropOff: { buyerName: string; address: string; location: GeoPoint | null; contactPhone: string } | null
   pinLockedUntil: string | null
+}
+
+/** A business's request for a store. Only the applicant and admins ever see it. */
+export interface StoreApplicationView {
+  id: string
+  status: StoreApplicationStatus
+  businessName: string
+  /** Normalised, e.g. "RC 1234567". */
+  cacNumber: string
+  directorName: string
+  phone: string
+  address: string
+  area: string
+  /** Viewable image URLs (short-lived signed URLs on Supabase). */
+  certificateUrl: string | null
+  directorIdUrl: string | null
+  reviewNote: string | null
+  createdAt: string
+  updatedAt: string
+  reviewedAt: string | null
 }
 
 /** An individual's request to sell. Only the applicant and admins ever see it. */
@@ -684,6 +705,9 @@ export interface DrawMartApi {
 
   // Individual sellers (buyer accounts that sell regular products)
   getMySellerApplication(): Promise<SellerApplicationView | null>
+  /** A business applying for a store, from the account that will become the store's. */
+  getMyStoreApplication(): Promise<StoreApplicationView | null>
+  submitStoreApplication(input: StoreApplicationInput): Promise<StoreApplicationView>
   /** Uploads the ID photos and queues the application for an admin. Also used to resubmit after a rejection. */
   submitSellerApplication(input: SellerApplicationInput): Promise<SellerApplicationView>
 
@@ -819,6 +843,10 @@ export interface DrawMartApi {
   confirmDelivery(orderId: string, pin: string): Promise<PinResult>
   /** Applications waiting for an ID check, oldest first. */
   listSellerApplications(): Promise<SellerApplicationView[]>
+  listStoreApplications(): Promise<StoreApplicationView[]>
+  /** Creates the store and turns the applicant's account into its account. */
+  approveStoreApplication(applicationId: string): Promise<void>
+  rejectStoreApplication(applicationId: string, note: string): Promise<void>
   /** Creates the seller's shop. */
   approveSeller(applicationId: string): Promise<void>
   rejectSeller(applicationId: string, note: string): Promise<void>

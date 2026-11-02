@@ -5,8 +5,9 @@
  * sees). Every write is an RPC to a database function in
  * supabase/migrations, which enforces the same rules as src/domain.
  */
+import { STORE_APPLICATION_ERROR_TEXT, validateStoreApplication } from '@/domain/storeApplications'
 import type { PayoutAccount, PayoutKind, PayoutStatus } from '@/domain/payouts'
-import type { ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews } from './types'
+import type { ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews, StoreApplicationView } from './types'
 import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js'
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
@@ -176,6 +177,23 @@ interface ProfileRow {
   phone: string | null
   /** An individual seller's own shop (buyer accounts only). */
   seller_id: string | null
+}
+
+interface StoreApplicationRow {
+  id: string
+  status: StoreApplicationView['status']
+  business_name: string
+  cac_number: string
+  director_name: string
+  phone: string
+  address: string
+  area: string
+  certificate_path: string
+  director_id_path: string
+  review_note: string | null
+  created_at: string
+  updated_at: string
+  reviewed_at: string | null
 }
 
 interface SellerApplicationRow {
@@ -588,6 +606,26 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     }
   }
 
+  async function toStoreApplicationView(a: StoreApplicationRow): Promise<StoreApplicationView> {
+    const { data } = await client.storage.from(ID_BUCKET).createSignedUrls([a.certificate_path, a.director_id_path], 60 * 60)
+    return {
+      id: a.id,
+      status: a.status,
+      businessName: a.business_name,
+      cacNumber: a.cac_number,
+      directorName: a.director_name,
+      phone: a.phone,
+      address: a.address,
+      area: a.area,
+      certificateUrl: data?.[0]?.signedUrl ?? null,
+      directorIdUrl: data?.[1]?.signedUrl ?? null,
+      reviewNote: a.review_note,
+      createdAt: a.created_at,
+      updatedAt: a.updated_at,
+      reviewedAt: a.reviewed_at,
+    }
+  }
+
   async function uploadIdPhoto(userId: string, dataUrl: string, name: string): Promise<string> {
     const blob = await (await fetch(dataUrl)).blob()
     const path = `${userId}/${name}-${crypto.randomUUID()}.${blob.type === 'image/png' ? 'png' : blob.type === 'image/webp' ? 'webp' : 'jpg'}`
@@ -940,6 +978,22 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       return toApplicationView(row)
     },
 
+    getMyStoreApplication: async () => {
+      const me = await requireId()
+      const row = unwrap(await client.from('store_applications').select('*').eq('user_id', me).maybeSingle<StoreApplicationRow>())
+      return row ? toStoreApplicationView(row) : null
+    },
+
+    submitStoreApplication: async (input) => {
+      const me = await requireId()
+      const problems = validateStoreApplication(input).map((e) => STORE_APPLICATION_ERROR_TEXT[e])
+      if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+      const [certificatePhoto, directorIdPhoto] = await Promise.all([uploadIdPhoto(me, input.certificatePhoto, 'cac'), uploadIdPhoto(me, input.directorIdPhoto, 'director')])
+      await rpc('submit_store_application', { p: { ...input, certificatePhoto, directorIdPhoto } })
+      const row = unwrap(await client.from('store_applications').select('*').eq('user_id', me).single<StoreApplicationRow>())
+      return toStoreApplicationView(row)
+    },
+
     // Notifications
     listNotifications: async () => {
       const me = await requireId()
@@ -1225,6 +1279,12 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     },
 
     approveSeller: (id) => rpc('approve_seller', { p_application_id: id }),
+    listStoreApplications: async () => {
+      const rows = unwrap(await client.from('store_applications').select('*').eq('status', 'pending').order('updated_at').returns<StoreApplicationRow[]>())
+      return Promise.all(rows.map(toStoreApplicationView))
+    },
+    approveStoreApplication: (id) => rpc('approve_store_application', { p_application_id: id }),
+    rejectStoreApplication: (id, note) => rpc('reject_store_application', { p_application_id: id, p_note: note }),
     rejectSeller: (id, note) => rpc('reject_seller', { p_application_id: id, p_note: note }),
     rejectListing: (id, reason, note) => rpc('reject_listing', { p_listing_id: id, p_reason: reason, p_note: note }),
 

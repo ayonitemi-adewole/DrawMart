@@ -1695,6 +1695,71 @@ describe('delivery fees', () => {
   })
 })
 
+describe('store applications', () => {
+  let staff: string
+  const input = (who: string, over: Record<string, unknown> = {}) => ({
+    businessName: 'Ikorodu Home Goods Ltd', cacNumber: 'rc 2345678', directorName: 'Bola Adeyemi', phone: '0803 123 4567',
+    address: '12 Ikorodu Road, Ikorodu', area: 'Ikorodu', certificatePhoto: `${who}/cac.jpg`, directorIdPhoto: `${who}/id.jpg`, ...over,
+  })
+  const apply = async (who: string, over: Record<string, unknown> = {}) =>
+    (await asUser<{ id: string }>(who, `select public.submit_store_application($1) id`, [input(who, over)]))[0].id
+
+  beforeAll(async () => {
+    staff = await newUser('storeapp-staff@example.com', { role: 'admin' })
+  })
+
+  it('turns the applicant’s account into the new store’s', async () => {
+    const owner = await newUser('storeapp-owner@example.com')
+    const other = await newUser('storeapp-other@example.com')
+    const id = await apply(owner)
+    await expectFail(apply(owner), 'invalid_input')
+    expect(await asUser(owner, `select status, cac_number from public.store_applications`)).toEqual([{ status: 'pending', cac_number: 'RC 2345678' }])
+    expect(await asUser(other, `select id from public.store_applications`)).toEqual([])
+    await expect(asUser(null, `select id from public.store_applications`)).rejects.toThrow(/permission denied/)
+    await expectFail(asUser(owner, `select public.approve_store_application($1)`, [id]), 'forbidden')
+
+    await asUser(staff, `select public.approve_store_application($1)`, [id])
+    const [p] = await admin<{ role: string; kind: string; name: string; cac_number: string; verified: boolean }>(
+      `select p.role, m.kind, m.name, m.cac_number, m.verified from public.profiles p join public.merchants m on m.id = p.merchant_id where p.id = $1`, [owner])
+    expect(p).toEqual({ role: 'store', kind: 'store', name: 'Ikorodu Home Goods Ltd', cac_number: 'RC 2345678', verified: true })
+    expect(await admin(`select kind from public.notifications where user_id = $1`, [owner])).toEqual([{ kind: 'store_approved' }])
+    // It's a store now: it can't buy.
+    await expect(asUser(owner, `select public.top_up(100000)`)).rejects.toThrow()
+
+    // One store per CAC number.
+    await expectFail(apply(other), 'invalid_input')
+  })
+
+  it('needs an account that hasn’t bought or sold', async () => {
+    const bought = await newUser('storeapp-bought@example.com')
+    const [{ id: listing }] = await admin<{ id: string }>(`select id from public.listings limit 1`)
+    await admin(`insert into public.orders (listing_id, user_id, merchant_id, price_kobo, fee_kobo, delivery_address, delivery_phone, handled_by, is_prize) select id, $2, merchant_id, 0, 0, 'x', 'x', 'store', false from public.listings where id = $1`, [listing, bought])
+    await expectFail(apply(bought, { cacNumber: 'BN 1111111' }), 'invalid_input')
+
+    // Buying after applying stops the approval.
+    const later = await newUser('storeapp-later@example.com')
+    const id = await apply(later, { cacNumber: 'BN 2222222' })
+    await admin(`insert into public.orders (listing_id, user_id, merchant_id, price_kobo, fee_kobo, delivery_address, delivery_phone, handled_by, is_prize) select id, $2, merchant_id, 0, 0, 'x', 'x', 'store', false from public.listings where id = $1`, [listing, later])
+    await expectFail(asUser(staff, `select public.approve_store_application($1)`, [id]), 'invalid_input')
+    expect(await admin(`select role from public.profiles where id = $1`, [later])).toEqual([{ role: 'buyer' }])
+
+    // Documents must be the applicant's own uploads, and the CAC number real.
+    const fresh = await newUser('storeapp-fresh@example.com')
+    await expectFail(apply(fresh, { cacNumber: 'BN 3333333', certificatePhoto: 'someone-else/cac.jpg' }), 'invalid_input')
+    await expectFail(apply(fresh, { cacNumber: '12345' }), 'invalid_input')
+  })
+
+  it('sends one back with a reason, and takes it again', async () => {
+    const owner = await newUser('storeapp-again@example.com')
+    const id = await apply(owner, { cacNumber: 'IT 44444' })
+    await expectFail(asUser(staff, `select public.reject_store_application($1, 'no')`, [id]), 'invalid_input')
+    await asUser(staff, `select public.reject_store_application($1, 'The certificate photo is cut off.')`, [id])
+    expect(await asUser(owner, `select status, review_note from public.store_applications`)).toEqual([{ status: 'rejected', review_note: 'The certificate photo is cut off.' }])
+    expect(await apply(owner, { cacNumber: 'IT 44444' })).toBe(id)
+    expect(await admin(`select private.normalize_cac($1) a, private.normalize_cac($2) b`, ['rc-1234567', 'AB 1234567'])).toEqual([{ a: 'RC 1234567', b: null }])
+  })
+})
+
 describe('reviews', () => {
   const SHOP = '11111111-1111-4111-8111-000000000004'
   let owner: string, buyer: string, other: string, staff: string, listing: string

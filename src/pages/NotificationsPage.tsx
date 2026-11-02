@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Link } from 'react-router'
 import { useAccess, useMarkNotificationsRead, useNotifications } from '@/api/hooks'
 import type { NotificationView } from '@/api/types'
-import { AlertIcon, BellIcon, CalendarIcon, ChatIcon, CheckIcon, ClockIcon, HeartIcon, LockIcon, NairaIcon, StarIcon, TicketIcon, TrophyIcon, TruckIcon, XIcon, type IconComponent } from '@/components/icons'
+import { AlertIcon, BellIcon, CalendarIcon, ChatIcon, CheckIcon, ClockIcon, HeartIcon, LockIcon, NairaIcon, StarIcon, StoreIcon, TicketIcon, TrophyIcon, TruckIcon, XIcon, type IconComponent } from '@/components/icons'
 import { DrawRevealToggle, PushToggle, StorePushSettings } from '@/components/PushSettings'
 import { Card, EmptyState, ErrorState, PageTitle, Skeleton, cx } from '@/components/ui'
 import { handoverMethodFor } from '@/domain/listing'
@@ -24,6 +24,8 @@ function describe(n: NotificationView, store: boolean): { icon: IconComponent; t
       return { icon: ClockIcon, title: `Confirm soon: ${n.listingTitle}`, body: 'Add a photo of the item, or this order will be cancelled.', to: `${home}?tab=orders` }
     case 'store_order_expired':
       return { icon: XIcon, title: `Order cancelled: ${n.listingTitle}`, body: 'It wasn’t confirmed or made ready in time. The buyer was refunded and the product is paused until you resume it.', to: `${home}?tab=orders` }
+    case 'store_approved':
+      return { icon: StoreIcon, title: 'Your store is approved', body: 'Add your bank account and where riders collect from, then send your first listing.', to: '/store' }
     case 'store_new_review':
       return { icon: StarIcon, title: `New review: ${n.listingTitle}`, body: 'A buyer rated their order. You can reply once.', to: store ? '/store/reviews' : '/sell?tab=reviews' }
     case 'review_reply':

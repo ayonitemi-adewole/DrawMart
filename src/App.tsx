@@ -47,6 +47,8 @@ import { AdminPayoutsPage } from '@/pages/admin/AdminPayoutsPage'
 import { StorePayoutsPage } from '@/pages/merchant/StorePayoutsPage'
 import { InsightsPage } from '@/pages/merchant/InsightsPage'
 import { SellPage } from '@/pages/SellPage'
+import { StoreApplicationPage } from '@/pages/StoreApplicationPage'
+import { AdminStoreApplicationsPage } from '@/pages/admin/AdminStoreApplicationsPage'
 import { SignInPage } from '@/pages/SignInPage'
 import { TicketsPage } from '@/pages/TicketsPage'
 import { WalletPage } from '@/pages/WalletPage'
@@ -157,6 +159,7 @@ const router = createBrowserRouter([
       { path: 'saved', element: <RequireSignIn role="buyer"><SavedPage /></RequireSignIn> },
       { path: 'wallet', element: <RequireSignIn role="buyer"><WalletPage /></RequireSignIn> },
       { path: 'sell', element: <RequireSignIn role="buyer"><SellPage /></RequireSignIn> },
+      { path: 'sell/business', element: <RequireSignIn role="buyer"><StoreApplicationPage /></RequireSignIn> },
       { path: 'cart', element: <RequireSignIn role="buyer"><CartPage /></RequireSignIn> },
       { path: 'checkout', element: <RequireSignIn role="buyer"><CheckoutPage /></RequireSignIn> },
       { path: 'notifications', element: <RequireSignIn role="buyer"><NotificationsPage /></RequireSignIn> },
@@ -201,6 +204,7 @@ const router = createBrowserRouter([
       { path: 'prizes', element: <AdminPrizesPage /> },
       { path: 'stories', element: <AdminStoriesPage /> },
       { path: 'sellers', element: <AdminSellersPage /> },
+      { path: 'store-applications', element: <AdminStoreApplicationsPage /> },
       { path: '*', element: <NotFound /> },
     ],
   },

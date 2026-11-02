@@ -1,7 +1,7 @@
 import { NavLink, Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router'
 import { api } from '@/api'
 import { cancelRateFlagged } from '@/domain/orderCancel'
-import { useOpenClaims, useAccess, useCancelRates, useDuePayouts, useMerchant, usePendingListings, usePendingWinnerStories, usePriceReviews, usePrizeOrders, useSellerApplications, useSignOut, useUnreadMessages, useUnreadNotifications } from '@/api/hooks'
+import { useStoreApplications, useOpenClaims, useAccess, useCancelRates, useDuePayouts, useMerchant, usePendingListings, usePendingWinnerStories, usePriceReviews, usePrizeOrders, useSellerApplications, useSignOut, useUnreadMessages, useUnreadNotifications } from '@/api/hooks'
 import { StarIcon, StoreIcon, AlertIcon, XIcon, BellIcon, NairaIcon, HeartIcon, ChartIcon, ChatIcon, TrendingUpIcon, TrophyIcon, TruckIcon, CheckIcon, ClipboardIcon, DiceIcon, HashIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
 import { NavMenu } from '@/components/NavMenu'
 import { ThemeToggle } from '@/components/ThemeToggle'
@@ -31,6 +31,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
   const merchant = useMerchant()
   const pending = usePendingListings()
   const sellers = useSellerApplications()
+  const storeApplications = useStoreApplications()
   const unread = useUnreadMessages()
   const prizes = usePrizeOrders()
   const stories = usePendingWinnerStories()
@@ -59,6 +60,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
           { to: '/admin', label: 'Review queue', icon: ClipboardIcon, count: (pending.data?.length ?? 0) + (priceReviews.data?.length ?? 0) },
           { to: '/admin/products', label: 'All products', icon: HashIcon },
           { to: '/admin/sellers', label: 'Seller ID checks', icon: IdCardIcon, count: sellers.data?.length ?? 0 },
+          { to: '/admin/store-applications', label: 'Store applications', icon: StoreIcon, count: storeApplications.data?.length ?? 0 },
           { to: '/admin/prizes', label: 'Won items', icon: TrophyIcon, count: prizes.data?.filter((o) => o.status === 'paid').length ?? 0 },
           { to: '/admin/stories', label: 'Winner stories', icon: HeartIcon, count: stories.data?.length ?? 0 },
           { to: '/admin/payouts', label: 'Payouts', icon: NairaIcon, count: duePayouts.data?.length ?? 0 },

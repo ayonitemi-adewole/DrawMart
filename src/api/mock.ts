@@ -6,7 +6,7 @@
  * keeps draw seeds out of every response until a draw has run, so the UI is
  * built against realistic behaviour.
  */
-import type { ReturnJob, ReviewView } from './types'
+import type { ReturnJob, ReviewView, StoreApplicationView } from './types'
 import { catalogDraws, catalogProducts } from './seedCatalog'
 import { canSaveListing } from '@/domain/saved'
 import { crossedAlmostSold, isClosingSoon, isRelistOf, relistAlertKind, sameLagosDay, savedAlertAllowed, type SavedAlertKind } from '@/domain/savedAlerts'
@@ -38,6 +38,7 @@ import { canClaim, canContest, claimError, contestError, returnFeeKobo, returnRe
 import { deliveryFeeKobo, packageSizeOf, sellerAreaOf } from '@/domain/deliveryFees'
 import { locationError } from '@/domain/location'
 import { shopProfileErrors } from '@/domain/shopProfile'
+import { DUPLICATE_CAC_TEXT, STORE_APPLICATION_ERROR_TEXT, normalizeCac, storeAccountBlocker, validateStoreApplication } from '@/domain/storeApplications'
 import { REVIEWS_SHOWN_FROM, averageRating, canReview, hideReasonError, replyError, reviewError, reviewerName } from '@/domain/reviews'
 import { shopPickupErrorText, shopPickupErrors, type ShopPickup } from '@/domain/shopPickup'
 import { DELIVERY_AREAS, areaFromText, nearestArea, checkoutDeliveryFees, deliveryPriceError, placeholderPricing, sizeExtraError, type DeliveryPricing } from '@/domain/deliveryFees'
@@ -98,7 +99,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v43' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v44' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -153,6 +154,10 @@ interface Db {
   sellerApplications: Record<string, SellerApplicationView>
   /** Individual sellers' own shops: user id → merchant id. */
   sellerShops: Record<string, string>
+  /** Businesses' applications for a store, by user id. */
+  storeApplications: Record<string, StoreApplicationView>
+  /** Buyer accounts an approved application turned into a store's: user id → store id. */
+  storeAccounts: Record<string, string>
   /** Not stored: the buyer the current call acts for, set by tx(). */
   viewer?: string
   conversations: MockConversation[]
@@ -614,6 +619,8 @@ async function freshDb(): Promise<Db> {
     addresses: {},
     sellerApplications: {},
     sellerShops: {},
+    storeApplications: {},
+    storeAccounts: {},
     conversations: [],
     messages: [],
     callPhones: { 'm-surulere': '0803 000 1234' },
@@ -992,6 +999,16 @@ function reviewView(db: Db, r: MockReview): ReviewView {
   return { id: r.id, rating: r.rating, sellerComment: r.sellerComment, productComment: r.productComment, reply: r.reply, repliedAt: r.repliedAt, createdAt: r.createdAt, hidden: !!r.hiddenAt, name, listingId: r.listingId, listingTitle: l.title, productCode: l.productCode }
 }
 
+/** storeApplications.ts storeAccountBlocker, for a mock account. */
+function accountFacts(db: Db, userId: string) {
+  const individual = db.sellerApplications[userId]
+  return {
+    isBuyer: !db.storeAccounts[userId] && db.users.some((u) => u.id === userId),
+    sellsAsIndividual: !!db.sellerShops[userId] || (!!individual && individual.status !== 'rejected'),
+    hasBought: db.tickets.some((t) => t.userId === userId) || db.orders.some((o) => o.buyerId === userId),
+  }
+}
+
 function orderView(db: Db, order: MockOrder, forBuyer = false): OrderView {
   const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, paidFeeCashKobo: _feeCash, paidFeeCreditKobo: _feeCredit, checkoutId: _checkoutId, confirmRemindedAt: _reminded, ...o } = order
   const l = db.listings.find((x) => x.id === o.listingId)!
@@ -1094,7 +1111,15 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
   const auth: AuthAdapter = {
     emailLinks: false,
     demoAccounts: DEMO_ACCOUNTS,
-    getSession: async () => readSession(),
+    getSession: async () => {
+      const s = readSession()
+      // An approved store application: the account is now the store's.
+      const shop = s?.role === 'buyer' ? (await load()).storeAccounts[s.userId] : undefined
+      if (!s || !shop) return s
+      const next: AuthSession = { userId: shop, email: s.email, role: 'store' }
+      store.setItem(SESSION_KEY, JSON.stringify(next))
+      return next
+    },
     onChange(callback) {
       sessionListeners.add(callback)
       return () => void sessionListeners.delete(callback)
@@ -1107,7 +1132,8 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       const a = DEMO_ACCOUNTS.find((d) => d.email === email.trim().toLowerCase())
       if (!a || a.password !== password) throw new ApiError('invalid_input', 'That email and password don’t match. Try one of the demo accounts.')
       // Stores sign in as their store: userId is the store id on the mock.
-      setSession({ userId: a.mockId, email: a.email, role: a.role })
+      const shop = a.role === 'buyer' ? (await load()).storeAccounts[a.mockId] : undefined
+      setSession(shop ? { userId: shop, email: a.email, role: 'store' } : { userId: a.mockId, email: a.email, role: a.role })
     },
     async signOut() {
       setSession(null)
@@ -2579,6 +2605,59 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           reviewNote: null, createdAt: prev?.createdAt ?? at, updatedAt: at, reviewedAt: null,
         }
         return db.sellerApplications[buyer()]
+      }),
+
+    getMyStoreApplication: () => tx((db) => db.storeApplications[buyer()] ?? null),
+
+    submitStoreApplication: (input) =>
+      tx((db) => {
+        const me = buyer()
+        const blocker = storeAccountBlocker(accountFacts(db, me))
+        if (blocker) throw new ApiError('invalid_input', blocker)
+        const prev = db.storeApplications[me]
+        if (prev?.status === 'pending') throw new ApiError('invalid_input', 'Your application is already being reviewed.')
+        if (prev?.status === 'approved') throw new ApiError('invalid_input', 'Your store is already approved.')
+        const problems = validateStoreApplication(input).map((e) => STORE_APPLICATION_ERROR_TEXT[e])
+        if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+        const cac = normalizeCac(input.cacNumber)!
+        if (db.merchants.some((m) => m.cacNumber === cac)) throw new ApiError('invalid_input', DUPLICATE_CAC_TEXT)
+        const at = iso(now())
+        db.storeApplications[me] = {
+          id: prev?.id ?? uid('B'), status: 'pending', businessName: input.businessName.trim(), cacNumber: cac, directorName: input.directorName.trim(),
+          phone: input.phone.trim(), address: input.address.trim(), area: input.area.trim(), certificateUrl: input.certificatePhoto, directorIdUrl: input.directorIdPhoto,
+          reviewNote: null, createdAt: prev?.createdAt ?? at, updatedAt: at, reviewedAt: null,
+        }
+        return db.storeApplications[me]
+      }),
+
+    listStoreApplications: () =>
+      tx((db) => Object.values(db.storeApplications).filter((a) => a.status === 'pending').sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))),
+
+    approveStoreApplication: (applicationId) =>
+      tx((db) => {
+        if (readSession() && readSession()!.role !== 'admin') throw new ApiError('forbidden', 'Admins only.')
+        const [userId, a] = Object.entries(db.storeApplications).find(([, x]) => x.id === applicationId) ?? []
+        if (!userId || !a || a.status !== 'pending') throw new ApiError('invalid_input', 'Only applications waiting for review can be approved.')
+        if (storeAccountBlocker(accountFacts(db, userId)))
+          throw new ApiError('invalid_input', 'This account has bought or sold on DrawMart since applying, so it can’t become a store. Ask them to apply from a new account.')
+        if (db.merchants.some((m) => m.cacNumber === a.cacNumber)) throw new ApiError('invalid_input', 'A store with this CAC number is already on DrawMart.')
+        const at = iso(now())
+        const shop: Merchant = { id: uid('M'), kind: 'store', name: a.businessName, area: a.area, cacNumber: a.cacNumber, verified: true, verifiedAt: at }
+        db.merchants.push(shop)
+        db.storeAccounts[userId] = shop.id
+        delete db.carts[userId]
+        delete db.saved[userId]
+        Object.assign(a, { status: 'approved', reviewedAt: at })
+        notify(db, shop.id, 'store_approved', null, at)
+      }),
+
+    rejectStoreApplication: (applicationId, note) =>
+      tx((db) => {
+        if (readSession() && readSession()!.role !== 'admin') throw new ApiError('forbidden', 'Admins only.')
+        if (note.trim().length < 5) throw new ApiError('invalid_input', 'Tell the applicant what to fix.')
+        const a = Object.values(db.storeApplications).find((x) => x.id === applicationId)
+        if (!a || a.status !== 'pending') throw new ApiError('invalid_input', 'Only applications waiting for review can be rejected.')
+        Object.assign(a, { status: 'rejected', reviewNote: note.trim(), reviewedAt: iso(now()) })
       }),
 
     listSellerApplications: () =>

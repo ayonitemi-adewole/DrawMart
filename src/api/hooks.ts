@@ -8,6 +8,7 @@ import type { CancelReason, CollectionProblem, Kobo, PackageSize, RefusalReason,
 import { api } from './index'
 import type { MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput } from '@/domain/sellers'
+import type { StoreApplicationInput } from '@/domain/storeApplications'
 import { visitorId } from '@/lib/visitor'
 import { pushDeviceState, subscribeThisDevice, unsubscribeThisDevice } from '@/lib/push'
 import type { NotificationPreference } from '@/domain/push'
@@ -59,6 +60,8 @@ export const keys = {
   prizeOrders: ['prize-orders'] as const,
   sellerApplication: ['seller-application'] as const,
   sellerApplications: ['seller-applications'] as const,
+  storeApplication: ['store-application'] as const,
+  storeApplications: ['store-applications'] as const,
   conversations: ['conversations'] as const,
   messages: (id: string) => ['messages', id] as const,
   callPhone: ['call-phone'] as const,
@@ -114,6 +117,10 @@ export const useMerchantListings = () =>
   useQuery({ queryKey: keys.merchantListings, queryFn: () => api.listMerchantListings(), enabled: useHasShop() })
 export const useMyOrders = () => useQuery({ queryKey: keys.myOrders, queryFn: () => api.listMyOrders(), enabled: useIs('buyer') })
 export const useMerchantOrders = () => useQuery({ queryKey: keys.merchantOrders, queryFn: () => api.listMerchantOrders(), enabled: useHasShop() })
+export const useMyStoreApplication = () =>
+  useQuery({ queryKey: keys.storeApplication, queryFn: () => api.getMyStoreApplication(), enabled: useIs('buyer') })
+export const useStoreApplications = () =>
+  useQuery({ queryKey: keys.storeApplications, queryFn: () => api.listStoreApplications(), enabled: useIs('admin') })
 export const useSellerApplications = () =>
   useQuery({ queryKey: keys.sellerApplications, queryFn: () => api.listSellerApplications(), enabled: useIs('admin') })
 export const useDeliveryPricing = () => useQuery({ queryKey: keys.deliveryPricing, queryFn: () => api.getDeliveryPricing(), staleTime: 5 * 60_000 })
@@ -542,6 +549,19 @@ export function useResubmitListing() {
 export function useCreateProduct() {
   const invalidate = useInvalidateAll()
   return useMutation({ mutationFn: (input: NewProductInput) => api.createProduct(input), onSettled: invalidate })
+}
+
+export function useSubmitStoreApplication() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: (input: StoreApplicationInput) => api.submitStoreApplication(input), onSettled: invalidate })
+}
+
+export function useReviewStoreApplication() {
+  const invalidate = useInvalidateAll()
+  return useMutation({
+    mutationFn: ({ id, approve, note }: { id: string; approve: boolean; note?: string }) => (approve ? api.approveStoreApplication(id) : api.rejectStoreApplication(id, note ?? '')),
+    onSettled: invalidate,
+  })
 }
 
 export function useSubmitSellerApplication() {

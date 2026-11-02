@@ -1953,6 +1953,65 @@ describe('mock api', () => {
       expect((await api.getShopReviews(IKEJA)).reviews.filter((r) => r.hidden)).toHaveLength(1)
       await as(api, 'funke')
       await expect(api.listAdminReviews()).rejects.toMatchObject({ code: 'forbidden' })
+    }, 20_000)
+  })
+
+  describe('store applications', () => {
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+    const input = {
+      businessName: 'Emeka Electronics Ltd', cacNumber: 'rc-7654321', directorName: 'Emeka Nwosu', phone: '0803 123 4567',
+      address: '4 Allen Avenue, Ikeja', area: 'Ikeja', certificatePhoto: 'data:image/jpeg;base64,c', directorIdPhoto: 'data:image/jpeg;base64,d',
+    }
+
+    it('turns a fresh account into a store once an admin approves', async () => {
+      const api = make()
+      await as(api, 'emeka')
+      const sent = await api.submitStoreApplication(input)
+      expect(sent).toMatchObject({ status: 'pending', cacNumber: 'RC 7654321' })
+      await expect(api.submitStoreApplication(input)).rejects.toThrow('already being reviewed')
+      await expect(api.approveStoreApplication(sent.id)).rejects.toMatchObject({ code: 'forbidden' })
+
+      await as(api, 'admin')
+      expect((await api.listStoreApplications()).map((a) => a.id)).toEqual([sent.id])
+      await api.approveStoreApplication(sent.id)
+      expect(await api.listStoreApplications()).toEqual([])
+
+      await as(api, 'emeka')
+      const session = await api.auth.getSession()
+      expect(session?.role).toBe('store')
+      expect(await api.getMyMerchant()).toMatchObject({ kind: 'store', name: 'Emeka Electronics Ltd', cacNumber: 'RC 7654321', verified: true })
+      expect((await api.listNotifications()).map((n) => n.kind)).toContain('store_approved')
+    })
+
+    it('needs an account that hasn’t bought or sold, and a CAC number not already in use', async () => {
+      const api = make()
+      await as(api, 'buyer')
+      const draw = (await api.listListings()).find((l) => l.kind === 'raffle' && l.status === 'live')!
+      await api.buyTickets(draw.id, 1)
+      await expect(api.submitStoreApplication(input)).rejects.toThrow('already bought')
+      await as(api, 'seller')
+      await expect(api.submitStoreApplication(input)).rejects.toThrow('individual')
+      await as(api, 'ngozi')
+      await expect(api.submitStoreApplication({ ...input, cacNumber: '123' })).rejects.toMatchObject({ code: 'invalid_input' })
+
+      await as(api, 'emeka')
+      const first = await api.submitStoreApplication(input)
+      await as(api, 'admin')
+      await api.approveStoreApplication(first.id)
+      await as(api, 'ngozi')
+      await expect(api.submitStoreApplication(input)).rejects.toThrow('already on DrawMart')
+    })
+
+    it('sends one back with a reason, and takes it again', async () => {
+      const api = make()
+      await as(api, 'emeka')
+      const sent = await api.submitStoreApplication(input)
+      await as(api, 'admin')
+      await expect(api.rejectStoreApplication(sent.id, 'no')).rejects.toMatchObject({ code: 'invalid_input' })
+      await api.rejectStoreApplication(sent.id, 'The certificate photo is cut off.')
+      await as(api, 'emeka')
+      expect(await api.getMyStoreApplication()).toMatchObject({ status: 'rejected', reviewNote: 'The certificate photo is cut off.' })
+      expect(await api.submitStoreApplication(input)).toMatchObject({ id: sent.id, status: 'pending', reviewNote: null })
     })
   })
 })
