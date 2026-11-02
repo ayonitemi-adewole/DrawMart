@@ -37,6 +37,7 @@ Deno.serve(async (req) => {
     const { data: allowed, error: limitError } = await db.rpc('note_bank_lookup', { p_user: userId })
     if (limitError) throw limitError
     if (allowed === 'not_seller') return json({ error: 'Only sellers can add a bank account.' }, 403)
+    if (allowed === 'not_owner') return json({ error: 'Only the store’s owner can change the bank account.' }, 403)
     if (allowed === 'too_many') return json({ error: 'Too many checks. Try again in an hour.' }, 429)
 
     const accountName = standIn ? `TEST ACCOUNT ${accountNumber.slice(-4)}` : await resolveAccount(bankCode, accountNumber, secretKey)

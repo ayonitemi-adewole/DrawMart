@@ -1,4 +1,5 @@
 import type { ClaimInput } from './types'
+import type { StoreRole } from '@/domain/team'
 import type { DiscountInput } from '@/domain/discounts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
@@ -36,6 +37,10 @@ export const keys = {
   supportThread: ['support-thread'] as const,
   quickReplies: ['quick-replies'] as const,
   discounts: ['discounts'] as const,
+  storeRole: ['store-role'] as const,
+  storeTeam: ['store-team'] as const,
+  storeActivity: ['store-activity'] as const,
+  storeInvites: ['store-invites'] as const,
   drawPriceStats: (category: string, band: number) => ['draw-price-stats', category, band] as const,
   supportInbox: ['support-inbox'] as const,
   supportMessages: (merchantId: string) => ['support-messages', merchantId] as const,
@@ -117,6 +122,11 @@ export const useReturnJobs = () => useQuery({ queryKey: keys.returnJobs, queryFn
 /** Cached per band, so typing a price doesn't ask again on every key. */
 export const useDrawPriceStats = (category: Category, band: number | null) =>
   useQuery({ queryKey: keys.drawPriceStats(category, band ?? -1), queryFn: () => api.getDrawPriceStats(category, band!), enabled: useIs('store') && band !== null, staleTime: 10 * 60_000 })
+/** Null while loading or without a shop; canDo treats that as the owner, and the database checks anyway. */
+export const useStoreRole = () => useQuery({ queryKey: keys.storeRole, queryFn: () => api.getMyStoreRole(), enabled: useHasShop(), staleTime: 60_000 })
+export const useStoreTeam = () => useQuery({ queryKey: keys.storeTeam, queryFn: () => api.getStoreTeam(), enabled: useIs('store') })
+export const useStoreActivity = () => useQuery({ queryKey: keys.storeActivity, queryFn: () => api.listStoreActivity(), enabled: useIs('store') })
+export const useMyStoreInvites = () => useQuery({ queryKey: keys.storeInvites, queryFn: () => api.listMyStoreInvites(), enabled: useIs('buyer'), staleTime: 60_000 })
 export const useDiscounts = () => useQuery({ queryKey: keys.discounts, queryFn: () => api.listDiscounts(), enabled: useHasShop() })
 export const useQuickReplies = () => useQuery({ queryKey: keys.quickReplies, queryFn: () => api.listQuickReplies(), enabled: useHasShop() })
 export const useSupportThread = () => useQuery({ queryKey: keys.supportThread, queryFn: () => api.getSupportThread(), enabled: useHasShop(), refetchInterval: 10_000 })
@@ -434,6 +444,18 @@ export function useSetDeliverySizeExtra() {
     onSettled: () => qc.invalidateQueries({ queryKey: keys.deliveryPricing }),
   })
 }
+
+export function useTeamActions() {
+  const invalidate = useInvalidateAll()
+  return {
+    invite: useMutation({ mutationFn: ({ email, role }: { email: string; role: StoreRole }) => api.inviteStoreMember(email, role), onSettled: invalidate }),
+    revoke: useMutation({ mutationFn: (id: string) => api.revokeStoreInvite(id), onSettled: invalidate }),
+    setRole: useMutation({ mutationFn: ({ userId, role }: { userId: string; role: StoreRole }) => api.setStoreMemberRole(userId, role), onSettled: invalidate }),
+    remove: useMutation({ mutationFn: (userId: string) => api.removeStoreMember(userId), onSettled: invalidate }),
+  }
+}
+
+export const useAcceptStoreInvite = () => useMutation({ mutationFn: (id: string) => api.acceptStoreInvite(id) })
 
 export function useCreateProductsBulk() {
   const invalidate = useInvalidateAll()

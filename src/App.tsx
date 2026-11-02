@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider, useIsFetching, useQueryClient } from '@tanstack/react-query'
+import { TeamPage } from '@/pages/merchant/TeamPage'
 import { BulkUploadPage } from '@/pages/merchant/BulkUploadPage'
 import { StoreDiscountsPage } from '@/pages/merchant/StoreDiscountsPage'
 import { useEffect, useLayoutEffect, useRef } from 'react'
@@ -187,6 +188,7 @@ const router = createBrowserRouter([
       { path: 'reviews', element: <StoreReviewsPage /> },
       { path: 'discounts', element: <StoreDiscountsPage /> },
       { path: 'bulk', element: <BulkUploadPage /> },
+      { path: 'team', element: <TeamPage /> },
       { path: 'help', element: <HelpPage app="store" /> },
       { path: 'shop', element: <StoreShopPreviewPage /> },
       { path: 'insights', element: <InsightsPage /> },

@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router'
-import { useCancelOrder, useClaimActions, useDispatchOrder, useSellerConfirmOrder, useShopPickup } from '@/api/hooks'
+import { useCancelOrder, useClaimActions, useDispatchOrder, useSellerConfirmOrder, useShopPickup, useStoreRole } from '@/api/hooks'
+import { canDo } from '@/domain/team'
 import { canClaim, canContest, claimError, claimStatusText, contestError, returnFeeKobo, returnFeePercent, CLAIM_WINDOW_HOURS } from '@/domain/claims'
 import type { ClaimKind, GeoPoint } from '@/domain/types'
 import { AddressPicker } from './AddressPicker'
@@ -64,6 +65,8 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
   const pickupDetails = useShopPickup()
   const needsPickupDetails = audience === 'store' && pickupDetails.data === null
   const waiting = needsConfirming(o)
+  // Cancelling and contesting are for owners and managers; orders-only staff confirm and send.
+  const canShop = canDo(useStoreRole().data ?? null, 'shop')
   const failedOrRefused = o.cancelReason === 'failed_check' || o.cancelReason === 'refused_wrong' || o.cancelReason === 'refused_damaged'
 
   return (
@@ -199,7 +202,7 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
           <TruckIcon size={16} /> {pickup ? 'Ready to go to the pickup location' : 'Ready for a rider'}
         </Button>
       ) : null}
-      {audience === 'store' && canCancelOrder(o) ? (
+      {audience === 'store' && canShop && canCancelOrder(o) ? (
         <Button variant="ghost" onClick={() => setCancelling(true)}>
           <XIcon size={16} /> I can’t fulfil this
         </Button>
@@ -218,7 +221,7 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
         </Button>
       ) : null}
       {claiming ? <ClaimSheet order={o} onClose={() => setClaiming(false)} /> : null}
-      {audience === 'store' && !o.claim && canContest(o, Date.now()) ? (
+      {audience === 'store' && canShop && !o.claim && canContest(o, Date.now()) ? (
         <Button variant="ghost" onClick={() => setContesting(true)}>
           <AlertIcon size={16} /> I don’t think this is right
         </Button>

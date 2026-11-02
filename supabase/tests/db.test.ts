@@ -1695,6 +1695,82 @@ describe('delivery fees', () => {
   })
 })
 
+describe('store teams', () => {
+  let SHOP: string, owner: string, manager: string, orders: string
+  const role = async (who: string) => (await asUser<{ r: string | null }>(who, `select public.my_store_role() r`))[0].r
+  const join = async (email: string, r: string) => {
+    await asUser(owner, `select public.invite_store_member($1, $2)`, [email, r])
+    const u = await newUser(email)
+    const [{ i }] = await asUser<{ i: { id: string; storeName: string; role: string }[] }>(u, `select public.my_store_invites() i`)
+    expect(i).toMatchObject([{ role: r }])
+    await asUser(u, `select public.accept_store_invite($1)`, [i[0].id])
+    return u
+  }
+  const product = (title: string) => ({ title, description: '', category: 'Home', priceKobo: 2_000_000, stock: 2, images: ['/assets/a.jpg'], check: { code: '', serial: '' } })
+
+  beforeAll(async () => {
+    // A store of its own, so no other test's accounts are on this team.
+    ;[{ id: SHOP }] = await admin<{ id: string }>(`insert into public.merchants (kind, name, area, cac_number, verified) values ('store', 'Team Store', 'Ikeja', 'RC 7777777', true) returning id`)
+    await admin(`insert into public.shop_pickups (merchant_id, address, lat, lng, contact_phone) values ($1, '1 Allen Avenue, Ikeja', 6.6, 3.35, '0803 123 4567') on conflict do nothing`, [SHOP]).catch(() => undefined)
+    owner = await newUser('team-owner@example.com', { merchantId: SHOP })
+    manager = await join('Team-Manager@Example.com', 'manager')
+    orders = await join('team-orders@example.com', 'orders')
+  })
+
+  it('makes every store account its owner, and joiners what they were invited as', async () => {
+    expect([await role(owner), await role(manager), await role(orders)]).toEqual(['owner', 'manager', 'orders'])
+    expect(await admin(`select role, merchant_id from public.profiles where id = $1`, [orders])).toEqual([{ role: 'store', merchant_id: SHOP }])
+    expect(await role(await newUser('team-buyer@example.com'))).toBeNull()
+  })
+
+  it('lets each role do its own work', async () => {
+    await asUser(manager, `select public.create_product($1)`, [product('Team lamp')])
+    await expectFail(asUser(orders, `select public.create_product($1)`, [product('Not allowed')]), 'forbidden')
+    await expectFail(asUser(orders, `select public.merchant_metrics(7)`), 'forbidden')
+    const [{ id }] = await admin<{ id: string }>(`select id from public.listings where title = 'Team lamp'`)
+    await expectFail(asUser(orders, `select public.pause_listing($1)`, [id]), 'forbidden')
+
+    // Payouts: owners and managers. The bank account: owners.
+    await admin(`insert into public.payout_accounts (merchant_id, bank_code, bank_name, account_number, account_name, confirmed_at, payable_from) values ($1, '044', 'Access Bank', '0123456789', 'IKEJA LTD', now(), now()) on conflict do nothing`, [SHOP])
+    expect(await asUser(owner, `select account_number from public.payout_accounts`)).toHaveLength(1)
+    expect(await asUser(manager, `select account_number from public.payout_accounts`)).toEqual([])
+    await expectFail(asService(`select public.save_payout_account($1, '044', 'Bank', '0123456789', 'ME')`, [manager]), 'forbidden')
+    expect(await asService(`select public.note_bank_lookup($1) r`, [manager])).toEqual([{ r: 'not_owner' }])
+    await expectFail(asUser(manager, `select public.store_team()`), 'forbidden')
+
+    const [{ log }] = await asUser<{ log: { who: string; action: string; listingTitle: string }[] }>(owner, `select public.store_activity_log() log`)
+    expect(log[0]).toMatchObject({ action: 'listed', listingTitle: 'Team lamp' })
+    await expectFail(asUser(manager, `select public.store_activity_log()`), 'forbidden')
+  })
+
+  it('always keeps an owner, and removing someone makes their account a buyer’s again', async () => {
+    await expectFail(asUser(owner, `select public.set_store_member_role($1, 'manager')`, [owner]), 'invalid_input')
+    await expectFail(asUser(manager, `select public.set_store_member_role($1, 'owner')`, [manager]), 'forbidden')
+    await asUser(owner, `select public.set_store_member_role($1, 'manager')`, [orders])
+    expect(await role(orders)).toBe('manager')
+    await asUser(owner, `select public.remove_store_member($1)`, [orders])
+    expect(await admin(`select role, merchant_id from public.profiles where id = $1`, [orders])).toEqual([{ role: 'buyer', merchant_id: null }])
+    expect(await role(orders)).toBeNull()
+    const [{ t }] = await asUser<{ t: { members: { role: string }[] } }>(owner, `select public.store_team() t`)
+    expect(t.members.map((m) => m.role).sort()).toEqual(['manager', 'owner'])
+  })
+
+  it('needs the invited email and an account that hasn’t bought', async () => {
+    await asUser(owner, `select public.invite_store_member('team-later@example.com', 'orders')`)
+    const stranger = await newUser('team-stranger@example.com')
+    const [{ id }] = await admin<{ id: string }>(`select id from public.store_invites where email = 'team-later@example.com'`)
+    await expectFail(asUser(stranger, `select public.accept_store_invite($1)`, [id]), 'not_found')
+    const later = await newUser('team-later@example.com')
+    await asUser(later, `select public.top_up(100000)`)
+    await admin(`insert into public.deposits (user_id, tx_ref, amount_kobo, status) values ($1, 'DM-team', 100000, 'successful')`, [later]).catch(() => undefined)
+    const [{ listing }] = await admin<{ listing: string }>(`select id listing from public.listings limit 1`)
+    await admin(`insert into public.orders (listing_id, user_id, merchant_id, price_kobo, fee_kobo, delivery_address, delivery_phone, handled_by, is_prize) select id, $2, merchant_id, 0, 0, 'x', 'x', 'store', false from public.listings where id = $1`, [listing, later])
+    await expectFail(asUser(later, `select public.accept_store_invite($1)`, [id]), 'invalid_input')
+    await asUser(owner, `select public.revoke_store_invite($1)`, [id])
+    expect(await asUser(later, `select public.my_store_invites() i`)).toEqual([{ i: [] }])
+  })
+})
+
 describe('bulk upload', () => {
   const SHOP = '11111111-1111-4111-8111-000000000003'
   let owner: string, seller: string

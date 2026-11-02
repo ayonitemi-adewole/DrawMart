@@ -40,6 +40,7 @@ import { locationError } from '@/domain/location'
 import { shopProfileErrors } from '@/domain/shopProfile'
 import { quickReplyError } from '@/domain/quickReplies'
 import { pricingStats } from '@/domain/drawPricing'
+import { canDo, inviteError, lastOwnerError, type ShopPermission, type StoreRole } from '@/domain/team'
 import { MAX_BULK_ROWS } from '@/domain/bulkUpload'
 import { MAX_OPEN_DISCOUNTS, bestPrice, discountActive, discountErrors, normalizeCode, type Discount, type ListingSale } from '@/domain/discounts'
 import { DUPLICATE_CAC_TEXT, STORE_APPLICATION_ERROR_TEXT, normalizeCac, storeAccountBlocker, validateStoreApplication } from '@/domain/storeApplications'
@@ -103,7 +104,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v48' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v49' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -172,6 +173,10 @@ interface Db {
   discountRedemptions: { discountId: string; userId: string }[]
   /** Spot checks a bulk upload picked, by shop id: its next listings need a video. */
   owedChecks: Record<string, number>
+  /** Roles of people on a store's team who aren't its demo account, by user id. A store's demo account is its owner unless changed here. */
+  storeRoles: Record<string, { merchantId: string; role: StoreRole }>
+  storeInvites: { id: string; merchantId: string; email: string; role: StoreRole; createdAt: string; acceptedAt: string | null; revokedAt: string | null }[]
+  storeActivity: { id: string; merchantId: string; who: string; action: string; listingId: string | null; at: string }[]
   /** Not stored: the time the current call runs at, set by tx(). */
   clock?: number
   /** Not stored: the buyer the current call acts for, set by tx(). */
@@ -643,6 +648,9 @@ async function freshDb(): Promise<Db> {
     discounts: [],
     discountRedemptions: [],
     owedChecks: {},
+    storeRoles: {},
+    storeInvites: [],
+    storeActivity: [],
     conversations: [],
     messages: [],
     callPhones: { 'm-surulere': '0803 000 1234' },
@@ -1034,6 +1042,45 @@ function reviewView(db: Db, r: MockReview): ReviewView {
   return { id: r.id, rating: r.rating, sellerComment: r.sellerComment, productComment: r.productComment, reply: r.reply, repliedAt: r.repliedAt, createdAt: r.createdAt, hidden: !!r.hiddenAt, name, listingId: r.listingId, listingTitle: l.title, productCode: l.productCode }
 }
 
+/** A store's team on the mock: its demo account(s), and anyone who joined by invite. */
+function mockTeam(db: Db, merchantId: string): { userId: string; role: StoreRole }[] {
+  const owners = DEMO_ACCOUNTS.filter((a) => a.role === 'store' && a.mockId === merchantId).map((a) => a.mockId)
+  const invited = Object.entries(db.storeRoles).filter(([id, r]) => r.merchantId === merchantId && !owners.includes(id)).map(([id]) => id)
+  return [...owners, ...invited].map((userId) => ({ userId, role: db.storeRoles[userId]?.role ?? 'owner' }))
+}
+
+type StoreSnapshot = { listings: Map<string, { status: string; revision: number; price: number; stock: number }>; orders: Map<string, { status: string; confirmedAt: string | null }> }
+
+function storeSnapshot(db: Db, merchantId: string): StoreSnapshot {
+  return {
+    listings: new Map(db.listings.filter((l) => l.merchantId === merchantId).map((l) => [l.id, { status: l.status, revision: l.revision ?? 0, price: l.priceKobo, stock: l.stock }])),
+    orders: new Map(db.orders.filter((o) => o.merchantId === merchantId).map((o) => [o.id, { status: o.status, confirmedAt: o.confirmedAt }])),
+  }
+}
+
+/** Mirrors the listings and orders activity triggers: what one of the store's people changed. */
+function logStoreActivity(db: Db, actor: { merchantId: string; name: string }, before: StoreSnapshot) {
+  const at = new Date(db.clock ?? Date.now()).toISOString()
+  const add = (action: string, listingId: string) => db.storeActivity.push({ id: `A-${db.storeActivity.length + 1}-${listingId}`, merchantId: actor.merchantId, who: actor.name, action, listingId, at })
+  for (const l of db.listings.filter((x) => x.merchantId === actor.merchantId)) {
+    const was = before.listings.get(l.id)
+    if (!was) add('listed', l.id)
+    else if (l.status === 'withdrawn' && was.status !== 'withdrawn') add('withdrew', l.id)
+    else if (l.status === 'paused' && was.status !== 'paused') add('paused', l.id)
+    else if (was.status === 'paused' && l.status === 'for_sale') add('resumed', l.id)
+    else if ((l.revision ?? 0) > was.revision) add('edited', l.id)
+    else if (l.priceKobo !== was.price) add('repriced', l.id)
+    else if (l.stock !== was.stock) add('restocked', l.id)
+  }
+  for (const o of db.orders.filter((x) => x.merchantId === actor.merchantId)) {
+    const was = before.orders.get(o.id)
+    if (!was) continue
+    if (o.confirmedAt && !was.confirmedAt) add('confirmed', o.listingId)
+    else if (o.status === 'dispatched' && was.status !== 'dispatched') add('dispatched', o.listingId)
+    else if (o.status === 'cancelled' && was.status !== 'cancelled') add('cancelled', o.listingId)
+  }
+}
+
 /** storeApplications.ts storeAccountBlocker, for a mock account. */
 function accountFacts(db: Db, userId: string) {
   const individual = db.sellerApplications[userId]
@@ -1129,7 +1176,10 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       await runDueDraws(db, t)
       settlePickups(db)
       syncPayouts(db, now()) // time alone can make a payout due
+      const actor = teamMember(db)
+      const before = actor ? storeSnapshot(db, actor.merchantId) : null
       const out = await fn(db)
+      if (actor && before) logStoreActivity(db, actor, before)
       settlePickups(db)
       syncPayouts(db, now())
       delete db.viewer
@@ -1219,6 +1269,19 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     if ((role === 'buyer' || role === undefined) && c.buyerId === buyer()) return 'buyer'
     if (c.merchantId === myShop(db)) return 'seller'
     return null
+  }
+  /** Who on a store's team is signed in, if anyone (team.ts). Demo store accounts sign in as their store. */
+  function teamMember(db: Db): { userId: string; merchantId: string; role: StoreRole; name: string } | null {
+    const s = readSession()
+    if (s?.role !== 'store') return null
+    const account = DEMO_ACCOUNTS.find((a) => a.email === s.email)
+    if (!account) return null
+    return { userId: account.mockId, merchantId: s.userId, role: db.storeRoles[account.mockId]?.role ?? 'owner', name: account.name }
+  }
+  /** private.require_shop_permission. Individual sellers own their shop. */
+  function requireShopPermission(db: Db, perm: ShopPermission) {
+    const m = teamMember(db)
+    if (m && !canDo(m.role, perm)) throw new ApiError('forbidden', perm === 'bank' || perm === 'team' ? 'Only the store’s owner can do this.' : 'Your role in this store doesn’t include this. Ask the owner.')
   }
   /** A code this buyer can use now, or why not (discounts.ts). */
   function usableCode(db: Db, code: string) {
@@ -1854,12 +1917,14 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     createListing: (input: NewListingInput) =>
       tx(async (db) => {
+        requireShopPermission(db, 'shop')
         const listing = await addRaffle(db, input)
         return listingView(db, listing, 'full')
       }),
 
     createListingBatch: ({ items, handover }: NewPickupInput) =>
       tx(async (db) => {
+        requireShopPermission(db, 'shop')
         const problems = validatePickup(items.map((i) => i.category)).map((e) => PICKUP_ERROR_TEXT[e])
         if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
         const added = db.listings.length
@@ -1884,6 +1949,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     savePickupItems: (items: PickupItemInput[]) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         if (readSession()?.role === 'buyer') throw new ApiError('forbidden', 'Only store accounts can save draw items.')
         const shop = shopId(db)
         if (items.length === 0) {
@@ -1900,6 +1966,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     updateListing: (id, input) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const l = ownListing(db, id)
         if (l.status !== 'pending_review') throw new ApiError('invalid_input', 'Only listings in review can be edited.')
         if (!canChangeInReview(l, lagosDay(now()))) throw new ApiError('invalid_input', 'Your pickup or inspection day has arrived, so this can’t be changed now.')
@@ -1910,6 +1977,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     withdrawListing: (id) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const l = ownListing(db, id)
         if (l.status !== 'pending_review') throw new ApiError('invalid_input', 'Only listings in review can be withdrawn.')
         if (!canChangeInReview(l, lagosDay(now()))) throw new ApiError('invalid_input', 'Your pickup or inspection day has arrived, so this can’t be withdrawn now.')
@@ -1921,6 +1989,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     pauseListing: (id) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const l = ownListing(db, id)
         if (l.kind !== 'product' || l.status !== 'for_sale') throw new ApiError('invalid_input', 'Only products on sale can be paused.')
         l.status = 'paused'
@@ -1928,6 +1997,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     resumeListing: (id) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const l = ownListing(db, id)
         if (db.merchants.find((m) => m.id === l.merchantId)?.suspendedAt) throw new ApiError('forbidden', 'Your shop is suspended. Contact DrawMart.')
         if (l.status !== 'paused') throw new ApiError('invalid_input', 'Only paused products can be resumed.')
@@ -1938,6 +2008,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     changeStock: (id, change) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const l = ownListing(db, id)
         if (!canControlProduct(l)) throw new ApiError('invalid_input', 'Only products on sale, paused or sold out can change stock.')
         const problem = stockChangeError(l.stock, change)
@@ -1950,6 +2021,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     changePrice: (id, priceKobo) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const l = ownListing(db, id)
         if (!canControlProduct(l)) throw new ApiError('invalid_input', 'Only products on sale, paused or sold out can change price.')
         if (!Number.isInteger(priceKobo) || priceKobo < MIN_PRODUCT_PRICE_KOBO) throw new ApiError('invalid_input', PRODUCT_ERROR_TEXT.price_too_low)
@@ -1983,6 +2055,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     resubmitListing: (id, input) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const l = ownListing(db, id)
         if (l.status !== 'rejected') throw new ApiError('invalid_input', 'Only rejected listings can be sent again.')
         setListingDetails(db, l, input)
@@ -1995,6 +2068,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     createProduct: (input: NewProductInput) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         if (db.merchants.find((m) => m.id === shopId(db))?.suspendedAt) throw new ApiError('forbidden', 'Your shop is suspended. Contact DrawMart.')
         const problems = validateProduct(input).map((e) => PRODUCT_ERROR_TEXT[e])
         if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
@@ -2018,8 +2092,124 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         return listingView(db, listing, 'full')
       }),
 
+    getMyStoreRole: () =>
+      tx((db) => {
+        const m = teamMember(db)
+        if (m) return m.role
+        return readSession()?.role === 'buyer' && db.sellerShops[buyer()] ? 'owner' : null
+      }),
+
+    getStoreTeam: () =>
+      tx((db) => {
+        const me = teamMember(db)
+        if (!me) throw new ApiError('forbidden', 'Teams are for stores.')
+        requireShopPermission(db, 'team')
+        const owners = DEMO_ACCOUNTS.filter((a) => a.role === 'store' && a.mockId === me.merchantId)
+        const invited = Object.entries(db.storeRoles).filter(([id, r]) => r.merchantId === me.merchantId && !owners.some((o) => o.mockId === id))
+        const member = (userId: string) => {
+          const a = DEMO_ACCOUNTS.find((x) => x.mockId === userId)!
+          return { userId, name: a.name, email: a.email, role: db.storeRoles[userId]?.role ?? ('owner' as StoreRole), you: userId === me.userId, since: '2026-03-02T09:00:00.000Z' }
+        }
+        return {
+          members: [...owners.map((o) => member(o.mockId)), ...invited.map(([id]) => member(id))],
+          invites: db.storeInvites.filter((i) => i.merchantId === me.merchantId && !i.acceptedAt && !i.revokedAt).map(({ id, email, role, createdAt }) => ({ id, email, role, createdAt })),
+        }
+      }),
+
+    inviteStoreMember: (email, role) =>
+      tx((db) => {
+        const me = teamMember(db)
+        if (!me) throw new ApiError('forbidden', 'Teams are for stores.')
+        requireShopPermission(db, 'team')
+        const problem = inviteError(email, role)
+        if (problem) throw new ApiError('invalid_input', problem)
+        const address = email.trim().toLowerCase()
+        const onTeam = (userId: string) => (db.storeRoles[userId]?.merchantId ?? (DEMO_ACCOUNTS.find((a) => a.mockId === userId)?.role === 'store' ? userId : null)) === me.merchantId
+        if (DEMO_ACCOUNTS.some((a) => a.email === address && onTeam(a.mockId))) throw new ApiError('invalid_input', 'They’re already on your team.')
+        const pending = db.storeInvites.find((i) => i.merchantId === me.merchantId && i.email === address && !i.acceptedAt && !i.revokedAt)
+        if (pending) {
+          pending.role = role
+          return
+        }
+        db.storeInvites.push({ id: uid('T'), merchantId: me.merchantId, email: address, role, createdAt: iso(now()), acceptedAt: null, revokedAt: null })
+      }),
+
+    revokeStoreInvite: (id) =>
+      tx((db) => {
+        const me = teamMember(db)
+        requireShopPermission(db, 'team')
+        const i = db.storeInvites.find((x) => x.id === id && x.merchantId === me?.merchantId && !x.acceptedAt && !x.revokedAt)
+        if (!i) throw new ApiError('not_found', 'That invite doesn’t exist.')
+        i.revokedAt = iso(now())
+      }),
+
+    setStoreMemberRole: (userId, role) =>
+      tx((db) => {
+        const me = teamMember(db)
+        if (!me) throw new ApiError('forbidden', 'Teams are for stores.')
+        requireShopPermission(db, 'team')
+        const team = mockTeam(db, me.merchantId)
+        if (!team.some((m) => m.userId === userId)) throw new ApiError('not_found', 'They’re not on your team.')
+        const problem = lastOwnerError(team, userId, role)
+        if (problem) throw new ApiError('invalid_input', problem)
+        db.storeRoles[userId] = { merchantId: me.merchantId, role }
+      }),
+
+    removeStoreMember: (userId) =>
+      tx((db) => {
+        const me = teamMember(db)
+        if (!me) throw new ApiError('forbidden', 'Teams are for stores.')
+        requireShopPermission(db, 'team')
+        const team = mockTeam(db, me.merchantId)
+        if (!team.some((m) => m.userId === userId)) throw new ApiError('not_found', 'They’re not on your team.')
+        const problem = lastOwnerError(team, userId, null)
+        if (problem) throw new ApiError('invalid_input', problem)
+        if (!db.storeAccounts[userId]) throw new ApiError('invalid_input', 'The demo account a store was set up with can’t be removed.')
+        delete db.storeAccounts[userId]
+        delete db.storeRoles[userId]
+      }),
+
+    listStoreActivity: () =>
+      tx((db) => {
+        const me = teamMember(db)
+        if (!me) throw new ApiError('forbidden', 'Teams are for stores.')
+        requireShopPermission(db, 'team')
+        return db.storeActivity
+          .filter((a) => a.merchantId === me.merchantId)
+          .slice(-100)
+          .reverse()
+          .map((a) => {
+            const l = a.listingId ? db.listings.find((x) => x.id === a.listingId) : undefined
+            return { id: a.id, at: a.at, who: a.who, action: a.action, listingTitle: l?.title ?? null, productCode: l?.productCode ?? null }
+          })
+      }),
+
+    listMyStoreInvites: () =>
+      tx((db) => {
+        const s = readSession()
+        if (s?.role !== 'buyer' || !s.email) return []
+        return db.storeInvites
+          .filter((i) => i.email === s.email && !i.acceptedAt && !i.revokedAt)
+          .map((i) => ({ id: i.id, storeName: db.merchants.find((m) => m.id === i.merchantId)!.name, role: i.role, createdAt: i.createdAt }))
+      }),
+
+    acceptStoreInvite: (id) =>
+      tx((db) => {
+        const s = readSession()
+        const i = db.storeInvites.find((x) => x.id === id && !x.acceptedAt && !x.revokedAt)
+        if (!s || s.role !== 'buyer' || !i || i.email !== s.email) throw new ApiError('not_found', 'That invite doesn’t exist, or it’s for another email address.')
+        const blocker = storeAccountBlocker(accountFacts(db, s.userId))
+        if (blocker) throw new ApiError('invalid_input', blocker)
+        db.storeAccounts[s.userId] = i.merchantId
+        db.storeRoles[s.userId] = { merchantId: i.merchantId, role: i.role }
+        delete db.carts[s.userId]
+        delete db.saved[s.userId]
+        i.acceptedAt = iso(now())
+      }),
+
     createProductsBulk: (items, onProgress) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const shop = db.merchants.find((m) => m.id === readSession()?.userId && readSession()?.role === 'store')
         if (!shop) throw new ApiError('forbidden', 'Bulk upload is for stores. Add your items one at a time.')
         if (shop.suspendedAt) throw new ApiError('forbidden', 'Your shop is suspended. Contact DrawMart.')
@@ -2051,20 +2241,29 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       }),
 
     listPayouts: () =>
-      tx((db) => db.payouts.filter((p) => p.merchantId === shopId(db)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((p) => payoutView(db, p))),
+      tx((db) => {
+        requireShopPermission(db, 'shop')
+        return db.payouts.filter((p) => p.merchantId === shopId(db)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((p) => payoutView(db, p))
+      }),
 
-    getPayoutAccount: () => tx((db) => db.payoutAccounts[shopId(db)] ?? null),
+    getPayoutAccount: () =>
+      tx((db) => {
+        requireShopPermission(db, 'bank')
+        return db.payoutAccounts[shopId(db)] ?? null
+      }),
 
     listBanks: () => tx(() => [{ code: '044', name: 'Access Bank' }, { code: '058', name: 'GTBank' }, { code: '057', name: 'Zenith Bank' }]),
 
     lookupBankAccount: (bankCode, accountNumber) =>
       tx((db) => {
+        requireShopPermission(db, 'bank')
         shopId(db)
         return { accountName: mockAccountName(bankCode, accountNumber) }
       }),
 
     savePayoutAccount: (bankCode, accountNumber) =>
       tx((db) => {
+        requireShopPermission(db, 'bank')
         const shop = shopId(db)
         const accountName = mockAccountName(bankCode, accountNumber)
         const old = db.payoutAccounts[shop]
@@ -2151,6 +2350,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     contestFailure: (orderId, note) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const o = db.orders.find((x) => x.id === orderId && x.merchantId === shopId(db))
         if (!o) throw new ApiError('not_found', 'That order doesn’t exist.')
         if (!canContest(o, now())) throw new ApiError('invalid_input', 'You can contest a failed check or a refusal for 7 days.')
@@ -2275,6 +2475,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     getListingCheckPlan: () =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const shop = db.merchants.find((m) => m.id === shopId(db))!
         let ticket = db.checkTickets[shop.id]
         if (!ticket || Date.parse(ticket.issuedAt) < now() - DAY) {
@@ -2307,6 +2508,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     createDiscount: (input) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const shop = myShop(db)
         if (!shop) throw new ApiError('forbidden', 'Only sellers can run discounts.')
         const ids = [...new Set(input.listingIds)]
@@ -2328,6 +2530,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     endDiscount: (id) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const d = db.discounts.find((x) => x.id === id && x.merchantId === myShop(db) && !x.endedAt)
         if (!d) throw new ApiError('not_found', 'That discount doesn’t exist or has already ended.')
         d.endedAt = iso(now())
@@ -2480,6 +2683,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     replyToReview: (reviewId, reply) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const shop = readSession() ? myShop(db) : null
         const r = db.reviews.find((x) => x.id === reviewId && x.merchantId === shop)
         if (!r) throw new ApiError('not_found', 'That review doesn’t exist.')
@@ -2541,6 +2745,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     updateShopProfile: (input) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const m = db.merchants.find((x) => x.id === shopId(db))!
         const problems = shopProfileErrors(input, m.kind)
         if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
@@ -2561,6 +2766,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     saveShopPickup: (input) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const errors = shopPickupErrors(input)
         if (errors.length) throw new ApiError('invalid_input', shopPickupErrorText(errors))
         const shop = shopId(db)
@@ -2570,6 +2776,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     setShopDeliveryArea: (area) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         if (!db.deliveryPricing.areas.some((a) => a.id === area)) throw new ApiError('invalid_input', 'Pick an area.')
         db.merchants.find((m) => m.id === shopId(db))!.deliveryArea = area
       }),
@@ -2651,6 +2858,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     cancelOrder: (orderId, reason, note) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const o = db.orders.find((x) => x.id === orderId && x.handledBy === 'store' && x.merchantId === shopId(db))
         if (!o) throw new ApiError('not_found', 'That order doesn’t exist.')
         const problem = cancelError({ reason, note })
@@ -2745,6 +2953,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     getMerchantMetrics: (days) =>
       tx((db): MerchantMetricsView => {
+        requireShopPermission(db, 'shop')
         const shop = readSession() ? myShop(db) : null
         if (!shop) throw new ApiError('forbidden', 'Only sellers have insights.')
         const range = fillDays([], days, lagosDay(now()))
@@ -2780,6 +2989,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     buyBoost: (listingId, packageId) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const shop = readSession() ? myShop(db) : null
         if (!shop) throw new ApiError('forbidden', 'Only sellers can boost listings.')
         const s = db.boostSettings
@@ -2814,6 +3024,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     getBoostInsights: (boostId) =>
       tx((db): BoostInsightsView => {
+        requireShopPermission(db, 'shop')
         const role = readSession()?.role
         const shop = role && role !== 'admin' ? myShop(db) : null
         const b = db.boosts.find((x) => x.id === boostId && (role === 'admin' || x.merchantId === shop))
@@ -2843,6 +3054,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     setCallPhone: (phone) =>
       tx((db) => {
+        requireShopPermission(db, 'shop')
         const shop = myShop(db)
         if (!shop) throw new ApiError('forbidden', 'Only sellers can share a call number.')
         if (!phone?.trim()) {

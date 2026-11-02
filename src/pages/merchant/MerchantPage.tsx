@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { canDo } from '@/domain/team'
 import { pricingTip, ticketBand } from '@/domain/drawPricing'
 import { GettingStarted } from './GettingStarted'
 import { Link, useSearchParams } from 'react-router'
 import { payoutTotals } from '@/domain/payouts'
 import { api } from '@/api'
-import { useCreateListing, useCreateListingBatch, usePayouts, useResubmitListing, useUpdateListing, useSavePickupItems, useSavedPickup, useMerchant, useMerchantListings, useMerchantOrders, useDrawPriceStats } from '@/api/hooks'
+import { useCreateListing, useCreateListingBatch, usePayouts, useResubmitListing, useUpdateListing, useSavePickupItems, useSavedPickup, useMerchant, useMerchantListings, useMerchantOrders, useDrawPriceStats, useStoreRole } from '@/api/hooks'
 import type { ListingView, PickupItemInput } from '@/api/types'
 import { Countdown } from '@/components/Countdown'
 import {
@@ -86,7 +87,10 @@ export function MerchantPage() {
   const orders = useMerchantOrders()
   const payouts = usePayouts()
   const [params, setParams] = useSearchParams()
-  const tab: Tab = TABS.find((t) => t === params.get('tab')) ?? 'draws'
+  const role = useStoreRole().data ?? null
+  const listingsAllowed = canDo(role, 'shop')
+  // Orders-only staff only see orders.
+  const tab: Tab = listingsAllowed ? (TABS.find((t) => t === params.get('tab')) ?? 'draws') : 'orders'
   const kindParam = params.get('kind')
   const kind = kindParam === 'raffle' || kindParam === 'product' ? kindParam : null
   const setTab = (t: Tab, k?: string) => setParams(t === 'draws' ? {} : k ? { tab: t, kind: k } : { tab: t }, { replace: true })
@@ -121,7 +125,7 @@ export function MerchantPage() {
             </p>
           ) : null}
         </div>
-        {tab !== 'new' ? (
+        {tab !== 'new' && listingsAllowed ? (
           <span className="flex flex-wrap gap-2">
             <Link to="/store/bulk" className={buttonClass('outline')}>
               Upload many
@@ -141,17 +145,17 @@ export function MerchantPage() {
 
       <PushPrompt seller />
 
-      {tab !== 'new' ? <GettingStarted app="store" onNewListing={() => setTab('new')} /> : null}
+      {tab !== 'new' && canDo(role, 'team') ? <GettingStarted app="store" onNewListing={() => setTab('new')} /> : null}
 
-      {!form && !(tab === 'new' && kind === 'raffle') ? <SavedPickupReminder onContinue={() => setTab('new', 'raffle')} /> : null}
+      {listingsAllowed && !form && !(tab === 'new' && kind === 'raffle') ? <SavedPickupReminder onContinue={() => setTab('new', 'raffle')} /> : null}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile icon={TicketIcon} label="Live & on sale" value={active.length} hint={`${active.filter((l) => l.kind === 'raffle').length} draws`} />
         <StatTile icon={ClipboardIcon} tone="ticket" label="In review" value={review.length} hint="Waiting on review, pickup or inspection" />
         <StatTile icon={TruckIcon} tone="sky" label="Orders to send" value={toSend} hint={`${orders.data?.filter((o) => o.status !== 'cancelled').length ?? 0} orders in all`} />
-        <Link to="/store/payouts" className="flex text-ink no-underline transition hover:opacity-80">
+        {listingsAllowed ? <Link to="/store/payouts" className="flex text-ink no-underline transition hover:opacity-80">
           <StatTile icon={NairaIcon} tone="violet" className="w-full" label="Money coming to you" value={formatNaira(unpaid.waiting + unpaid.due)} hint={unpaid.due ? `${formatNaira(unpaid.due)} due. See payouts` : 'Paid after delivery. See payouts'} />
-        </Link>
+        </Link> : null}
       </div>
 
       <Segmented<Tab>
@@ -159,11 +163,15 @@ export function MerchantPage() {
         value={tab}
         onChange={setTab}
         className="w-full sm:w-auto sm:self-start"
-        options={[
-          { value: 'draws', label: <><LayoutIcon size={16} /> Your listings</>, count: data.length },
-          { value: 'orders', label: <><TruckIcon size={16} /> Orders</>, count: toSend || undefined },
-          { value: 'new', label: <><PlusIcon size={16} /> New listing</> },
-        ]}
+        options={
+          listingsAllowed
+            ? [
+                { value: 'draws', label: <><LayoutIcon size={16} /> Your listings</>, count: data.length },
+                { value: 'orders', label: <><TruckIcon size={16} /> Orders</>, count: toSend || undefined },
+                { value: 'new', label: <><PlusIcon size={16} /> New listing</> },
+              ]
+            : [{ value: 'orders', label: <><TruckIcon size={16} /> Orders</>, count: toSend || undefined }]
+        }
       />
 
       <div key={form ? `${form.mode}-${form.listing.id}` : tab} className="animate-fade-in">

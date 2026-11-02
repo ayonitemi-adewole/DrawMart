@@ -7,6 +7,7 @@ import {
   useLocation,
   useNavigate,
 } from "react-router";
+import { StoreInviteBanner } from "@/components/StoreInviteBanner";
 import {
   useAccess,
   useCart,
@@ -329,6 +330,7 @@ export function BuyerLayout() {
       </header>
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 pt-5 pb-32 sm:px-6 lg:pb-16">
+        <StoreInviteBanner />
         <div key={pathname} className="animate-fade-in">
           <Outlet />
         </div>

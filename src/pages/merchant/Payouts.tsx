@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '@/api'
-import { useBanks, useLookupBankAccount, usePayoutAccount, usePayouts, useSavePayoutAccount } from '@/api/hooks'
+import { useBanks, useLookupBankAccount, usePayoutAccount, usePayouts, useSavePayoutAccount, useStoreRole } from '@/api/hooks'
+import { canDo } from '@/domain/team'
 import type { PayoutLineView } from '@/api/types'
 import { CheckIcon, ClockIcon, DownloadIcon, LockIcon, NairaIcon, TicketIcon } from '@/components/icons'
 import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
@@ -27,6 +28,7 @@ const STATUS_TONE: Record<PayoutStatus, Tone> = { waiting: 'ticket', due: 'sky',
 /** /store/payouts, and a tab of /sell: what each item has earned and where it's paid. */
 export function Payouts() {
   const q = usePayouts()
+  const role = useStoreRole().data ?? null
   const [filter, setFilter] = useState<PayoutStatus | 'all'>('all')
   const [search, setSearch] = useState('')
   if (q.isPending) return <Skeleton className="h-60" />
@@ -45,7 +47,7 @@ export function Payouts() {
         <StatTile icon={CheckIcon} label="Paid" value={formatNaira(totals.paid)} hint="All time" />
       </div>
 
-      <BankAccount owed={totals.due > 0} />
+      {canDo(role, 'bank') ? <BankAccount owed={totals.due > 0} /> : <p className="text-sm text-muted">Only the store’s owner can see and change the bank account.</p>}
 
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-3">

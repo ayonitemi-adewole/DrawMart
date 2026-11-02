@@ -5,11 +5,12 @@
  * sees). Every write is an RPC to a database function in
  * supabase/migrations, which enforces the same rules as src/domain.
  */
+import type { StoreRole } from '@/domain/team'
 import type { Discount } from '@/domain/discounts'
 import type { PricingStats } from '@/domain/drawPricing'
 import { STORE_APPLICATION_ERROR_TEXT, validateStoreApplication } from '@/domain/storeApplications'
 import type { PayoutAccount, PayoutKind, PayoutStatus } from '@/domain/payouts'
-import type { ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews, StoreApplicationView, SupportMessage, SupportThreadSummary, QuickReply, BulkUploadResult } from './types'
+import type { ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews, StoreApplicationView, SupportMessage, SupportThreadSummary, QuickReply, BulkUploadResult, IncomingStoreInvite, StoreActivityEntry, StoreTeam } from './types'
 import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js'
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
@@ -1234,6 +1235,25 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     finishReturn: async (claimId, photo) => {
       const [url] = await uploadPhotos(`riders/${await requireId()}`, [photo])
       await rpc('finish_return', { p_claim_id: claimId, p_photo: url })
+    },
+    getMyStoreRole: () => rpc<StoreRole | null>('my_store_role'),
+    getStoreTeam: () => rpc<StoreTeam>('store_team'),
+    inviteStoreMember: async (email, role) => {
+      await rpc('invite_store_member', { p_email: email, p_role: role })
+    },
+    revokeStoreInvite: async (id) => {
+      await rpc('revoke_store_invite', { p_id: id })
+    },
+    setStoreMemberRole: async (userId, role) => {
+      await rpc('set_store_member_role', { p_user: userId, p_role: role })
+    },
+    removeStoreMember: async (userId) => {
+      await rpc('remove_store_member', { p_user: userId })
+    },
+    listStoreActivity: () => rpc<StoreActivityEntry[]>('store_activity_log'),
+    listMyStoreInvites: () => rpc<IncomingStoreInvite[]>('my_store_invites'),
+    acceptStoreInvite: async (id) => {
+      await rpc('accept_store_invite', { p_id: id })
     },
     createProductsBulk: async (items, onProgress) => {
       const merchantId = await myMerchantId()

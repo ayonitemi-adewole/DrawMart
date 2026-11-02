@@ -15,6 +15,7 @@ import type { ShopProfileInput } from '@/domain/shopProfile'
 import type { ReviewInput } from '@/domain/reviews'
 import type { PricingStats } from '@/domain/drawPricing'
 import type { CodeCheck, Discount, DiscountInput, ListingSale } from '@/domain/discounts'
+import type { StoreRole } from '@/domain/team'
 import type { PayoutAccount, PayoutLine } from '@/domain/payouts'
 import type { NotificationPreference, PushPreferences, PushSubscriptionKeys } from '@/domain/push'
 import type { OrderError } from '@/domain/orders'
@@ -153,6 +154,40 @@ export interface NewProductInput {
   check?: ListingProofInput
   /** The platform fee follows from this (platformFeeBps) and comes out of the seller's payout. */
   priceKobo: Kobo
+}
+
+/** Someone on a store's team (team.ts). Only the owner sees the team. */
+export interface TeamMember {
+  userId: string
+  name: string
+  email: string
+  role: StoreRole
+  you: boolean
+  since: string
+}
+
+export interface StoreTeam {
+  members: TeamMember[]
+  /** Not accepted yet. */
+  invites: { id: string; email: string; role: StoreRole; createdAt: string }[]
+}
+
+/** An invite to this account's email, from a store. */
+export interface IncomingStoreInvite {
+  id: string
+  storeName: string
+  role: StoreRole
+  createdAt: string
+}
+
+/** Who did what in a store (team.ts ACTIVITY_TEXT). */
+export interface StoreActivityEntry {
+  id: string
+  at: string
+  who: string
+  action: string
+  listingTitle: string | null
+  productCode: string | null
 }
 
 /** What a bulk upload did (bulkUpload.ts). */
@@ -848,6 +883,20 @@ export interface DrawMartApi {
   /** Issues the code to show in the video, and says what the listing form must ask for. */
   getListingCheckPlan(): Promise<ListingCheckPlan>
   getListingCheck(listingId: string): Promise<ListingCheckView | null>
+  /** What this account can do in its shop. Individual sellers own theirs; null without a shop. */
+  getMyStoreRole(): Promise<StoreRole | null>
+  /** Owners only. */
+  getStoreTeam(): Promise<StoreTeam>
+  inviteStoreMember(email: string, role: StoreRole): Promise<void>
+  revokeStoreInvite(id: string): Promise<void>
+  setStoreMemberRole(userId: string, role: StoreRole): Promise<void>
+  /** Their account becomes a buyer account again. */
+  removeStoreMember(userId: string): Promise<void>
+  listStoreActivity(): Promise<StoreActivityEntry[]>
+  /** For a buyer account: stores that invited its email. */
+  listMyStoreInvites(): Promise<IncomingStoreInvite[]>
+  /** The account becomes a store account on that store's team. */
+  acceptStoreInvite(id: string): Promise<void>
   /** Stores only: up to 100 products, all or nothing. Photos go up first; `onProgress` counts them. */
   createProductsBulk(items: NewProductInput[], onProgress?: (done: number, total: number) => void): Promise<BulkUploadResult>
   /** The signed-in shop's discounts, newest first. */
