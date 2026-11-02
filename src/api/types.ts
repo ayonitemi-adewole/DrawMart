@@ -315,6 +315,10 @@ export interface DeliveryJob {
   deliveredAt: string | null
   /** This rider has taken it. The rest are in the pool for anyone to take. */
   mine: boolean
+  /** A pickup order counter staff have taken in: the rider's job is done. */
+  atCounterAt: string | null
+  /** An uncollected item going back to the seller, still at the counter until staff hand it over. */
+  waitingAtCounter: boolean
   /** Taken but not yet collected: back to the pool at this time (riderLimits.ts). */
   collectBy: string | null
   /** The address and number only reach the rider on the way there, or taking a refused item back. */
@@ -322,6 +326,25 @@ export interface DeliveryJob {
   pickupPoint: PickupPoint | null
   /** Only for the rider carrying it, once it's passed the check. Never in the pool, and gone once delivered. */
   dropOff: { buyerName: string; address: string; location: GeoPoint | null; contactPhone: string } | null
+  pinLockedUntil: string | null
+}
+
+/** An order as counter staff see it (counter.ts). The buyer's name only once it's on the shelf. */
+export interface CounterItem {
+  id: string
+  productCode: string
+  listingTitle: string
+  listingImage: string | null
+  category: Category
+  quantity: number
+  /** On its way with a rider, waiting for its buyer, or going back to the seller. */
+  stage: 'incoming' | 'shelf' | 'send_back'
+  atCounterAt: string | null
+  buyerName: string | null
+  /** Won items stay until they're collected. */
+  isPrize: boolean
+  /** Send back: a rider has taken the job. */
+  riderAssigned: boolean
   pinLockedUntil: string | null
 }
 
@@ -671,6 +694,8 @@ export interface DemoAccount {
   mockId: string
   /** Shown under the name, e.g. "ID-verified seller". */
   note?: string
+  /** Counter staff: the pickup location they work at. */
+  pickupPointId?: string
 }
 
 export interface AuthAdapter {
@@ -973,6 +998,15 @@ export interface DrawMartApi {
   releaseDelivery(orderId: string): Promise<void>
   /** The only way an order becomes delivered. A wrong PIN isn't an error: see the result. */
   confirmDelivery(orderId: string, pin: string): Promise<PinResult>
+  /** The pickup location this account works at, or null for a rider. */
+  getMyCounter(): Promise<PickupPoint | null>
+  listCounterItems(): Promise<CounterItem[]>
+  /** Counter staff take in a rider's item, checking its product ID. */
+  receiveAtCounter(orderId: string, productCode: string): Promise<void>
+  /** The buyer collects with their PIN. A wrong PIN isn't an error: see the result. */
+  counterHandOver(orderId: string, pin: string): Promise<PinResult>
+  /** An uncollected item leaves with the rider taking it back. */
+  releaseToRider(orderId: string): Promise<void>
   /** Applications waiting for an ID check, oldest first. */
   listSellerApplications(): Promise<SellerApplicationView[]>
   listStoreApplications(): Promise<StoreApplicationView[]>

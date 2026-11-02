@@ -233,8 +233,8 @@ describe('schema and seed', () => {
     await db.exec(sql('seed-local-accounts.sql'))
     await db.exec(sql('seed-local-accounts.sql')) // safe to re-run
     await db.exec(sql('seed.sql'))
-    const rows = await admin<{ email: string; role: string; display_name: string; merchant_id: string | null; seller: boolean; identities: number; cash: string }>(
-      `select u.email, p.role, p.display_name, p.merchant_id, p.seller_id is not null seller,
+    const rows = await admin<{ email: string; role: string; display_name: string; merchant_id: string | null; pickup_point_id: string | null; seller: boolean; identities: number; cash: string }>(
+      `select u.email, p.role, p.display_name, p.merchant_id, p.pickup_point_id, p.seller_id is not null seller,
               (select count(*)::int from auth.identities i where i.user_id = u.id) identities,
               (select coalesce(sum(cash_kobo), 0) from public.ledger_entries e where e.user_id = u.id) cash
          from auth.users u join public.profiles p on p.id = u.id where u.email like '%@drawmart.test' order by u.email`,
@@ -247,6 +247,7 @@ describe('schema and seed', () => {
       if (a.role !== 'admin') expect(r.display_name).toBe(a.name)
       if (a.role === 'buyer') expect(Number(r.cash)).toBe(2_500_000) // the starting balance, once
       if (a.role === 'store') expect(r.merchant_id).not.toBeNull()
+      expect(r.pickup_point_id).toBe(a.pickupPointId ?? null)
     }
     expect(rows.find((r) => r.email === 'seller@drawmart.test')?.seller).toBe(true)
     expect(rows.find((r) => r.email === 'store@drawmart.test')?.merchant_id).toBe(IKEJA)
@@ -2618,6 +2619,79 @@ describe('cart and checkout', () => {
       expect(await alerts(near, 'rider_pin_unlocked')).toHaveLength(1)
       const pushes = await admin<{ body: string }>(`select body from private.push_outbox where user_id = $1`, [near])
       expect(pushes.map((p) => p.body).join(' ')).not.toMatch(/Awolowo|[0-9]{6}/)
+    })
+
+    it('closes pickup orders at the counter, and sends uncollected ones back less delivery', async () => {
+      const counter = await newUser('counter-ikeja@example.com', { role: 'delivery' })
+      await admin(`update public.profiles set pickup_point_id = 'ikeja' where id = $1`, [counter])
+      await expect(admin(`update public.profiles set pickup_point_id = 'ikeja' where id = $1`, [store])).rejects.toThrow(/profiles_counter_is_delivery/)
+      const carrier = await newUser('counter-rider@example.com', { role: 'delivery' })
+      const b = await newUser('counter-buyer@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const [{ id: listing }] = await asUser<{ id: string }>(store, `select public.create_product($1) id`, [{ title: 'Counter lamp', category: 'Home', priceKobo: 500_000, stock: 2 }])
+      await asUser(staff, `select public.approve_listing($1)`, [listing])
+      const [{ code }] = await admin<{ code: string }>(`select product_code code from public.listings where id = $1`, [listing])
+      const order = async () => {
+        await add(b, listing)
+        const [id] = await checkout(b, details([listing], { fulfilment: 'pickup', pickupPointId: 'ikeja', address: null, lat: null, lng: null }))
+        await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+        await asUser(store, `select public.dispatch_order($1)`, [id])
+        await asUser(carrier, `select public.take_delivery($1)`, [id])
+        await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+        return id
+      }
+      const kept = await order()
+      const left = await order()
+      const items = async () => (await asUser<{ i: { id: string; stage: string; buyerName: string | null }[] }>(counter, `select public.counter_items() i`))[0].i
+
+      // Only counter staff, and only at their own counter.
+      expect(await asUser(carrier, `select public.my_counter() c`)).toEqual([{ c: null }])
+      await expectFail(asUser(carrier, `select public.counter_items()`), 'forbidden')
+      await expectFail(asUser(counter, `select public.take_delivery($1)`, [kept]), 'forbidden')
+      await expectFail(tryPin(carrier, kept, (await pinsOf(b))[kept]), 'invalid_input')
+      expect((await items()).filter((i) => [kept, left].includes(i.id)).map((i) => [i.stage, i.buyerName])).toEqual([['incoming', null], ['incoming', null]])
+
+      await expectFail(asUser(counter, `select public.receive_at_counter($1, 'PRD-222222')`, [kept]), 'invalid_input')
+      await asUser(counter, `select public.receive_at_counter($1, $2)`, [kept, code.toLowerCase().replace('-', ' ')])
+      await asUser(counter, `select public.receive_at_counter($1, $2)`, [left, code])
+      expect((await items()).find((i) => i.id === kept)).toMatchObject({ stage: 'shelf', buyerName: expect.any(String) })
+      expect(await asUser(b, `select kind from public.notifications where kind = 'order_ready_to_collect'`)).toHaveLength(2)
+      // The rider's job is done there.
+      expect((await jobs(carrier)).find((j) => j.id === kept)).toMatchObject({ dropOff: null })
+      expect(await admin(`select private.rider_jobs_held($1) n`, [carrier])).toEqual([{ n: 0 }])
+
+      // The buyer's PIN, at the counter.
+      const pin = (await pinsOf(b))[kept]
+      expect((await asUser<{ r: { confirmed: boolean } }>(counter, `select public.counter_hand_over($1, '000000') r`, [kept]))[0].r.confirmed).toBe(pin === '000000')
+      expect((await asUser<{ r: { confirmed: boolean } }>(counter, `select public.counter_hand_over($1, $2) r`, [kept, pin]))[0].r.confirmed).toBe(true)
+      expect(await admin(`select status from public.orders where id = $1`, [kept])).toEqual([{ status: 'delivered' }])
+
+      // A week: a reminder, once. Two: refunded the price but not delivery, and not the seller's cancellation.
+      await admin(`update public.orders set counter_at = now() - interval '8 days' where id = $1`, [left])
+      await admin(`select private.process_deadlines()`)
+      await admin(`select private.process_deadlines()`)
+      expect(await asUser(b, `select kind from public.notifications where kind = 'order_collect_reminder'`)).toHaveLength(1)
+      const total = async () => Object.values(await balance(b)).reduce((n, v) => n + Number(v), 0)
+      const cancelled = async () => (await asUser<{ r: { merchantId: string; cancelled: number }[] }>(staff, `select public.merchant_cancel_rates() r`))[0].r.find((x) => x.merchantId === IKEJA)?.cancelled ?? 0
+      const start = await total()
+      const cancelledBefore = await cancelled()
+      await admin(`update public.orders set counter_at = now() - interval '15 days' where id = $1`, [left])
+      await admin(`select private.process_deadlines()`)
+      const [row] = await admin<{ status: string; cancel_reason: string; return_state: string; rider_id: string | null; price_kobo: string; delivery_fee_kobo: string }>(
+        `select status, cancel_reason, return_state, rider_id, price_kobo, delivery_fee_kobo from public.orders where id = $1`, [left])
+      expect(row).toMatchObject({ status: 'cancelled', cancel_reason: 'not_collected', return_state: 'returning', rider_id: null })
+      expect(Number(row.delivery_fee_kobo)).toBeGreaterThan(0)
+      expect((await total()) - start).toBe(Number(row.price_kobo))
+      expect(await cancelled()).toBe(cancelledBefore)
+
+      // From the counter back to the seller: staff hand it over before it can be finished.
+      expect((await jobs(carrier)).find((j) => j.id === left)).toMatchObject({ mine: false })
+      await asUser(carrier, `select public.take_delivery($1)`, [left])
+      await expectFail(asUser(carrier, `select public.complete_return($1, '/assets/b.jpg')`, [left]), 'invalid_input')
+      expect((await items()).find((i) => i.id === left)).toMatchObject({ stage: 'send_back', buyerName: null })
+      await asUser(counter, `select public.release_to_rider($1)`, [left])
+      await asUser(carrier, `select public.complete_return($1, '/assets/b.jpg')`, [left])
+      expect((await items()).find((i) => i.id === left)).toBeUndefined()
     })
 
     describe('checks', () => {

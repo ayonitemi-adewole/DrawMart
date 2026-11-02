@@ -14,6 +14,12 @@ import { dateTime, ticketNo } from '@/lib/time'
 function describe(n: NotificationView, store: boolean): { icon: IconComponent; title: string; body: string; to: string } {
   const home = store ? '/store' : '/sell'
   switch (n.kind) {
+    case 'order_ready_to_collect':
+      return { icon: StoreIcon, title: `Ready to collect: ${n.listingTitle}`, body: 'It’s at the pickup location. Bring your PIN.', to: '/tickets?view=orders' }
+    case 'order_collect_reminder':
+      return { icon: ClockIcon, title: `Still waiting for you: ${n.listingTitle}`, body: 'Collect it within 7 days, or it goes back to the seller and you’re refunded, less delivery.', to: '/tickets?view=orders' }
+    case 'store_order_uncollected':
+      return { icon: TruckIcon, title: `Not collected: ${n.listingTitle}`, body: 'The buyer didn’t collect it from the pickup location, so a rider is bringing it back to you. Add it to your stock again once you have it.', to: `${home}?tab=orders` }
     case 'rider_new_job':
       return { icon: TruckIcon, title: `New job: ${n.listingTitle}`, body: `Collect it in ${areaName(n.area)}.`, to: '/delivery?tab=available' }
     case 'rider_new_return':

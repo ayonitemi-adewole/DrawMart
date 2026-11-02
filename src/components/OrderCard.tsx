@@ -8,6 +8,7 @@ import { AddressPicker } from './AddressPicker'
 import { RiderPhotos } from './RiderPhotos'
 import { ShopPickupSheet } from './ShopPickup'
 import { needsConfirming } from '@/domain/orderConfirm'
+import { collectFromCounterBy } from '@/domain/counter'
 import { isPhoneOrTablet, thisDevice } from '@/lib/device'
 import type { OrderView } from '@/api/types'
 import { APOLOGY_CREDIT_KOBO, COLLECTION_PROBLEM_TEXT } from '@/domain/deliveryChecks'
@@ -34,6 +35,7 @@ function statusOf(o: OrderView, audience: 'buyer' | 'store' | 'admin'): { label:
       if (needsConfirming(o)) return { label: audience === 'buyer' ? 'Paid · waiting for the seller' : 'Paid · confirm it', tone: 'ticket' }
       return { label: o.isPrize ? 'Being prepared' : o.confirmedAt ? 'Confirmed · being prepared' : 'Paid · being prepared', tone: 'ticket' }
     case 'dispatched':
+      if (pickup && o.atCounterAt) return { label: 'Ready to collect', tone: 'brand' }
       return { label: pickup ? 'On its way to the pickup location' : 'On the way', tone: 'sky' }
     case 'delivered':
       return { label: pickup ? 'Collected' : 'Delivered', tone: 'brand' }
@@ -183,6 +185,12 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
           <img src={o.confirmPhoto} alt="The seller’s photo of this item" className="size-16 rounded-xl border border-line bg-photo object-cover" />
           {audience === 'buyer' ? 'The seller’s photo of your item.' : 'Your photo for this order.'}
         </div>
+      ) : null}
+      {audience === 'buyer' && pickup && o.status === 'dispatched' && o.atCounterAt ? (
+        <Notice tone="brand" icon={StoreIcon} title={`Ready at ${o.pickupPoint?.name ?? 'the pickup location'}`}>
+          It arrived {dateTime(o.atCounterAt)}. Bring your PIN, and open it there before you give it.
+          {o.isPrize ? '' : ` Collect it by ${dateTime(collectFromCounterBy(o.atCounterAt))}, or it goes back to the seller and you’re refunded, less delivery.`}
+        </Notice>
       ) : null}
       {audience === 'buyer' && o.deliveryPin ? <DeliveryPin pin={o.deliveryPin} pickup={pickup} /> : null}
       {sender && waiting ? (

@@ -39,6 +39,7 @@ import {
   type NewListingInput,
   type NewPickupInput,
   type DeliveryJob,
+  type CounterItem,
   type NotificationView,
   type PickupItemInput,
   type SavedPickupView,
@@ -270,6 +271,7 @@ interface OrderRow {
   refusal_photo: string | null
   return_state: 'returning' | 'returned' | null
   returned_at: string | null
+  counter_at: string | null
   delivery_fee_kobo: number
   discount_kobo?: number
   cancelled_at: string | null
@@ -474,6 +476,7 @@ function toOrderView(o: OrderRow): OrderView {
     refusalPhoto: o.refusal_photo,
     returnState: o.return_state,
     returnedAt: o.returned_at,
+    atCounterAt: o.counter_at,
     deliveryFeeKobo: num(o.delivery_fee_kobo),
     discountKobo: num(o.discount_kobo ?? 0),
     cancelledAt: o.cancelled_at,
@@ -1397,6 +1400,11 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     takeDelivery: (orderId) => rpc('take_delivery', { p_order_id: orderId }),
     releaseDelivery: (orderId) => rpc('release_delivery', { p_order_id: orderId }),
     confirmDelivery: (orderId, pin) => rpc<PinResult>('confirm_delivery', { p_order_id: orderId, p_pin: pin }),
+    getMyCounter: () => rpc<PickupPoint | null>('my_counter'),
+    listCounterItems: () => rpc<CounterItem[]>('counter_items'),
+    receiveAtCounter: (orderId, productCode) => rpc('receive_at_counter', { p_order_id: orderId, p_product_code: productCode }),
+    counterHandOver: (orderId, pin) => rpc<PinResult>('counter_hand_over', { p_order_id: orderId, p_pin: pin }),
+    releaseToRider: (orderId) => rpc('release_to_rider', { p_order_id: orderId }),
 
     listSellerApplications: async () => {
       const rows = unwrap(await client.from('seller_applications').select('*').eq('status', 'pending').order('updated_at').returns<SellerApplicationRow[]>())

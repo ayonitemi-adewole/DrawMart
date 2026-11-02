@@ -50,6 +50,8 @@ export const keys = {
   listingCheck: (id: string) => ['listing-check', id] as const,
   returnJobs: ['return-jobs'] as const,
   riderAreas: ['rider-areas'] as const,
+  myCounter: ['my-counter'] as const,
+  counterItems: ['counter-items'] as const,
   pending: ['pending'] as const,
   myOrders: ['my-orders'] as const,
   merchantOrders: ['merchant-orders'] as const,
@@ -416,6 +418,22 @@ export function useSetSaved() {
 
 // Delivery accounts. No push channel yet, so the pool polls.
 export const useDeliveryJobs = () => useQuery({ queryKey: keys.deliveryJobs, queryFn: () => api.listDeliveryJobs(), enabled: useIs('delivery'), refetchInterval: 30_000 })
+
+/** The pickup location a counter account works at; null for riders. */
+export const useMyCounter = () => useQuery({ queryKey: keys.myCounter, queryFn: () => api.getMyCounter(), enabled: useIs('delivery'), staleTime: 5 * 60_000 })
+export function useCounterItems() {
+  const isCounter = !!useMyCounter().data
+  return useQuery({ queryKey: keys.counterItems, queryFn: () => api.listCounterItems(), enabled: isCounter, refetchInterval: 30_000 })
+}
+
+export function useCounterActions() {
+  const invalidate = useInvalidateAll()
+  return {
+    receive: useMutation({ mutationFn: ({ id, code }: { id: string; code: string }) => api.receiveAtCounter(id, code), onSettled: invalidate }),
+    handOver: useMutation({ mutationFn: ({ id, pin }: { id: string; pin: string }) => api.counterHandOver(id, pin), onSettled: invalidate }),
+    release: useMutation({ mutationFn: (id: string) => api.releaseToRider(id), onSettled: invalidate }),
+  }
+}
 
 export const useRiderAreas = () => useQuery({ queryKey: keys.riderAreas, queryFn: () => api.getRiderAreas(), enabled: useIs('delivery') })
 

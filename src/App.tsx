@@ -19,7 +19,7 @@ import { AccountPage } from '@/pages/AccountPage'
 import { PracticePage } from '@/pages/PracticePage'
 import { WinnersPage } from '@/pages/WinnersPage'
 import { SavedPage } from '@/pages/SavedPage'
-import { DeliveryJobPage, DeliveryPage } from '@/pages/delivery/DeliveryPage'
+import { DeliveryHome, DeliveryJobPage } from '@/pages/delivery/DeliveryPage'
 import { AdminProductsPage } from '@/pages/admin/AdminProductsPage'
 import { AdminBoostsPage } from '@/pages/admin/AdminBoostsPage'
 import { AdminDrawsPage } from '@/pages/admin/AdminDrawsPage'
@@ -227,7 +227,7 @@ const router = createBrowserRouter([
     element: <RequireSignIn role="delivery"><BackOfficeLayout app="delivery" /></RequireSignIn>,
     errorElement: <RouteError />,
     children: [
-      { index: true, element: <DeliveryPage /> },
+      { index: true, element: <DeliveryHome /> },
       { path: 'notifications', element: <NotificationsPage /> },
       { path: 'returns/:id', element: <ReturnJobPage /> },
       { path: ':id', element: <DeliveryJobPage /> },

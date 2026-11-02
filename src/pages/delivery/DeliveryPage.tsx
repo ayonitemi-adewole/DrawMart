@@ -1,6 +1,6 @@
 import { Suspense, lazy, useState, type FormEvent } from 'react'
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router'
-import { useDeliveryActions, useDeliveryJobs, useReturnJobs } from '@/api/hooks'
+import { useDeliveryActions, useDeliveryJobs, useMyCounter, useReturnJobs } from '@/api/hooks'
 import type { DeliveryJob } from '@/api/types'
 import { AlertIcon, BackIcon, CheckCircleIcon, ChevronRightIcon, LockIcon, MapPinIcon, PhoneIcon, StoreIcon, TruckIcon, UserIcon } from '@/components/icons'
 import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
@@ -12,6 +12,7 @@ import { COLLECTION_CHECKS, COLLECTION_PROBLEMS, COLLECTION_PROBLEM_TEXT, REFUSA
 import type { CollectionProblem, RefusalReason } from '@/domain/types'
 import { RiderPhotos } from '@/components/RiderPhotos'
 import { CollectByLine, CollectByNotice } from './CollectBy'
+import { CounterPage } from './CounterPage'
 import { ReturnJobList } from './ReturnJobs'
 import { directionsUrl } from '@/domain/location'
 import { matchesProductSearch } from '@/domain/productCode'
@@ -23,9 +24,21 @@ const RouteMap = lazy(() => import('@/components/RouteMap'))
 type Tab = 'mine' | 'available' | 'returns' | 'done'
 const TABS: Tab[] = ['mine', 'available', 'returns', 'done']
 
-const inTab = (j: DeliveryJob, t: Tab) => (t === 'done' ? j.status === 'delivered' : t === 'mine' ? j.mine && j.status !== 'delivered' : !j.mine)
+/** Done once delivered, or once a pickup order is with the counter. */
+const finished = (j: DeliveryJob) => j.status === 'delivered' || !!j.atCounterAt
+const inTab = (j: DeliveryJob, t: Tab) => (t === 'done' ? finished(j) : t === 'mine' ? j.mine && !finished(j) : !j.mine)
 
 const destination = (j: DeliveryJob) => (j.fulfilment === 'pickup' ? (j.pickupPoint?.name ?? 'Pickup location') : 'Buyer’s address')
+/** Where it goes from, and to. An uncollected item goes from the counter back to the seller. */
+const route = (j: DeliveryJob) => (j.returning ? `${j.pickupPoint?.name ?? 'Pickup location'} → ${j.collectFrom.name}` : `${j.collectFrom.name} → ${destination(j)}`)
+
+/** /delivery: counter staff get their counter; riders get the job pool. */
+export function DeliveryHome() {
+  const counter = useMyCounter()
+  if (counter.isPending) return <Skeleton className="h-96" />
+  if (counter.isError) return <ErrorState error={counter.error} onRetry={() => counter.refetch()} />
+  return counter.data ? <CounterPage point={counter.data} /> : <DeliveryPage />
+}
 
 /** /delivery: orders ready to go, the ones this rider has taken, and what they've finished. */
 export function DeliveryPage() {
@@ -93,11 +106,9 @@ function JobCard({ job: j, tab }: { job: DeliveryJob; tab: Tab }) {
       <div className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
         <strong className="leading-tight">{j.listingTitle}{j.quantity > 1 ? ` × ${j.quantity}` : ''}</strong>
         <ProductId code={j.productCode} />
-        <span className="text-xs text-subtle">
-          {j.collectFrom.name} → {destination(j)}
-        </span>
+        <span className="text-xs text-subtle">{route(j)}</span>
         {tab === 'mine' && j.collectBy ? <CollectByLine at={j.collectBy} /> : null}
-        {tab === 'done' && j.deliveredAt ? <span className="text-xs text-subtle">Delivered {dateTime(j.deliveredAt)}</span> : null}
+        {tab === 'done' && j.atCounterAt ? <span className="text-xs text-subtle">Handed to the counter {dateTime(j.atCounterAt)}</span> : tab === 'done' && j.deliveredAt ? <span className="text-xs text-subtle">Delivered {dateTime(j.deliveredAt)}</span> : null}
       </div>
     </div>
   )
@@ -140,8 +151,8 @@ export function DeliveryJobPage() {
   if (q.isPending) return <Skeleton className="h-96" />
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />
   const j = q.data.find((x) => x.id === id)
-  // Delivered, handed back or taken by someone else: its details are gone from here.
-  if (!j?.mine || j.status === 'delivered') return <Navigate to="/delivery" replace />
+  // Delivered, at the counter, handed back or taken by someone else: its details are gone from here.
+  if (!j?.mine || finished(j)) return <Navigate to="/delivery" replace />
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-5">
       {back}
@@ -212,7 +223,11 @@ function JobDetails({ job: j }: { job: DeliveryJob }) {
         ) : null}
       </Card>
 
-      {j.collected ? (
+      {j.collected && pickup ? (
+        <Notice tone="sky" icon={StoreIcon} title={`Hand it in at ${j.pickupPoint?.name ?? 'the counter'}`}>
+          The counter staff check the product ID on the label ({j.productCode}) and take it in. That finishes this job, and the buyer collects it from them.
+        </Notice>
+      ) : j.collected ? (
         <>
           <PinForm job={j} />
           <RefuseAtDoor job={j} />
@@ -548,7 +563,7 @@ function ReturnLeg({ job: j }: { job: DeliveryJob }) {
         <div className="flex min-w-0 flex-col gap-1">
           <h1 className="font-display text-xl leading-tight font-extrabold">{j.listingTitle}{j.quantity > 1 ? ` × ${j.quantity}` : ''}</h1>
           <ProductId code={j.productCode} copy />
-          <Badge tone="hot" className="w-fit">Refused: take it back</Badge>
+          <Badge tone="hot" className="w-fit">{j.fulfilment === 'pickup' ? 'Not collected: take it back' : 'Refused: take it back'}</Badge>
         </div>
       </div>
       <span className="flex items-start gap-2 text-sm">
@@ -565,10 +580,28 @@ function ReturnLeg({ job: j }: { job: DeliveryJob }) {
           <PhoneIcon size={16} /> Call the seller on {j.collectFrom.contactPhone}
         </a>
       ) : null}
-      <RiderPhotos photos={photos} onChange={setPhotos} max={1} label="Take a photo of the handover" />
-      <Button size="lg" loading={finishReturn.isPending} onClick={onDone}>
-        <CheckCircleIcon size={18} /> It’s back with the seller
-      </Button>
+      {j.waitingAtCounter ? (
+        <>
+          <span className="flex items-start gap-2 text-sm">
+            <MapPinIcon size={16} className="mt-0.5 shrink-0 text-hot" />
+            <span><strong>Collect from</strong> {j.pickupPoint?.name}<span className="block text-muted">{j.pickupPoint?.address}</span></span>
+          </span>
+          {j.pickupPoint ? (
+            <a href={directionsUrl(j.pickupPoint.location)} target="_blank" rel="noreferrer" className="flex min-h-11 w-fit items-center gap-2 text-sm font-bold">
+              <MapPinIcon size={16} /> Get directions to the counter
+            </a>
+          ) : null}
+          <Notice tone="sky">The counter staff hand it to you. Once they have, you can finish here at the seller.</Notice>
+          <HandBack job={j} />
+        </>
+      ) : (
+        <>
+          <RiderPhotos photos={photos} onChange={setPhotos} max={1} label="Take a photo of the handover" />
+          <Button size="lg" loading={finishReturn.isPending} onClick={onDone}>
+            <CheckCircleIcon size={18} /> It’s back with the seller
+          </Button>
+        </>
+      )}
     </Card>
   )
 }
