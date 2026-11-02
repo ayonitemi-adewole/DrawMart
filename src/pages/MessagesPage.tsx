@@ -8,6 +8,7 @@ import { AlertIcon, BackIcon, ChatIcon, PhoneIcon, SendIcon, ShieldIcon } from '
 import { useToast } from '@/components/toast'
 import { Badge, Button, Card, EmptyState, ErrorState, Field, Notice, PageTitle, ProductImage, Skeleton, buttonClass, cx, errorMessage, inputCls } from '@/components/ui'
 import { isNigerianMobile } from '@/domain/listing'
+import { QuickRepliesEditor, QuickReplyChips } from '@/components/QuickReplies'
 import { MAX_MESSAGE_LENGTH, asksForOffPlatformPayment, messageError } from '@/domain/messages'
 import { formatNaira } from '@/domain/money'
 import { dayLabel, timeOfDay } from '@/lib/time'
@@ -55,7 +56,12 @@ export function MessagesPage({ basePath }: { basePath: string }) {
             )}
           </div>
         )}
-        {hasShop ? <CallSettings /> : null}
+        {hasShop ? (
+          <div className="flex flex-col gap-4">
+            <CallSettings />
+            <QuickRepliesEditor />
+          </div>
+        ) : null}
       </div>
     </div>
   )
@@ -112,7 +118,7 @@ function CallSettings() {
   }
 
   return (
-    <Card className="flex flex-col gap-4 p-5 lg:sticky lg:top-24">
+    <Card className="flex flex-col gap-4 p-5">
       <div className="flex items-center gap-3">
         <span className="flex size-10 items-center justify-center rounded-xl bg-brand-soft text-brand-ink">
           <PhoneIcon size={20} />
@@ -244,7 +250,7 @@ function Thread({ conversation: c, basePath }: { conversation: ConversationView;
         <div ref={bottom} />
       </Card>
 
-      <Composer conversationId={c.id} />
+      <Composer conversationId={c.id} seller={c.me === 'seller'} />
     </div>
   )
 }
@@ -286,14 +292,15 @@ export function MessageList({ messages, me, warnOffPlatform = true }: { messages
   )
 }
 
-function Composer({ conversationId }: { conversationId: string }) {
-  return <MessageBox send={useSendMessage(conversationId)} />
+function Composer({ conversationId, seller }: { conversationId: string; seller: boolean }) {
+  return <MessageBox send={useSendMessage(conversationId)} quickReplies={seller} />
 }
 
 /** The text box and send button. `inline` sits in a card rather than pinned to the bottom of the screen. */
-export function MessageBox({ send, placeholder = 'Write a message…', autoFocus, inline }: { send: { mutate: (body: string, o: { onSuccess: () => void; onError: (e: unknown) => void }) => void; isPending: boolean }; placeholder?: string; autoFocus?: boolean; inline?: boolean }) {
+export function MessageBox({ send, placeholder = 'Write a message…', autoFocus, inline, quickReplies }: { send: { mutate: (body: string, o: { onSuccess: () => void; onError: (e: unknown) => void }) => void; isPending: boolean }; placeholder?: string; autoFocus?: boolean; inline?: boolean; /** The seller's saved answers, as chips above the box. */ quickReplies?: boolean }) {
   const toast = useToast()
   const [body, setBody] = useState('')
+  const textarea = useRef<HTMLTextAreaElement>(null)
   const problem = body ? messageError(body) : 'empty'
 
   function submit(e?: FormEvent) {
@@ -314,14 +321,17 @@ export function MessageBox({ send, placeholder = 'Write a message…', autoFocus
     <form
       onSubmit={submit}
       className={cx(
-        'flex items-end gap-2 rounded-3xl border border-line p-2',
+        'flex flex-col gap-2 rounded-3xl border border-line p-2',
         inline ? 'bg-raised' : 'sticky bottom-[calc(max(env(safe-area-inset-bottom),12px)+84px)] bg-raised/95 shadow-lift backdrop-blur-xl lg:bottom-4',
       )}
     >
+      {quickReplies ? <QuickReplyChips onPick={(text) => (setBody(text), textarea.current?.focus())} /> : null}
+      <div className="flex items-end gap-2">
       <label htmlFor="message" className="sr-only">
         Message
       </label>
       <textarea
+        ref={textarea}
         id="message"
         rows={1}
         value={body}
@@ -335,6 +345,7 @@ export function MessageBox({ send, placeholder = 'Write a message…', autoFocus
       <Button type="submit" aria-label="Send message" loading={send.isPending} disabled={!!problem} className="size-11 shrink-0 rounded-2xl p-0">
         <SendIcon size={18} />
       </Button>
+      </div>
     </form>
   )
 }

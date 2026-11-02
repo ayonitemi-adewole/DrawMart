@@ -6,7 +6,7 @@
  * keeps draw seeds out of every response until a draw has run, so the UI is
  * built against realistic behaviour.
  */
-import type { ReturnJob, ReviewView, StoreApplicationView, SupportMessage } from './types'
+import type { ReturnJob, ReviewView, StoreApplicationView, SupportMessage, QuickReply } from './types'
 import { catalogDraws, catalogProducts } from './seedCatalog'
 import { canSaveListing } from '@/domain/saved'
 import { crossedAlmostSold, isClosingSoon, isRelistOf, relistAlertKind, sameLagosDay, savedAlertAllowed, type SavedAlertKind } from '@/domain/savedAlerts'
@@ -38,6 +38,7 @@ import { canClaim, canContest, claimError, contestError, returnFeeKobo, returnRe
 import { deliveryFeeKobo, packageSizeOf, sellerAreaOf } from '@/domain/deliveryFees'
 import { locationError } from '@/domain/location'
 import { shopProfileErrors } from '@/domain/shopProfile'
+import { quickReplyError } from '@/domain/quickReplies'
 import { DUPLICATE_CAC_TEXT, STORE_APPLICATION_ERROR_TEXT, normalizeCac, storeAccountBlocker, validateStoreApplication } from '@/domain/storeApplications'
 import { REVIEWS_SHOWN_FROM, averageRating, canReview, hideReasonError, replyError, reviewError, reviewerName } from '@/domain/reviews'
 import { shopPickupErrorText, shopPickupErrors, type ShopPickup } from '@/domain/shopPickup'
@@ -99,7 +100,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v45' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v46' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -161,6 +162,8 @@ interface Db {
   /** Shops' chats with DrawMart, by shop id. */
   supportThreads: Record<string, { lastMessageAt: string; shopReadAt: string; staffReadAt: string; resolvedAt: string | null }>
   supportMessages: (SupportMessage & { merchantId: string })[]
+  /** Sellers' saved chat answers, by shop id, oldest first. */
+  quickReplies: Record<string, QuickReply[]>
   /** Not stored: the buyer the current call acts for, set by tx(). */
   viewer?: string
   conversations: MockConversation[]
@@ -626,6 +629,7 @@ async function freshDb(): Promise<Db> {
     storeAccounts: {},
     supportThreads: {},
     supportMessages: [],
+    quickReplies: {},
     conversations: [],
     messages: [],
     callPhones: { 'm-surulere': '0803 000 1234' },
@@ -2196,6 +2200,34 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       tx((db) => {
         const c = db.listingChecks[listingId]
         return c ? { code: c.code, hasVideo: !!c.videoKey, serial: c.serial, videoUrl: c.videoKey ? (checkFiles.get(c.videoKey) ?? null) : null, proofUrl: c.proofKey ? (checkFiles.get(c.proofKey) ?? null) : null } : null
+      }),
+
+    listQuickReplies: () =>
+      tx((db) => {
+        const shop = myShop(db)
+        return shop ? [...(db.quickReplies[shop] ?? [])] : []
+      }),
+
+    saveQuickReply: ({ id, body }) =>
+      tx((db) => {
+        const shop = myShop(db)
+        if (!shop) throw new ApiError('forbidden', 'Only sellers have quick replies.')
+        const list = (db.quickReplies[shop] ??= [])
+        const problem = quickReplyError(body, id ? list.length - 1 : list.length)
+        if (problem) throw new ApiError('invalid_input', problem)
+        if (id) {
+          const r = list.find((x) => x.id === id)
+          if (!r) throw new ApiError('not_found', 'That reply doesn’t exist.')
+          r.body = body.trim()
+        } else list.push({ id: uid('Q'), body: body.trim() })
+      }),
+
+    deleteQuickReply: (id) =>
+      tx((db) => {
+        const shop = myShop(db)
+        const list = shop ? (db.quickReplies[shop] ?? []) : []
+        if (!list.some((r) => r.id === id)) throw new ApiError('not_found', 'That reply doesn’t exist.')
+        db.quickReplies[shop!] = list.filter((r) => r.id !== id)
       }),
 
     getSupportThread: () =>

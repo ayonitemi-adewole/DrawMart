@@ -153,6 +153,12 @@ export interface NewProductInput {
 
 export type SupportSender = 'shop' | 'drawmart'
 
+/** A seller's saved chat answer (quickReplies.ts). Only the shop sees them. */
+export interface QuickReply {
+  id: string
+  body: string
+}
+
 /** A message between a shop and DrawMart's team. Never says which admin wrote it. */
 export interface SupportMessage {
   id: string
@@ -829,6 +835,11 @@ export interface DrawMartApi {
   /** Issues the code to show in the video, and says what the listing form must ask for. */
   getListingCheckPlan(): Promise<ListingCheckPlan>
   getListingCheck(listingId: string): Promise<ListingCheckView | null>
+  /** The signed-in shop's saved chat answers, oldest first. */
+  listQuickReplies(): Promise<QuickReply[]>
+  /** Without an id it adds one; with one it changes it. */
+  saveQuickReply(input: { id?: string; body: string }): Promise<void>
+  deleteQuickReply(id: string): Promise<void>
   /** The signed-in shop's chat with DrawMart. */
   getSupportThread(): Promise<SupportThreadView>
   sendSupportMessage(body: string): Promise<void>

@@ -1695,6 +1695,41 @@ describe('delivery fees', () => {
   })
 })
 
+describe('quick replies', () => {
+  const SHOP = '11111111-1111-4111-8111-000000000002'
+  let owner: string, other: string, buyer: string
+  const save = (who: string, body: string, id: string | null = null) => asUser<{ id: string }>(who, `select public.save_quick_reply($1, $2) id`, [id, body])
+  const list = (who: string) => asUser<{ body: string }>(who, `select body from public.quick_replies order by created_at, body`)
+
+  beforeAll(async () => {
+    owner = await newUser('quick-store@example.com', { merchantId: SHOP })
+    other = await newUser('quick-other@example.com', { merchantId: '11111111-1111-4111-8111-000000000001' })
+    buyer = await newUser('quick-buyer@example.com')
+  })
+
+  it('keeps each shop’s own list, up to 20', async () => {
+    const [{ id }] = await save(owner, '  Yes, it’s available.  ')
+    await save(owner, 'Yes, still available.', id)
+    expect(await list(owner)).toEqual([{ body: 'Yes, still available.' }])
+    await expectFail(save(owner, ' '), 'invalid_input')
+    await expectFail(save(owner, 'x'.repeat(501)), 'invalid_input')
+    for (let n = 1; n < 20; n++) await save(owner, `Reply ${n}`)
+    await expectFail(save(owner, 'One too many'), 'invalid_input')
+    await save(owner, 'Changing one still works at the limit', id)
+
+    expect(await list(other)).toEqual([])
+    expect(await list(buyer)).toEqual([])
+    await expectFail(save(other, 'Not mine', id), 'not_found')
+    await expectFail(asUser(other, `select public.delete_quick_reply($1)`, [id]), 'not_found')
+    await expectFail(save(buyer, 'Hi'), 'forbidden')
+    await expect(asUser(owner, `select merchant_id from public.quick_replies`)).rejects.toThrow(/permission denied/)
+    await expect(asUser(owner, `insert into public.quick_replies (merchant_id, body) values ($1, 'x')`, [SHOP])).rejects.toThrow(/permission denied/)
+
+    await asUser(owner, `select public.delete_quick_reply($1)`, [id])
+    expect(await list(owner)).toHaveLength(19)
+  })
+})
+
 describe('seller support', () => {
   const SHOP = '11111111-1111-4111-8111-000000000003'
   let owner: string, staff: string, buyer: string

@@ -80,14 +80,16 @@ export function Button({
   );
 }
 
-/** Square icon-only button. Always pass `aria-label`. */
+/** Square icon-only button. Always pass `aria-label`. Like Button, it only submits with `type="submit"`. */
 export function IconButton({
+  type = "button",
   className,
   children,
   ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & { "aria-label": string }) {
   return (
     <button
+      type={type}
       className={cx(
         "inline-flex size-11 shrink-0 items-center justify-center rounded-xl text-muted transition hover:bg-sunken hover:text-ink active:scale-95 disabled:opacity-40",
         className,

@@ -2056,4 +2056,32 @@ describe('mock api', () => {
       expect((await api.getSupportThread()).messages).toHaveLength(1)
     })
   })
+
+  describe('quick replies', () => {
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('keeps each shop’s own list, up to 20', async () => {
+      const api = make()
+      await as(api, 'store')
+      await api.saveQuickReply({ body: '  Yes, it’s available.  ' })
+      const [r] = await api.listQuickReplies()
+      expect(r.body).toBe('Yes, it’s available.')
+      await api.saveQuickReply({ id: r.id, body: 'Yes, still available.' })
+      expect((await api.listQuickReplies()).map((x) => x.body)).toEqual(['Yes, still available.'])
+      await expect(api.saveQuickReply({ body: ' ' })).rejects.toMatchObject({ code: 'invalid_input' })
+      for (let n = 1; n < 20; n++) await api.saveQuickReply({ body: `Reply ${n}` })
+      await expect(api.saveQuickReply({ body: 'One too many' })).rejects.toThrow('Delete one')
+      await api.saveQuickReply({ id: r.id, body: 'Changing one still works at the limit' })
+
+      await as(api, 'lekki')
+      expect(await api.listQuickReplies()).toEqual([])
+      await expect(api.deleteQuickReply(r.id)).rejects.toMatchObject({ code: 'not_found' })
+      await as(api, 'buyer')
+      await expect(api.saveQuickReply({ body: 'Hi' })).rejects.toMatchObject({ code: 'forbidden' })
+
+      await as(api, 'store')
+      await api.deleteQuickReply(r.id)
+      expect(await api.listQuickReplies()).toHaveLength(19)
+    })
+  })
 })
