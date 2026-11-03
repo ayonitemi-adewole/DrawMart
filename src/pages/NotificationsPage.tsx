@@ -16,6 +16,10 @@ function describe(n: NotificationView, store: boolean): { icon: IconComponent; t
   switch (n.kind) {
     case 'rider_approved':
       return { icon: TruckIcon, title: 'You’re approved to ride', body: 'Add your photo and bank account, then take your first job.', to: '/delivery' }
+    case 'rider_job_assigned':
+      return { icon: TruckIcon, title: `A job for you: ${n.listingTitle}`, body: 'DrawMart gave you this job. Collect it within the time shown.', to: '/delivery?tab=mine' }
+    case 'rider_job_taken_back':
+      return { icon: XIcon, title: `Taken back: ${n.listingTitle}`, body: 'DrawMart moved this job. You don’t need to collect it.', to: '/delivery?tab=mine' }
     case 'rider_paid':
       return { icon: NairaIcon, title: 'Pay sent', body: 'We’ve sent your pay to your bank account. See which jobs it covered.', to: '/delivery/earnings' }
     case 'rider_bank_changed':

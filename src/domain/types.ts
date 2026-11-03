@@ -313,7 +313,7 @@ export type NotificationKind =
   | 'store_payout_sent' | 'store_bank_changed'
   | 'order_ready_to_collect' | 'order_collect_reminder' | 'store_order_uncollected'
   | 'order_delivery_failed' | 'store_order_undelivered' | 'rider_redelivery_chosen'
-  | 'rider_paid' | 'rider_bank_changed' | 'rider_approved'
+  | 'rider_paid' | 'rider_bank_changed' | 'rider_approved' | 'rider_job_assigned' | 'rider_job_taken_back'
   | 'rider_new_job' | 'rider_new_return' | 'rider_collect_soon' | 'rider_job_released' | 'rider_pin_unlocked'
   | 'draw_sold_out' | 'draw_won' | 'draw_lost' | 'saved_almost_sold' | 'saved_closing_soon' | 'saved_relisted' | 'saved_back_on_sale' | 'saved_price_drop'
 

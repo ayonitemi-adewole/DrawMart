@@ -31,7 +31,7 @@ export const SELLER_PUSH_CATEGORIES: typeof PUSH_CATEGORIES = STORE_PUSH_CATEGOR
 export const RIDER_PUSH_CATEGORIES: typeof PUSH_CATEGORIES = [
   { value: 'riderNewJobs', label: 'New jobs', sub: 'In the areas you chose. Also turns these off in the app' },
   { value: 'riderReturns', label: 'Returns', sub: 'An item to collect from a buyer. Also turns these off in the app' },
-  { value: 'riderJobs', label: 'Your jobs', sub: 'Before one goes back to the list, and when you can try a PIN again' },
+  { value: 'riderJobs', label: 'Your jobs', sub: 'Before one goes back to the list, when DrawMart gives you one or takes one back, and when you can try a PIN again' },
 ]
 
 export const DEFAULT_PUSH_PREFERENCES: PushPreferences = { riderNewJobs: true, riderReturns: true, riderJobs: true, storeOrders: true, storeListings: true, storeDraws: true, storePickups: true, storePayouts: true, wins: true, drawResults: true, orders: true, messages: true, savedItems: true, drawReveal: true }

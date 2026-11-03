@@ -3268,6 +3268,75 @@ describe('cart and checkout', () => {
         expect(await admin(`select failure_excused from public.orders where id = $1`, [id])).toEqual([{ failure_excused: true }])
         expect(await asUser(seller, `select status from public.order_claims where id = $1`, [c])).toEqual([{ status: 'upheld' }])
       })
+
+      it('shows admins every active job by stage, flags stuck ones, and moves only uncollected ones', async () => {
+        type Board = { waitingHours: number; carryingHours: number; maxJobs: number; jobs: { kind: string; id: string; orderId: string; stage: string; stuck: boolean; rider: { id: string; name: string } | null }[] }
+        const board = async () => (await asUser<{ b: Board }>(staffUser, `select public.dispatch_board() b`))[0].b
+        const find = async (id: string) => (await board()).jobs.find((j) => j.id === id)
+        const assign = (kind: string, id: string, who: string) => asUser(staffUser, `select public.assign_job($1, $2, $3)`, [kind, id, who])
+        const takeBack = (kind: string, id: string) => asUser(staffUser, `select public.unassign_job($1, $2)`, [kind, id])
+        const told = async (who: string, kind: string) => (await asUser(who, `select 1 from public.notifications where kind = $1`, [kind])).length
+        const helper = await newUser('dispatch-rider@example.com', { role: 'delivery' })
+        const { b, id } = await readyOrder('dispatch1@example.com')
+
+        for (const who of [rider, seller]) {
+          await expectFail(asUser(who, `select public.dispatch_board()`), 'forbidden')
+          await expectFail(asUser(who, `select public.assign_job('delivery', $1, $2)`, [id, helper]), 'forbidden')
+          await expectFail(asUser(who, `select public.unassign_job('delivery', $1)`, [id]), 'forbidden')
+        }
+        expect(await board()).toMatchObject({ waitingHours: 3, carryingHours: 6, maxJobs: 5 })
+        expect(await find(id)).toMatchObject({ kind: 'delivery', orderId: id, stage: 'waiting', stuck: false, rider: null })
+        await admin(`update public.orders set dispatched_at = now() - interval '181 minutes' where id = $1`, [id])
+        expect((await find(id))?.stuck).toBe(true)
+
+        // Given to a rider, who hears about it. Only riders, and nobody else can take it now.
+        await expectFail(assign('delivery', id, seller), 'not_found')
+        await expectFail(assign('parcel', id, helper), 'invalid_input')
+        await assign('delivery', id, helper)
+        expect(await find(id)).toMatchObject({ stage: 'taken', stuck: false, rider: { id: helper, name: expect.any(String) } })
+        expect(await told(helper, 'rider_job_assigned')).toBe(1)
+        expect((await jobs(helper)).find((j) => j.id === id)?.mine).toBe(true)
+        await expectFail(assign('delivery', id, otherRider), 'invalid_input')
+        await expectFail(asUser(otherRider, `select public.take_delivery($1)`, [id]), 'invalid_input')
+
+        // Taken back before collection: in the pool again, recorded, and the rider told.
+        await takeBack('delivery', id)
+        expect(await find(id)).toMatchObject({ stage: 'waiting', rider: null })
+        expect(await admin(`select reason, released_by from private.job_releases where order_id = $1`, [id])).toEqual([{ reason: 'taken_back', released_by: staffUser }])
+        expect(await told(helper, 'rider_job_taken_back')).toBe(1)
+        await expectFail(takeBack('delivery', id), 'invalid_input')
+
+        // Within the rider's limit.
+        await admin(`update public.app_settings set rider_max_jobs = 1`)
+        await assign('delivery', id, helper)
+        const { id: second } = await readyOrder('dispatch2@example.com')
+        expect((await expectFail(assign('delivery', second, helper), 'invalid_input')).detail).toContain('the most they can hold')
+        await admin(`update public.app_settings set rider_max_jobs = 5`)
+
+        // Collected: in the rider's hands, so it stays theirs. Stuck after 6 hours, gone once delivered.
+        await asUser(helper, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+        expect(await find(id)).toMatchObject({ stage: 'carrying', stuck: false })
+        await expectFail(takeBack('delivery', id), 'invalid_input')
+        await admin(`update public.orders set collected_at = now() - interval '361 minutes' where id = $1`, [id])
+        expect((await find(id))?.stuck).toBe(true)
+        expect((await tryPin(helper, id, (await pinsOf(b))[id])).confirmed).toBe(true)
+        expect(await find(id)).toBeUndefined()
+
+        // Buyers' returns too.
+        const { shopper, id: orderId } = await delivered('dispatch-return@example.com')
+        await open(shopper, orderId, 'change_of_mind')
+        const [{ c }] = await admin<{ c: string }>(`select id c from public.order_claims where order_id = $1`, [orderId])
+        expect(await find(c)).toMatchObject({ kind: 'return', orderId, stage: 'waiting', rider: null })
+        await assign('return', c, helper)
+        expect(await find(c)).toMatchObject({ stage: 'taken', rider: { id: helper } })
+        await takeBack('return', c)
+        expect(await find(c)).toMatchObject({ stage: 'waiting', rider: null })
+        await assign('return', c, helper)
+        await asUser(helper, `select public.pass_return_pickup($1, array['/assets/x.jpg'])`, [c])
+        expect(await find(c)).toMatchObject({ stage: 'returning', stuck: false })
+        await expectFail(takeBack('return', c), 'invalid_input')
+        expect(await admin(`select count(*)::int n from private.job_assignments where rider_id = $1`, [helper])).toEqual([{ n: 4 }])
+      })
     })
 
     it('can’t be delivered before it’s dispatched', async () => {

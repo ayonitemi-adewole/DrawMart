@@ -14,6 +14,7 @@ import type { ShopPickup } from '@/domain/shopPickup'
 import type { ShopProfileInput } from '@/domain/shopProfile'
 import type { ReviewInput } from '@/domain/reviews'
 import type { PricingStats } from '@/domain/drawPricing'
+import type { DispatchStage } from '@/domain/dispatch'
 import type { CodeCheck, Discount, DiscountInput, ListingSale } from '@/domain/discounts'
 import type { StoreRole } from '@/domain/team'
 import type { PayoutAccount, PayoutLine } from '@/domain/payouts'
@@ -438,6 +439,46 @@ export interface AdminRider {
   completed: number
   holding: number
   joinedAt: string
+}
+
+/** One active job on the admin dispatch board (dispatch.ts). Areas only, never an address. */
+export interface DispatchJob {
+  /** An order going to a buyer, a pickup location, or back to its seller; or a buyer's return. */
+  kind: DispatchJobKind
+  /** The order's id for a delivery, the claim's for a return. */
+  id: string
+  orderId: string
+  stage: DispatchStage
+  /** When it reached this stage. */
+  since: string | null
+  stuck: boolean
+  productCode: string
+  listingTitle: string
+  listingImage: string | null
+  shopName: string
+  fromArea: string | null
+  toArea: string | null
+  isPrize: boolean
+  fulfilment: Fulfilment
+  pickupPointName: string | null
+  failedAttempts: number
+  /** Failed once: waiting for the buyer to choose a new time or a pickup location. */
+  awaitingBuyer: boolean
+  redeliverAt: string | null
+  /** Who has it, with a number admins can call. */
+  rider: { id: string; name: string; phone: string | null } | null
+}
+
+export type DispatchJobKind = 'delivery' | 'return'
+
+export interface DispatchBoard {
+  /** app_settings: when a job counts as stuck (dispatch.ts). */
+  waitingHours: number
+  carryingHours: number
+  /** The most jobs a rider can hold. */
+  maxJobs: number
+  /** Stuck first, then the longest waiting. */
+  jobs: DispatchJob[]
 }
 
 /** A rider's own standing: what's still locked for a new rider. */
@@ -1160,6 +1201,12 @@ export interface DrawMartApi {
   listRiders(): Promise<AdminRider[]>
   setRiderFleet(riderId: string, fleetId: string | null): Promise<void>
   setRiderTrusted(riderId: string, trusted: boolean): Promise<void>
+  /** Every active delivery and return, for admins (dispatch.ts). */
+  getDispatchBoard(): Promise<DispatchBoard>
+  /** A job waiting in the pool, to this rider, within their limits. */
+  assignJob(kind: DispatchJobKind, id: string, riderId: string): Promise<void>
+  /** Back in the pool. Only before the rider has collected it. */
+  unassignJob(kind: DispatchJobKind, id: string): Promise<void>
   /** Creates the store and turns the applicant's account into its account. */
   approveStoreApplication(applicationId: string): Promise<void>
   rejectStoreApplication(applicationId: string, note: string): Promise<void>

@@ -16,7 +16,7 @@ import { visitorId } from '@/lib/visitor'
 import { pushDeviceState, subscribeThisDevice, unsubscribeThisDevice } from '@/lib/push'
 import type { NotificationPreference } from '@/domain/push'
 import type { SavedAddressInput } from '@/domain/addresses'
-import type { AccountRole, BoostSettings, CheckoutInput, ListingFilter, NewListingInput, NewPickupInput, NewProductInput, PickupItemInput } from './types'
+import type { AccountRole, BoostSettings, DispatchJobKind, CheckoutInput, ListingFilter, NewListingInput, NewPickupInput, NewProductInput, PickupItemInput } from './types'
 
 export const keys = {
   session: ['session'] as const,
@@ -57,6 +57,7 @@ export const keys = {
   riderApplications: ['rider-applications'] as const,
   riderFleets: ['rider-fleets'] as const,
   adminRiders: ['admin-riders'] as const,
+  dispatchBoard: ['dispatch-board'] as const,
   riderLevel: ['rider-level'] as const,
   riderProfile: ['rider-profile'] as const,
   deliveryChat: (orderId: string) => ['delivery-chat', orderId] as const,
@@ -467,6 +468,17 @@ export const useMyRiderApplication = () => useQuery({ queryKey: keys.myRiderAppl
 export const useRiderApplications = () => useQuery({ queryKey: keys.riderApplications, queryFn: () => api.listRiderApplications(), enabled: useIs('admin') })
 export const useRiderFleets = () => useQuery({ queryKey: keys.riderFleets, queryFn: () => api.listRiderFleets(), enabled: useIs('admin') })
 export const useAdminRiders = () => useQuery({ queryKey: keys.adminRiders, queryFn: () => api.listRiders(), enabled: useIs('admin') })
+/** Riders move jobs on their own, so it keeps itself fresh. */
+export const useDispatchBoard = () => useQuery({ queryKey: keys.dispatchBoard, queryFn: () => api.getDispatchBoard(), enabled: useIs('admin'), refetchInterval: 30_000 })
+
+export function useDispatchActions() {
+  const invalidate = useInvalidateAll()
+  return {
+    assign: useMutation({ mutationFn: ({ kind, id, riderId }: { kind: DispatchJobKind; id: string; riderId: string }) => api.assignJob(kind, id, riderId), onSettled: invalidate }),
+    takeBack: useMutation({ mutationFn: ({ kind, id }: { kind: DispatchJobKind; id: string }) => api.unassignJob(kind, id), onSettled: invalidate }),
+  }
+}
+
 export const useRiderLevel = () => useQuery({ queryKey: keys.riderLevel, queryFn: () => api.getRiderLevel(), enabled: useIs('delivery') })
 
 export function useSubmitRiderApplication() {

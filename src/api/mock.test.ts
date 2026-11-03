@@ -1317,6 +1317,59 @@ describe('mock api', () => {
     })
   })
 
+  describe('dispatch board', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('shows admins each job’s stage, flags stuck ones, and moves only uncollected ones', async () => {
+      const c = { t: Date.parse('2026-11-03T10:00:00+01:00') }
+      const api = make(() => c.t)
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Dispatch lamp', description: '', category: 'Home', priceKobo: k(5_000), stock: 2 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(50_000))
+      const [o] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await as(api, 'store')
+      await api.sellerConfirmOrder(o.id, '/assets/c.jpg')
+      await api.dispatchOrder(o.id)
+      await expect(api.getDispatchBoard()).rejects.toThrow('admins')
+      await expect(api.assignJob('delivery', o.id, 'u-rider')).rejects.toThrow('admins')
+
+      await as(api, 'admin')
+      const job = async () => (await api.getDispatchBoard()).jobs.find((j) => j.id === o.id)
+      expect(await job()).toMatchObject({ kind: 'delivery', stage: 'waiting', stuck: false, rider: null, productCode: expect.stringMatching(/^PRD-/) })
+      c.t += 3 * 3_600_000
+      expect((await job())?.stuck).toBe(true)
+
+      await expect(api.assignJob('delivery', o.id, 'u-counter')).rejects.toThrow('doesn’t exist')
+      await api.assignJob('delivery', o.id, 'u-rider')
+      expect(await job()).toMatchObject({ stage: 'taken', stuck: false, rider: { id: 'u-rider', name: 'Bayo Rider' } })
+      await expect(api.assignJob('delivery', o.id, 'u-rider')).rejects.toThrow('waiting in the pool')
+      await api.unassignJob('delivery', o.id)
+      expect(await job()).toMatchObject({ stage: 'waiting', rider: null })
+      await expect(api.unassignJob('delivery', o.id)).rejects.toThrow('hasn’t collected')
+      await api.assignJob('delivery', o.id, 'u-rider')
+
+      await as(api, 'rider')
+      const kinds = (await api.listNotifications()).map((n) => n.kind)
+      expect(kinds).toEqual(expect.arrayContaining(['rider_job_assigned', 'rider_job_taken_back']))
+      expect((await api.listDeliveryJobs()).find((j) => j.id === o.id)?.mine).toBe(true)
+      await api.passCollection(o.id, ['/assets/a.jpg'])
+
+      // Collected: it stays the rider's. Stuck after 6 hours, off the board once delivered.
+      await as(api, 'admin')
+      expect(await job()).toMatchObject({ stage: 'carrying', stuck: false })
+      await expect(api.unassignJob('delivery', o.id)).rejects.toThrow('hasn’t collected')
+      c.t += 6 * 3_600_000
+      expect((await job())?.stuck).toBe(true)
+      await as(api, 'rider')
+      await api.confirmDelivery(o.id, o.deliveryPin!)
+      await as(api, 'admin')
+      expect(await job()).toBeUndefined()
+    })
+  })
+
   describe('rider and door checks', () => {
     const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
     const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')

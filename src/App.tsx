@@ -41,6 +41,7 @@ import { NotificationsPage } from '@/pages/NotificationsPage'
 import { ReturnJobPage } from '@/pages/delivery/ReturnJobs'
 import { EarningsPage } from '@/pages/delivery/EarningsPage'
 import { AdminRiderPayPage } from '@/pages/admin/AdminRiderPayPage'
+import { AdminDispatchPage } from '@/pages/admin/AdminDispatchPage'
 import { AdminRidersPage } from '@/pages/admin/AdminRidersPage'
 import { RiderApplicationPage } from '@/pages/RiderApplicationPage'
 import { AdminClaimsPage } from '@/pages/admin/AdminClaimsPage'
@@ -220,6 +221,7 @@ const router = createBrowserRouter([
       { path: 'reviews', element: <AdminReviewsPage /> },
       { path: 'delivery', element: <AdminDeliveryPage /> },
       { path: 'rider-pay', element: <AdminRiderPayPage /> },
+      { path: 'dispatch', element: <AdminDispatchPage /> },
       { path: 'riders', element: <AdminRidersPage /> },
       { path: 'prizes', element: <AdminPrizesPage /> },
       { path: 'stories', element: <AdminStoriesPage /> },
