@@ -4,9 +4,12 @@
  * what it pays at today's rates (riderPay.ts, worked out by the server the same way
  * as the earning). Riders filter by area and sort by newest, pay, or nearest to
  * where they are. Their location is only used on the device, never sent or stored.
+ * Whatever the sort, jobs with a delivery window today come first and ones for a later
+ * day last (deliveryWindows.ts).
  */
 import { DELIVERY_AREAS } from './deliveryFees'
 import { metresBetween } from './deliveryAttempts'
+import { windowRank } from './deliveryWindows'
 import type { GeoPoint, Kobo, PackageSize } from './types'
 
 export interface PoolJob {
@@ -16,6 +19,9 @@ export interface PoolJob {
   payKobo: Kobo
   /** For newest first. */
   postedAt: string | null
+  /** The buyer's delivery window. Returns have none. */
+  windowStart?: string | null
+  windowEnd?: string | null
 }
 
 export type PoolSort = 'newest' | 'pay' | 'nearest'
@@ -44,9 +50,14 @@ const fromHere = (j: Pick<PoolJob, 'fromArea'>, here: GeoPoint) => {
   return c ? metresBetween(here, c) : Number.POSITIVE_INFINITY
 }
 
-export function sortPool<T extends PoolJob>(jobs: readonly T[], sort: PoolSort, here: GeoPoint | null): T[] {
+export function sortPool<T extends PoolJob>(jobs: readonly T[], sort: PoolSort, here: GeoPoint | null, nowMs: number): T[] {
   const newest = (a: T, b: T) => (b.postedAt ?? '').localeCompare(a.postedAt ?? '')
-  if (sort === 'pay') return [...jobs].sort((a, b) => b.payKobo - a.payKobo || newest(a, b))
-  if (sort === 'nearest' && here) return [...jobs].sort((a, b) => fromHere(a, here) - fromHere(b, here) || newest(a, b))
-  return [...jobs].sort(newest)
+  const chosen =
+    sort === 'pay' ? (a: T, b: T) => b.payKobo - a.payKobo || newest(a, b)
+    : sort === 'nearest' && here ? (a: T, b: T) => fromHere(a, here) - fromHere(b, here) || newest(a, b)
+    : newest
+  const rank = (j: T) => windowRank(j.windowStart ?? null, nowMs)
+  // Within a day's windows, the soonest first.
+  const soonest = (a: T, b: T) => (rank(a) === 1 ? 0 : (a.windowStart ?? '').localeCompare(b.windowStart ?? ''))
+  return [...jobs].sort((a, b) => rank(a) - rank(b) || soonest(a, b) || chosen(a, b))
 }

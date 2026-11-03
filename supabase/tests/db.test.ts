@@ -22,6 +22,7 @@ import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO } from '@/domain/deliveryCheck
 import { imeiValid } from '@/domain/listingChecks'
 import { returnFeeKobo, sellerShareOfReturnFee } from '@/domain/claims'
 import { addConfirmTime, confirmDeadline } from '@/domain/orderConfirm'
+import { lagosDay, offeredWindows, windowOpens, windowTimes } from '@/domain/deliveryWindows'
 import { addDays, cautionFeeFor, localDate } from '@/domain/listing'
 import { DEMO_ACCOUNTS } from '@/api/demoAccounts'
 
@@ -2647,6 +2648,54 @@ describe('cart and checkout', () => {
       const [{ expected }] = await admin<{ expected: string }>(
         `select private.rider_pay(m.delivery_area, private.buyer_area(o), 'large') expected from public.orders o join public.merchants m on m.id = o.merchant_id where o.id = $1`, [one])
       expect(pay[0].amount_kobo).toBe(expected)
+    }, 60_000)
+
+    it('offers the same delivery windows as the app, from the latest the seller can be ready', async () => {
+      // Every half hour across a week, including nights and weekends.
+      const from = Date.parse('2026-11-02T00:10:00Z')
+      for (let t = from; t < from + 7 * 86_400_000; t += 1_800_000) {
+        const rows = await admin<{ day: string; part: string }>(`select to_char(day, 'YYYY-MM-DD') as day, part from private.offered_windows($1)`, [new Date(t).toISOString()])
+        expect(rows, new Date(t).toISOString()).toEqual(offeredWindows(t))
+      }
+      const [w] = await admin<{ w_start: Date; w_end: Date }>(`select w_start, w_end from private.window_times('2026-11-05', 'evening')`)
+      expect([w.w_start.toISOString(), w.w_end.toISOString()]).toEqual(Object.values(windowTimes({ day: '2026-11-05', part: 'evening' })))
+      const [o] = await admin<{ t: Date }>(`select private.window_opens('2026-11-05T15:00:00Z') t`)
+      expect(o.t.toISOString()).toBe(windowOpens('2026-11-05T15:00:00Z'))
+    }, 60_000)
+
+    it('keeps a chosen delivery window from riders until its day, then tells them', async () => {
+      const carrier = await newUser('window-rider@example.com', { role: 'delivery' })
+      const boss = await newUser('window-admin@example.com', { role: 'admin' })
+      const b = await newUser('window-buyer@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const item = await newProduct('Window lamp')
+      await add(b, item)
+
+      // Too soon for the seller, and pickups, are refused.
+      const now = Date.now()
+      await expectFail(checkout(b, details([item], { window: { day: lagosDay(now), part: 'evening' } })), 'invalid_input')
+      const w = offeredWindows(now)[0]
+      const [id] = await checkout(b, details([item], { window: w }))
+      const [row] = await admin<{ window_start: Date; window_end: Date }>(`select window_start, window_end from public.orders where id = $1`, [id])
+      expect([row.window_start.toISOString(), row.window_end.toISOString()]).toEqual(Object.values(windowTimes(w)))
+
+      // Ready early: in the pool with its window, but not to be taken, or announced, before its day.
+      await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+      await asUser(store, `select public.dispatch_order($1)`, [id])
+      const job = (await asUser<{ j: { id: string; windowStart: string; windowEnd: string }[] }>(carrier, `select public.delivery_jobs() j`))[0].j.find((j) => j.id === id)!
+      expect(new Date(job.windowStart).toISOString()).toBe(windowTimes(w).start)
+      expect((await expectFail(asUser(carrier, `select public.take_delivery($1)`, [id]), 'invalid_input')).detail).toContain('It can be taken from 7am that day.')
+      const alerts = () => asUser(carrier, `select 1 from public.notifications where kind = 'rider_new_job' and listing_id = $1`, [item])
+      expect(await alerts()).toHaveLength(0)
+      const boardJob = async () => (await asUser<{ b: { jobs: { id: string; since: string; windowStart: string | null }[] } }>(boss, `select public.dispatch_board() b`))[0].b.jobs.find((j) => j.id === id)!
+      expect(new Date((await boardJob()).since).toISOString()).toBe(windowOpens(windowTimes(w).start))
+
+      // Its day comes: riders hear about it once, and can take it.
+      await admin(`update public.orders set window_start = now() - interval '1 day', window_end = now() - interval '21 hours', dispatched_at = now() - interval '2 days' where id = $1`, [id])
+      await admin(`select private.rider_reminders()`)
+      await admin(`select private.rider_reminders()`)
+      expect(await alerts()).toHaveLength(1)
+      await asUser(carrier, `select public.take_delivery($1)`, [id])
     }, 60_000)
 
     it('makes an order readied after the rest were collected its own trip, paid on its own', async () => {

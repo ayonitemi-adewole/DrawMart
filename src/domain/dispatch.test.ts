@@ -15,6 +15,9 @@ describe('dispatch board', () => {
     expect(orderStage(order({ hasRider: true, collectedAt: 'b' }))).toEqual({ stage: 'carrying', since: 'b' })
     expect(orderStage(order({ hasRider: true, collectedAt: 'b', failedAttempts: 1, lastFailedAt: 'c' }))).toEqual({ stage: 'failed', since: 'c' })
     expect(orderStage(order({ hasRider: true, collectedAt: 'b', atCounterAt: 'd' }))).toEqual({ stage: 'at_counter', since: 'd' })
+    // Ready for a later day's window: waiting counts from 7am that day.
+    expect(orderStage(order({ windowStart: '2026-11-05T08:00:00.000Z' }))).toEqual({ stage: 'waiting', since: '2026-11-05T06:00:00.000Z' })
+    expect(orderStage(order({ windowStart: '2026-11-03T15:00:00.000Z' }))).toEqual({ stage: 'waiting', since: T })
     for (const status of ['paid', 'delivered', 'cancelled']) expect(orderStage(order({ status }))).toBeNull()
     expect(orderStage(order({ status: 'cancelled', returnState: 'returned' }))).toBeNull()
   })

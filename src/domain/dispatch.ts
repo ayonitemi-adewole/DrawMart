@@ -10,6 +10,7 @@
  * that's been collected: the item is in the rider's hands, so it stays theirs until
  * it's handed over. Mirrored in public.dispatch_board, assign_job and unassign_job.
  */
+import { windowOpens } from './deliveryWindows'
 import { MAX_RIDER_JOBS } from './riderLimits'
 import type { ClaimStatus } from './types'
 
@@ -56,6 +57,8 @@ export interface DispatchOrderFacts {
   failedAttempts: number
   lastFailedAt: string | null
   cancelledAt: string | null
+  /** The buyer's delivery window: riders can't take it before its day (deliveryWindows.ts). */
+  windowStart?: string | null
 }
 
 /** Where an order is, or null when nobody needs to move it. */
@@ -67,7 +70,8 @@ export function orderStage(o: DispatchOrderFacts): StageAt | null {
   }
   if (o.status !== 'dispatched') return null
   if (o.atCounterAt) return { stage: 'at_counter', since: o.atCounterAt }
-  if (!o.hasRider) return { stage: 'waiting', since: o.dispatchedAt }
+  // Waiting counts from when riders could take it: a job for a later day isn't stuck yet.
+  if (!o.hasRider) return { stage: 'waiting', since: o.windowStart && o.dispatchedAt && Date.parse(windowOpens(o.windowStart)) > Date.parse(o.dispatchedAt) ? windowOpens(o.windowStart) : o.dispatchedAt }
   if (!o.collectedAt) return { stage: 'taken', since: o.riderTakenAt }
   if (o.failedAttempts > 0) return { stage: 'failed', since: o.lastFailedAt }
   return { stage: 'carrying', since: o.collectedAt }

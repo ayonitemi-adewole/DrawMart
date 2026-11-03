@@ -7,6 +7,7 @@ import { useToast } from '@/components/toast'
 import { Button, Card, errorMessage } from '@/components/ui'
 import { formatNaira } from '@/domain/money'
 import { areaName } from '@/domain/riderAlerts'
+import { canTakeYet } from '@/domain/deliveryWindows'
 import { planStops, poolTrips, tripRoomError, type StopJob, type Trip } from '@/domain/trips'
 
 /** Where a job is picked up: the counter for an item going back from one, otherwise the seller. */
@@ -16,7 +17,9 @@ const collectName = (j: DeliveryJob) => (j.waitingAtCounter ? (j.pickupPoint?.na
 export function TripList({ groups, held }: { groups: { lead: DeliveryJob; jobs: DeliveryJob[] }[]; held: number }) {
   // Each group is one job already, carried by its first order.
   const items = new Map(groups.map((g) => [g.lead.id, g.jobs]))
-  const trips = poolTrips(groups.map((g) => g.lead))
+  // Not ones the buyer wants on a later day: they can't be taken yet.
+  const now = Date.now()
+  const trips = poolTrips(groups.map((g) => g.lead).filter((j) => canTakeYet(j.windowStart, now)))
   if (!trips.length) return null
   return (
     <section className="flex flex-col gap-3" aria-labelledby="trips-title">

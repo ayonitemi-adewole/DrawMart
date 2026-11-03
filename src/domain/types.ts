@@ -289,6 +289,9 @@ export interface Order {
   redeliveryChoice: 'redeliver' | 'pickup' | null
   /** The start of the new two-hour window. */
   redeliverAt: ISODate | null
+  /** The delivery window the buyer chose at checkout (deliveryWindows.ts). Null: as soon as it's ready. */
+  windowStart?: ISODate | null
+  windowEnd?: ISODate | null
   cancelledAt: ISODate | null
   cancelReason: CancelReason | null
   cancelNote: string | null

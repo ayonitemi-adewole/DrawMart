@@ -1,6 +1,7 @@
 import type { NewProductInput } from './types'
 import { redeliveryWindows } from '@/domain/deliveryAttempts'
 import { poolTrips } from '@/domain/trips'
+import { offeredWindows, windowOpens, windowTimes } from '@/domain/deliveryWindows'
 import { areaPairPay, tripPay } from '@/domain/riderPay'
 import { RIDER_QUIZ, type RiderApplicationInput } from '@/domain/riderApplications'
 import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO } from '@/domain/deliveryChecks'
@@ -1448,6 +1449,48 @@ describe('mock api', () => {
       await as(api, 'admin')
       const rates = await api.getRiderPayRates()
       expect(deliveries[0].amountKobo).toBe(tripPay(rates, deliveries[0].fromArea!, deliveries[0].toArea!, 'large'))
+    })
+  })
+
+  describe('delivery windows', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('books a time the seller can make, and keeps it from riders until its day', async () => {
+      const c = { t: Date.parse('2026-11-03T10:00:00+01:00') }
+      const api = make(() => c.t)
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Window lamp', description: '', category: 'Home', priceKobo: k(10_000), stock: 5 })
+      await as(api, 'admin')
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const base = { listingIds: [p.id], fulfilment: 'delivery' as const, delivery, pickupPointId: null }
+      await expect(api.checkout({ ...base, window: { day: '2026-11-03', part: 'evening' } })).rejects.toThrow(/Pick one of the times shown/)
+      const w = offeredWindows(c.t)[0]
+      await expect(api.checkout({ ...base, fulfilment: 'pickup', delivery: { ...delivery, address: '', location: null }, pickupPointId: 'yaba', window: w })).rejects.toThrow(/only for delivery/)
+      const [order] = await api.checkout({ ...base, window: w })
+      expect([order.windowStart, order.windowEnd]).toEqual(Object.values(windowTimes(w)))
+
+      // Ready early: shown with its window, but not to be taken or announced before its day.
+      await as(api, 'store')
+      await api.sellerConfirmOrder(order.id, '/assets/c.jpg')
+      await api.dispatchOrder(order.id)
+      await as(api, 'rider')
+      expect((await api.listDeliveryJobs()).find((j) => j.id === order.id)?.windowStart).toBe(order.windowStart)
+      await expect(api.takeDelivery(order.id)).rejects.toThrow(/It can be taken from 7am that day/)
+      const alerts = async () => (await api.listNotifications()).filter((n) => n.kind === 'rider_new_job' && n.listingId === p.id)
+      expect(await alerts()).toHaveLength(0)
+      await as(api, 'admin')
+      const job = (await api.getDispatchBoard()).jobs.find((j) => j.id === order.id)!
+      expect([job.since, job.stuck]).toEqual([windowOpens(order.windowStart!), false])
+
+      // Its day comes: riders hear once, and can take it.
+      c.t = Date.parse(windowOpens(order.windowStart!))
+      await as(api, 'rider')
+      expect(await alerts()).toHaveLength(1)
+      expect(await alerts()).toHaveLength(1)
+      await api.takeDelivery(order.id)
     })
   })
 

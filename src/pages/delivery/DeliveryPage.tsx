@@ -16,7 +16,7 @@ import { CounterPage } from './CounterPage'
 import { NotHome } from './NotHome'
 import { RiderPhoto } from './RiderPhoto'
 import { LockedText, NewRiderProgress } from './NewRider'
-import { JobFacts, PoolControls, usePoolView } from './PoolControls'
+import { JobFacts, PoolControls, WindowLine, usePoolView } from './PoolControls'
 import { DeliveryChatSheet } from '@/components/DeliveryChat'
 import { firstName } from '@/domain/deliveryChat'
 import { ReturnJobList } from './ReturnJobs'
@@ -25,6 +25,7 @@ import { directionsUrl } from '@/domain/location'
 import { matchesProductSearch } from '@/domain/productCode'
 import { takeJobError } from '@/domain/riderLimits'
 import { mergeFeeGroups } from '@/domain/feeGroups'
+import { takeTooSoonError } from '@/domain/deliveryWindows'
 import { dateTime, timeOfDay } from '@/lib/time'
 
 const RouteMap = lazy(() => import('@/components/RouteMap'))
@@ -124,6 +125,8 @@ function JobCard({ job: j, items = [j], tab }: { job: DeliveryJob; items?: Deliv
   const { take } = useDeliveryActions()
   const navigate = useNavigate()
   const toast = useToast()
+  // The buyer chose a later day: riders can take it from 7am that day.
+  const tooSoon = takeTooSoonError(j.windowStart, Date.now())
   const summary = (
     <div className="flex min-w-0 flex-1 gap-3">
       <ProductImage category={j.category} src={j.listingImage ?? undefined} alt="" size="sm" className="size-16 shrink-0" />
@@ -160,10 +163,10 @@ function JobCard({ job: j, items = [j], tab }: { job: DeliveryJob; items?: Deliv
       {summary}
       {tab === 'available' ? (
         <>
-          <span className="text-xs text-subtle">{j.locked ? <LockedText /> : 'The address and map appear once you take it.'}</span>
+          <span className="text-xs text-subtle">{j.locked ? <LockedText /> : tooSoon ? tooSoon.replace('This one is', 'The buyer wants it') : 'The address and map appear once you take it.'}</span>
           <Button
             loading={take.isPending && take.variables === j.id}
-            disabled={take.isPending || j.locked}
+            disabled={take.isPending || j.locked || !!tooSoon}
             onClick={() => take.mutate(j.id, { onSuccess: () => navigate(`/delivery/${j.id}`), onError: (e) => toast(errorMessage(e), 'error') })}
           >
             <TruckIcon size={16} /> {items.length > 1 ? `Take all ${items.length}` : 'Take this delivery'}
@@ -210,6 +213,7 @@ function JobDetails({ job: j }: { job: DeliveryJob }) {
           <h1 className="font-display text-xl leading-tight font-extrabold">{j.listingTitle}{j.quantity > 1 ? ` × ${j.quantity}` : ''}</h1>
           <ProductId code={j.productCode} copy />
           <Badge tone="sky" className="w-fit">{pickup ? 'For a pickup location' : 'To the buyer'}</Badge>
+          {j.windowStart && j.windowEnd && !j.redeliverAt ? <WindowLine start={j.windowStart} end={j.windowEnd} /> : null}
         </div>
       </Card>
 

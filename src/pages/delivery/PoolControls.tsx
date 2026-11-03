@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { NairaIcon, MapPinIcon } from '@/components/icons'
+import { ClockIcon, NairaIcon, MapPinIcon } from '@/components/icons'
 import { useToast } from '@/components/toast'
 import { Segmented, cx, inputCls } from '@/components/ui'
 import { DELIVERY_AREAS, PACKAGE_SIZE_TEXT } from '@/domain/deliveryFees'
+import { windowRank, windowText } from '@/domain/deliveryWindows'
 import { distanceText, jobInArea, sortPool, type PoolJob, type PoolSort } from '@/domain/jobPool'
 import { formatNaira } from '@/domain/money'
 import { areaName } from '@/domain/riderAlerts'
@@ -41,7 +42,7 @@ export function usePoolView() {
     )
   }
 
-  const view: PoolView = { area, sort, here, apply: (jobs) => sortPool(jobs.filter((j) => jobInArea(j, area)), sort, here) }
+  const view: PoolView = { area, sort, here, apply: (jobs) => sortPool(jobs.filter((j) => jobInArea(j, area)), sort, here, Date.now()) }
   return { view, setArea, choose, locating }
 }
 
@@ -76,11 +77,12 @@ export function PoolControls({ pool }: { pool: ReturnType<typeof usePoolView> })
   )
 }
 
-/** "Ikeja and Maryland → Lekki and Ajah · ~18 km · Large · ₦2,450". */
+/** "Ikeja and Maryland → Lekki and Ajah · ~18 km · Large · ₦2,450", and the buyer's window. */
 export function JobFacts({ job: j }: { job: PoolJob }) {
   const distance = distanceText(j.fromArea, j.toArea)
   return (
     <span className="flex flex-col gap-1 text-xs">
+      {j.windowStart && j.windowEnd ? <WindowLine start={j.windowStart} end={j.windowEnd} /> : null}
       <span className="flex items-start gap-1 text-muted">
         <MapPinIcon size={14} className="mt-px shrink-0" />
         {j.fromArea ? areaName(j.fromArea) : 'DrawMart'} → {areaName(j.toArea)}
@@ -92,6 +94,16 @@ export function JobFacts({ job: j }: { job: PoolJob }) {
           <NairaIcon size={14} className="text-brand" /> Pays {formatNaira(j.payKobo)}
         </span>
       </span>
+    </span>
+  )
+}
+
+/** "Deliver tomorrow, 9am–12pm": the window the buyer chose (deliveryWindows.ts). */
+export function WindowLine({ start, end }: { start: string; end: string }) {
+  const now = Date.now()
+  return (
+    <span className={cx('flex items-center gap-1 font-bold', windowRank(start, now) === 0 ? 'text-hot' : 'text-ink')}>
+      <ClockIcon size={14} className="shrink-0" /> Deliver {windowText({ start, end }, now).replace(/^(Today|Tomorrow)/, (d) => d.toLowerCase())}
     </span>
   )
 }

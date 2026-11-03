@@ -10,6 +10,7 @@ import { DISPATCH_STAGES, canAssign, canTakeBack, waitedText, type DispatchStage
 import { matchesProductSearch } from '@/domain/productCode'
 import { NEW_RIDER_JOBS } from '@/domain/riderApplications'
 import { areaName } from '@/domain/riderAlerts'
+import { windowText } from '@/domain/deliveryWindows'
 import { dateTime } from '@/lib/time'
 
 type Filter = 'stuck' | 'all' | DispatchStage
@@ -117,12 +118,20 @@ function JobCard({ job: j, maxJobs }: { job: DispatchJob; maxJobs: number }) {
             {j.kind === 'return' ? `A buyer in ${areaName(j.fromArea)} → ${j.shopName}, ${areaName(j.toArea)}` : `${j.shopName}, ${areaName(j.fromArea)} → ${to}`}
           </dd>
         </div>
+        {j.windowStart && j.windowEnd ? (
+          <div className="flex gap-2">
+            <dt className="w-16 shrink-0 text-subtle">Window</dt>
+            <dd className="min-w-0">{windowText({ start: j.windowStart, end: j.windowEnd }, Date.now())}</dd>
+          </div>
+        ) : null}
         <div className="flex gap-2">
           <dt className="w-16 shrink-0 text-subtle">Status</dt>
           <dd className="flex min-w-0 flex-col">
             <span>
               {stage.hint}
-              {j.since ? (
+              {j.since && Date.parse(j.since) > Date.now() ? (
+                <span className="text-muted"> · from {dateTime(j.since)}, the buyer’s day</span>
+              ) : j.since ? (
                 <span className={j.stuck ? 'font-bold text-hot-ink' : 'text-muted'}>
                   {' '}
                   · <ClockIcon size={12} className="inline align-[-1px]" /> {waitedText(j.since, Date.now())}

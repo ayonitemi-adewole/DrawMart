@@ -9,6 +9,7 @@ import { RiderPhotos } from './RiderPhotos'
 import { ShopPickupSheet } from './ShopPickup'
 import { needsConfirming } from '@/domain/orderConfirm'
 import { collectFromCounterBy } from '@/domain/counter'
+import { windowText } from '@/domain/deliveryWindows'
 import { isPhoneOrTablet, thisDevice } from '@/lib/device'
 import type { OrderView } from '@/api/types'
 import { APOLOGY_CREDIT_KOBO, COLLECTION_PROBLEM_TEXT } from '@/domain/deliveryChecks'
@@ -160,6 +161,11 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
             ) : null}
           </>
         )}
+        {!pickup && o.windowStart && o.windowEnd && o.status !== 'delivered' && !o.redeliverAt ? (
+          <span className="flex items-center gap-2 font-bold">
+            <ClockIcon size={14} className="shrink-0" /> {audience === 'buyer' ? 'Arriving' : 'The buyer wants it'} {windowText({ start: o.windowStart, end: o.windowEnd }, Date.now()).replace(/^(Today|Tomorrow)/, (d) => d.toLowerCase())}
+          </span>
+        ) : null}
         {sender ? (
           <a href={`tel:${o.delivery.contactPhone.replace(/\s/g, '')}`} className="flex min-h-11 w-fit items-center gap-2">
             <PhoneIcon size={14} /> {o.delivery.contactPhone}

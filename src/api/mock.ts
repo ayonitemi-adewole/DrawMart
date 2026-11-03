@@ -69,6 +69,7 @@ import {
 import { checkPin, isDeliveryPin, newDeliveryPin, type PinState } from '@/domain/delivery'
 import { COLLECT_WARNING_MINUTES, MAX_RIDER_JOBS, collectBy, collectionOverdue, takeJobError } from '@/domain/riderLimits'
 import { DEFAULT_STUCK_LIMITS, assignJobError, claimStage, dispatchStuck, orderStage } from '@/domain/dispatch'
+import { canTakeYet, takeTooSoonError, windowError, windowOpens, windowTimes } from '@/domain/deliveryWindows'
 import { tripRoomError } from '@/domain/trips'
 import { feeGroupOf, largestSize, tripAlreadyPaid } from '@/domain/feeGroups'
 import { riderAreasError, riderJobAlertAllowed } from '@/domain/riderAlerts'
@@ -132,7 +133,7 @@ const TOLU_SHOP = 'm-tolu'
 const DAY = 24 * 60 * 60 * 1000
 
 /** The PIN and who's carrying it stay out of the order everyone else sees. */
-type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState; paidCashKobo: Kobo; paidCreditKobo: Kobo; paidFeeCashKobo: Kobo; paidFeeCreditKobo: Kobo; checkoutId: string; confirmRemindedAt: string | null; riderTakenAt?: string | null; counterRemindedAt?: string | null; counterOutAt?: string | null }
+type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState; paidCashKobo: Kobo; paidCreditKobo: Kobo; paidFeeCashKobo: Kobo; paidFeeCreditKobo: Kobo; checkoutId: string; confirmRemindedAt: string | null; riderTakenAt?: string | null; counterRemindedAt?: string | null; counterOutAt?: string | null; windowAlertedAt?: string | null }
 
 interface Db {
   users: User[]
@@ -828,7 +829,9 @@ function alertRiders(db: Db, kind: 'rider_new_job' | 'rider_new_return', listing
   }
 }
 const orderArea = (db: Db, o: MockOrder) => (o.handledBy === 'drawmart' ? null : sellerAreaOf(db.merchants.find((m) => m.id === o.merchantId)!))
+/** A job for a later day's window is announced on its day (deliveryWindows.ts), in processDeadlines. */
 const alertNewJob = (db: Db, o: MockOrder, except: string | null, now: number) =>
+  (o.status !== 'dispatched' || canTakeYet(o.windowStart ?? null, now)) &&
   alertRiders(db, 'rider_new_job', o.listingId, o.atCounterAt && o.pickupPoint ? nearestArea(o.pickupPoint.location, DELIVERY_AREAS) : orderArea(db, o), except, now)
 /** Going back to the seller from a pickup counter, not yet handed to a rider. */
 const waitingAtCounter = (o: MockOrder) => o.returnState === 'returning' && !!o.atCounterAt && !o.counterOutAt
@@ -998,6 +1001,13 @@ function processDeadlines(db: Db, now: number): boolean {
   // No new time chosen after a failed attempt (deliveryAttempts.ts).
   for (const o of db.orders) {
     if (o.status === 'dispatched' && o.failedAttempts === 1 && !o.redeliveryChoice && o.lastFailedAt && Date.parse(o.lastFailedAt) + CHOOSE_WITHIN_HOURS * 3_600_000 <= now) returnUndelivered(db, o, now)
+  }
+  for (const o of db.orders) {
+    if (o.status !== 'dispatched' || o.riderId || o.atCounterAt || !o.windowStart || o.windowAlertedAt || !canTakeYet(o.windowStart, now)) continue
+    if (o.dispatchedAt && Date.parse(o.dispatchedAt) >= Date.parse(windowOpens(o.windowStart))) continue
+    o.windowAlertedAt = iso(now)
+    changed = true
+    alertNewJob(db, o, null, now)
   }
   for (const o of db.orders) {
     if (o.status !== 'dispatched' || !o.atCounterAt) continue
@@ -1279,7 +1289,7 @@ const chatOpen = (o: MockOrder) => o.status === 'dispatched' && o.fulfilment ===
 const riderCard = (db: Db, riderId: string) => ({ firstName: firstName(riderName(db, riderId)), photo: db.riderPhotos[riderId] ?? null })
 
 function orderView(db: Db, order: MockOrder, forBuyer = false): OrderView {
-  const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, paidFeeCashKobo: _feeCash, paidFeeCreditKobo: _feeCredit, checkoutId: _checkoutId, confirmRemindedAt: _reminded, riderTakenAt: _taken, counterRemindedAt: _counterReminded, counterOutAt: _counterOut, ...o } = order
+  const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, paidFeeCashKobo: _feeCash, paidFeeCreditKobo: _feeCredit, checkoutId: _checkoutId, confirmRemindedAt: _reminded, riderTakenAt: _taken, counterRemindedAt: _counterReminded, counterOutAt: _counterOut, windowAlertedAt: _alerted, ...o } = order
   const l = db.listings.find((x) => x.id === o.listingId)!
   const merchant = db.merchants.find((m) => m.id === o.merchantId)!
   const r = db.reviews.find((x) => x.orderId === o.id)
@@ -1484,6 +1494,8 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
   }
   /** private.take_group: the order and every one ready on the same fee, in the same place. */
   function takeGroup(db: Db, riderId: string, o: MockOrder) {
+    const tooSoon = o.status === 'dispatched' ? takeTooSoonError(o.windowStart ?? null, now()) : null
+    if (tooSoon) throw new ApiError('invalid_input', tooSoon)
     const at = iso(now())
     const same = (x: MockOrder) => (waitingAtCounter(o) ? waitingAtCounter(x) : x.status === 'dispatched' && !x.atCounterAt)
     for (const x of db.orders.filter((x) => x.id === o.id || (feeGroup(x) === feeGroup(o) && !x.riderId && same(x)))) {
@@ -1958,7 +1970,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     listPickupPoints: () => tx(() => PICKUP_POINTS),
 
-    checkout: ({ listingIds, quantities = {}, expectedTotalKobo, code, ...details }) =>
+    checkout: ({ listingIds, quantities = {}, expectedTotalKobo, code, window: chosenWindow, ...details }) =>
       tx((db) => {
         const codeDiscount = code?.trim() ? usableCode(db, code) : null
         const codePrices: Record<string, Kobo> = {}
@@ -1967,7 +1979,10 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const listings = listingIds.map((id) => getListingOr404(db, id))
         const views = listings.map((l) => listingView(db, l))
         const problems = validateCheckout(details, views.some(isCar)).map((e) => CHECKOUT_ERROR_TEXT[e])
-        if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+        if (chosenWindow) problems.push(details.fulfilment === 'delivery' ? windowError(chosenWindow, now()) ?? '' : 'Delivery windows are only for delivery.')
+        if (chosenWindow && views.some(isCar)) problems.push('Cars are arranged with the dealer, so there’s no delivery window.')
+        const times = chosenWindow ? windowTimes(chosenWindow) : null
+        if (problems.some(Boolean)) throw new ApiError('invalid_input', problems.filter(Boolean).join(' '))
         for (const v of views) {
           if (v.merchantId === db.sellerShops[buyer()]) throw new ApiError('forbidden', 'You can’t buy your own item.')
           if (lineAmountKobo(v) === null) throw new ApiError('not_for_sale', `${v.title} isn’t for sale any more.`)
@@ -2021,7 +2036,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           const order: MockOrder = {
             pin: newDeliveryPin(), riderId: null, pinState: { attempts: 0, lockedUntil: null }, paidCashKobo: paid.fromCash, paidCreditKobo: paid.fromCredit, paidFeeCashKobo: paidFee.fromCash, paidFeeCreditKobo: paidFee.fromCredit, checkoutId, deliveryFeeKobo,
             cancelledAt: null, cancelReason: null, cancelNote: null, confirmRemindedAt: null, atCounterAt: null, arrivedAt: null, failedAttempts: 0, lastFailedAt: null, redeliveryChoice: null, redeliverAt: null,
-            confirmBy: prize ? null : confirmDeadline(now()), confirmedAt: null, confirmPhoto: null,
+            confirmBy: prize ? null : confirmDeadline(now()), confirmedAt: null, confirmPhoto: null, windowStart: times?.start ?? null, windowEnd: times?.end ?? null,
             refundedAt: null, claim: null, readyBy: null, collectedAt: null, collectionPhotos: null, collectionProblems: null, refusalPhoto: null, returnState: null, returnedAt: null,
             discountKobo: used ? quantity * l.priceKobo - price : 0,
             id: uid('O'), listingId: l.id, buyerId: buyer(), merchantId: l.merchantId, quantity, priceKobo: price, feeKobo: prize ? 0 : saleEconomics(price, l.feeBps).feeKobo,
@@ -2074,6 +2089,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
               atCounterAt: o.status === 'dispatched' || o.status === 'delivered' ? o.atCounterAt : null, waitingAtCounter: waitingAtCounter(o),
               arrivedAt: o.arrivedAt ?? null, failedAttempts: o.failedAttempts, awaitingBuyer: o.status === 'dispatched' && o.failedAttempts === 1 && !o.redeliveryChoice,
               redeliverAt: o.redeliveryChoice === 'redeliver' ? o.redeliverAt : null,
+              windowStart: o.windowStart ?? null, windowEnd: o.windowEnd ?? null,
               ...poolFields(db, o),
               locked: !o.riderId && !!riderLimit(db, me, o),
               collectFrom: o.handledBy === 'drawmart' ? { name: 'DrawMart escrow', area: 'Lagos' } : { name: merchant.name, area: merchant.area, ...(o.riderId === me && ((o.status === 'dispatched' && !o.collectedAt) || o.returnState === 'returning') ? db.shopPickups[o.merchantId] : {}) },
@@ -2239,12 +2255,12 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           const shop = db.merchants.find((m) => m.id === o.merchantId)!
           const common = { orderId: o.id, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, shopName: o.handledBy === 'drawmart' ? 'DrawMart escrow' : shop.name, isPrize: o.isPrize, fulfilment: o.fulfilment }
           const out: DispatchJob[] = []
-          const st = orderStage({ status: o.status, hasRider: !!o.riderId, riderTakenAt: o.riderTakenAt ?? null, dispatchedAt: o.dispatchedAt, collectedAt: o.collectedAt, atCounterAt: o.atCounterAt, counterOutAt: o.counterOutAt ?? null, returnState: o.returnState, failedAttempts: o.failedAttempts, lastFailedAt: o.lastFailedAt, cancelledAt: o.cancelledAt })
+          const st = orderStage({ status: o.status, hasRider: !!o.riderId, riderTakenAt: o.riderTakenAt ?? null, dispatchedAt: o.dispatchedAt, collectedAt: o.collectedAt, atCounterAt: o.atCounterAt, counterOutAt: o.counterOutAt ?? null, returnState: o.returnState, failedAttempts: o.failedAttempts, lastFailedAt: o.lastFailedAt, cancelledAt: o.cancelledAt, windowStart: o.windowStart })
           if (st) {
             const { fromArea, toArea } = poolFields(db, o)
             out.push({
               ...common, kind: 'delivery', id: o.id, ...st, stuck: dispatchStuck(st.stage, st.since, at), fromArea, toArea, pickupPointName: o.pickupPoint?.name ?? null,
-              failedAttempts: o.failedAttempts, awaitingBuyer: o.status === 'dispatched' && o.failedAttempts === 1 && !o.redeliveryChoice, redeliverAt: o.redeliveryChoice === 'redeliver' ? o.redeliverAt : null, rider: riderOf(o.riderId),
+              failedAttempts: o.failedAttempts, awaitingBuyer: o.status === 'dispatched' && o.failedAttempts === 1 && !o.redeliveryChoice, redeliverAt: o.redeliveryChoice === 'redeliver' ? o.redeliverAt : null, windowStart: o.windowStart ?? null, windowEnd: o.windowEnd ?? null, rider: riderOf(o.riderId),
             })
           }
           const d = o.claim ? db.claimDetails[o.claim.id] : undefined
@@ -2252,7 +2268,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           if (o.claim && d && cs) {
             out.push({
               ...common, kind: 'return', id: o.claim.id, ...cs, stuck: dispatchStuck(cs.stage, cs.since, at), fromArea: nearestArea(d.location, DELIVERY_AREAS), toArea: sellerArea(db, o), pickupPointName: null,
-              failedAttempts: 0, awaitingBuyer: false, redeliverAt: null, rider: riderOf(d.riderId),
+              failedAttempts: 0, awaitingBuyer: false, redeliverAt: null, windowStart: null, windowEnd: null, rider: riderOf(d.riderId),
             })
           }
           return out

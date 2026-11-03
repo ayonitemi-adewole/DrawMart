@@ -9,6 +9,7 @@ import type { HandoverDetails } from '@/domain/listing'
 import type { PinResult } from '@/domain/delivery'
 import type { SavedAddress, SavedAddressInput } from '@/domain/addresses'
 import type { CheckoutDetails } from '@/domain/cart'
+import type { DeliveryWindow } from '@/domain/deliveryWindows'
 import type { DeliveryPricing } from '@/domain/deliveryFees'
 import type { ShopPickup } from '@/domain/shopPickup'
 import type { ShopProfileInput } from '@/domain/shopProfile'
@@ -365,6 +366,9 @@ export interface DeliveryJob {
   awaitingBuyer: boolean
   /** The new window's start, once the buyer has picked one. */
   redeliverAt: string | null
+  /** The buyer's delivery window. It can't be taken before 7am that day (deliveryWindows.ts canTakeYet). */
+  windowStart: string | null
+  windowEnd: string | null
   /** Taken but not yet collected: back to the pool at this time (riderLimits.ts). */
   collectBy: string | null
   /** The address and number only reach the rider on the way there, or taking a refused item back. */
@@ -469,6 +473,9 @@ export interface DispatchJob {
   /** Failed once: waiting for the buyer to choose a new time or a pickup location. */
   awaitingBuyer: boolean
   redeliverAt: string | null
+  /** The buyer's delivery window, if they chose one. */
+  windowStart: string | null
+  windowEnd: string | null
   /** Who has it, with a number admins can call. */
   rider: { id: string; name: string; phone: string | null } | null
 }
@@ -810,6 +817,8 @@ export interface CheckoutInput extends CheckoutDetails {
   expectedTotalKobo?: Kobo
   /** A store's discount code (discounts.ts). */
   code?: string
+  /** A delivery window (deliveryWindows.ts). None: as soon as it's ready. Delivery only. */
+  window?: DeliveryWindow | null
 }
 
 export interface ListingFilter {
