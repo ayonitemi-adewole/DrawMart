@@ -22,6 +22,7 @@ import { firstName } from '@/domain/deliveryChat'
 import { ReturnJobList } from './ReturnJobs'
 import { RouteStops, TripList } from './Trips'
 import { RiderStatsCard } from './RiderStats'
+import { WaitingForSignal } from '@/components/Offline'
 import { ReportProblem } from './ReportProblem'
 import { directionsUrl } from '@/domain/location'
 import { matchesProductSearch } from '@/domain/productCode'
@@ -364,6 +365,10 @@ function PinForm({ job: j }: { job: DeliveryJob }) {
           <Button type="submit" size="lg" className="w-full" loading={confirm.isPending}>
             <CheckCircleIcon size={18} /> Confirm {j.fulfilment === 'pickup' ? 'collection' : 'delivery'}
           </Button>
+          {/* offlineJobs.ts: never shown as delivered until the server has checked the PIN. */}
+          <WaitingForSignal paused={confirm.isPaused}>
+            The PIN can only be checked online, so it isn’t {j.fulfilment === 'pickup' ? 'handed in' : 'delivered'} yet. Stay with the buyer and keep DrawMart open: it checks the PIN as soon as there’s signal.
+          </WaitingForSignal>
         </form>
       )}
     </Card>
@@ -587,6 +592,7 @@ function RefuseAtDoor({ job: j }: { job: DeliveryJob }) {
               Refuse it
             </Button>
           </div>
+          <WaitingForSignal paused={refuse.isPaused}>The buyer’s PIN can only be checked online. Stay with the buyer and keep DrawMart open: it sends as soon as there’s signal.</WaitingForSignal>
         </form>
       </Sheet>
     </>

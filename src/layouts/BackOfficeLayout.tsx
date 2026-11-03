@@ -1,3 +1,5 @@
+import { useEffect } from 'react'
+import { keepAppForOffline } from '@/lib/appShell'
 import { NavLink, Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router'
 import { canDo } from '@/domain/team'
 import { api } from '@/api'
@@ -9,6 +11,7 @@ import { ThemeToggle } from '@/components/ThemeToggle'
 import { cx } from '@/components/ui'
 import { APP_HOME } from '@/lib/apps'
 import { Logo, TestModeBanner } from './BuyerLayout'
+import { OfflineBanner } from '@/components/Offline'
 
 type BackOfficeApp = 'store' | 'admin' | 'delivery'
 
@@ -27,6 +30,10 @@ interface NavItem {
 
 /** Desktop-first shell shared by the store, admin and delivery apps. Each only links to its own pages. */
 export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
+  // Riders' saved jobs open without signal only if the app itself is on the phone.
+  useEffect(() => {
+    if (app === 'delivery') keepAppForOffline()
+  }, [app])
   const { pathname } = useLocation()
   const navigate = useNavigate()
   const merchant = useMerchant()
@@ -174,6 +181,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
           </div>
         </aside>
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 lg:px-10 lg:py-10">
+          {app === 'delivery' ? <div className="mb-5"><OfflineBanner /></div> : null}
           <div key={pathname} className="animate-fade-in">
             <Outlet />
           </div>

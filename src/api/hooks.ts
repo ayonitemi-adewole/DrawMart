@@ -1,6 +1,8 @@
 import type { ClaimInput } from './types'
 import type { StoreRole } from '@/domain/team'
 import type { DeliveryRatingReason } from '@/domain/deliveryRatings'
+import { deliveryJobsToKeep, returnJobsToKeep } from '@/domain/offlineJobs'
+import { clearSavedJobs, loadSavedJobs, saveJobs } from '@/lib/offlineJobs'
 import type { IncidentOutcome, IncidentType } from '@/domain/incidents'
 import type { DiscountInput } from '@/domain/discounts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -18,7 +20,7 @@ import { visitorId } from '@/lib/visitor'
 import { pushDeviceState, subscribeThisDevice, unsubscribeThisDevice } from '@/lib/push'
 import type { NotificationPreference } from '@/domain/push'
 import type { SavedAddressInput } from '@/domain/addresses'
-import type { AccountRole, BoostSettings, DispatchJobKind, CheckoutInput, ListingFilter, NewListingInput, NewPickupInput, NewProductInput, PickupItemInput } from './types'
+import type { AccountRole, BoostSettings, DeliveryJob, ReturnJob, DispatchJobKind, CheckoutInput, ListingFilter, NewListingInput, NewPickupInput, NewProductInput, PickupItemInput } from './types'
 
 export const keys = {
   session: ['session'] as const,
@@ -140,7 +142,21 @@ export const useShopPickup = () => useQuery({ queryKey: keys.shopPickup, queryFn
 export const useListingCheckPlan = (enabled: boolean) => useQuery({ queryKey: keys.listingCheckPlan, queryFn: () => api.getListingCheckPlan(), enabled: useHasShop() && enabled, staleTime: Infinity })
 export const useListingCheck = (id: string | null) => useQuery({ queryKey: keys.listingCheck(id ?? ''), queryFn: () => api.getListingCheck(id!), enabled: !!id, staleTime: 5 * 60_000 })
 export const useOpenClaims = () => useQuery({ queryKey: keys.openClaims, queryFn: () => api.listOpenClaims(), enabled: useIs('admin') })
-export const useReturnJobs = () => useQuery({ queryKey: keys.returnJobs, queryFn: () => api.listReturnJobs(), enabled: useIs('delivery'), refetchInterval: 30_000 })
+export function useReturnJobs() {
+  const userId = useSession().data?.userId ?? null
+  return useQuery({
+    queryKey: keys.returnJobs,
+    queryFn: async () => {
+      const jobs = await api.listReturnJobs()
+      if (userId) saveJobs('returns', userId, returnJobsToKeep(jobs))
+      return jobs
+    },
+    initialData: () => loadSavedJobs<ReturnJob>('returns', userId)?.jobs,
+    initialDataUpdatedAt: 0,
+    enabled: useIs('delivery'),
+    refetchInterval: 30_000,
+  })
+}
 /** Cached per band, so typing a price doesn't ask again on every key. */
 export const useDrawPriceStats = (category: Category, band: number | null) =>
   useQuery({ queryKey: keys.drawPriceStats(category, band ?? -1), queryFn: () => api.getDrawPriceStats(category, band!), enabled: useIs('store') && band !== null, staleTime: 10 * 60_000 })
@@ -320,6 +336,8 @@ export function useSignOut() {
         .then((endpoint) => (endpoint ? api.deletePushSubscription(endpoint) : undefined))
         .catch(() => {})
       await api.auth.signOut()
+      // Buyers' addresses and numbers on a rider's jobs don't stay on a shared phone.
+      clearSavedJobs()
     },
     // Don't wait for SessionSync: whatever opens next must already see "signed out".
     onSuccess: () => {
@@ -436,7 +454,23 @@ export function useSetSaved() {
 }
 
 // Delivery accounts. No push channel yet, so the pool polls.
-export const useDeliveryJobs = () => useQuery({ queryKey: keys.deliveryJobs, queryFn: () => api.listDeliveryJobs(), enabled: useIs('delivery'), refetchInterval: 30_000 })
+/** The rider's own unfinished jobs are kept on the phone, so they open without signal (offlineJobs.ts). */
+export function useDeliveryJobs() {
+  const userId = useSession().data?.userId ?? null
+  return useQuery({
+    queryKey: keys.deliveryJobs,
+    queryFn: async () => {
+      const jobs = await api.listDeliveryJobs()
+      if (userId) saveJobs('deliveries', userId, deliveryJobsToKeep(jobs))
+      return jobs
+    },
+    initialData: () => loadSavedJobs<DeliveryJob>('deliveries', userId)?.jobs,
+    // Shown at once, then fetched again as soon as there's signal.
+    initialDataUpdatedAt: 0,
+    enabled: useIs('delivery'),
+    refetchInterval: 30_000,
+  })
+}
 
 /** The pickup location a counter account works at; null for riders. */
 export const useMyCounter = () => useQuery({ queryKey: keys.myCounter, queryFn: () => api.getMyCounter(), enabled: useIs('delivery'), staleTime: 5 * 60_000 })
