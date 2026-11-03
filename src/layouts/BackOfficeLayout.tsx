@@ -12,6 +12,7 @@ import { cx } from '@/components/ui'
 import { APP_HOME } from '@/lib/apps'
 import { Logo, TestModeBanner } from './BuyerLayout'
 import { OfflineBanner } from '@/components/Offline'
+import { LocationSharingBar } from '@/pages/delivery/ShareLocation'
 
 type BackOfficeApp = 'store' | 'admin' | 'delivery'
 
@@ -181,7 +182,12 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
           </div>
         </aside>
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 lg:px-10 lg:py-10">
-          {app === 'delivery' ? <div className="mb-5"><OfflineBanner /></div> : null}
+          {app === 'delivery' ? (
+            <div className="mb-5 flex flex-col gap-3 empty:hidden">
+              <OfflineBanner />
+              <LocationSharingBar />
+            </div>
+          ) : null}
           <div key={pathname} className="animate-fade-in">
             <Outlet />
           </div>

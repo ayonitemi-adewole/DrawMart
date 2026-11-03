@@ -504,6 +504,12 @@ export interface OpenIncident {
   rider: { id: string; name: string; phone: string | null } | null
 }
 
+/** Where the rider bringing an order was, a moment ago (riderLocation.ts). */
+export interface RiderLocation {
+  location: GeoPoint
+  updatedAt: string
+}
+
 /** A rider's own open report on a job. */
 export interface MyIncident {
   id: string
@@ -1255,6 +1261,13 @@ export interface DrawMartApi {
   setRiderTrusted(riderId: string, trusted: boolean): Promise<void>
   /** Every active delivery and return, for admins (dispatch.ts). */
   getDispatchBoard(): Promise<DispatchBoard>
+  /** The rider's choice to share their location on the last leg, kept for later trips (riderLocation.ts). */
+  getLocationSharing(): Promise<boolean>
+  setLocationSharing(on: boolean): Promise<void>
+  /** The phone's position, every 30 seconds on the last leg. False: not sharing now, so stop. */
+  shareLocation(at: GeoPoint): Promise<boolean>
+  /** For the buyer of this order, on the last leg, while it's recent. Null otherwise. */
+  getRiderLocation(orderId: string): Promise<RiderLocation | null>
   /** One tap: the rider reports a problem on a job they have (incidents.ts). Pauses the job and tells admins. Returns the report's id. */
   reportIncident(kind: DispatchJobKind, id: string, type: IncidentType, at: GeoPoint | null): Promise<string>
   /** What can follow: a note, a photo (data URL or path) and where they are. */

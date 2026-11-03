@@ -1599,6 +1599,48 @@ describe('mock api', () => {
     })
   })
 
+  describe('live rider location', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('shows the buyer an opted-in rider on the last leg only, and forgets it after', async () => {
+      const c = { t: Date.parse('2026-11-03T10:00:00+01:00') }
+      const api = make(() => c.t)
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Location lamp', description: '', category: 'Home', priceKobo: k(10_000), stock: 5 })
+      await as(api, 'admin')
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const [order] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await as(api, 'store')
+      await api.sellerConfirmOrder(order.id, '/assets/c.jpg')
+      await api.dispatchOrder(order.id)
+      await as(api, 'rider')
+      await api.takeDelivery(order.id)
+      const here = { lat: 6.5, lng: 3.4 }
+
+      expect(await api.shareLocation(here)).toBe(false) // not opted in
+      await api.setLocationSharing(true)
+      expect(await api.getLocationSharing()).toBe(true)
+      expect(await api.shareLocation(here)).toBe(false) // not collected yet
+      await api.passCollection(order.id, ['/assets/a.jpg'])
+      expect(await api.shareLocation(here)).toBe(true)
+
+      await as(api, 'funke')
+      expect((await api.getRiderLocation(order.id))?.location).toEqual(here)
+      c.t += 6 * 60_000
+      expect(await api.getRiderLocation(order.id)).toBeNull() // gone stale
+
+      await as(api, 'rider')
+      expect(await api.shareLocation(here)).toBe(true)
+      await api.confirmDelivery(order.id, order.deliveryPin!)
+      expect(await api.shareLocation(here)).toBe(false)
+      await as(api, 'funke')
+      expect(await api.getRiderLocation(order.id)).toBeNull()
+    })
+  })
+
   describe('rider and door checks', () => {
     const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
     const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')

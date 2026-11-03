@@ -13,7 +13,7 @@ import { STORE_APPLICATION_ERROR_TEXT, validateStoreApplication } from '@/domain
 import type { RiderEarning } from '@/domain/riderPay'
 import type { DeliveryRating, RiderStats } from '@/domain/deliveryRatings'
 import type { PayoutAccount, PayoutKind, PayoutStatus } from '@/domain/payouts'
-import type { MyIncident, OpenIncident, RiderPerformanceRow, ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews, StoreApplicationView, SupportMessage, SupportThreadSummary, QuickReply, BulkUploadResult, IncomingStoreInvite, StoreActivityEntry, StoreTeam } from './types'
+import type { RiderLocation, MyIncident, OpenIncident, RiderPerformanceRow, ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews, StoreApplicationView, SupportMessage, SupportThreadSummary, QuickReply, BulkUploadResult, IncomingStoreInvite, StoreActivityEntry, StoreTeam } from './types'
 import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js'
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
@@ -1547,6 +1547,10 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     setRiderFleet: (riderId, fleetId) => rpc('set_rider_fleet', { p_rider: riderId, p_fleet: fleetId }),
     setRiderTrusted: (riderId, trusted) => rpc('set_rider_trusted', { p_rider: riderId, p_trusted: trusted }),
     getDispatchBoard: () => rpc<DispatchBoard>('dispatch_board'),
+    getLocationSharing: () => rpc<boolean>('my_location_sharing'),
+    setLocationSharing: (on) => rpc('set_location_sharing', { p_on: on }),
+    shareLocation: (at) => rpc<boolean>('share_location', { p_lat: at.lat, p_lng: at.lng }),
+    getRiderLocation: (orderId) => rpc<RiderLocation | null>('rider_location', { p_order_id: orderId }),
     reportIncident: (kind, id, type, at) => rpc<string>('report_incident', { p_kind: kind, p_id: id, p_type: type, p_lat: at?.lat ?? null, p_lng: at?.lng ?? null }),
     addIncidentDetails: async (incidentId, d) => {
       const photo = d.photo ? (await uploadPhotos(`riders/${await requireId()}`, [d.photo]))[0] : null

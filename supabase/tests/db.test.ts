@@ -2603,7 +2603,11 @@ describe('cart and checkout', () => {
       const big = await newProduct('Fee sofa', 400_000, 'Home')
       await add(b, small)
       await add(b, big)
-      const [one, two] = await checkout(b, details([small, big]))
+      const ids = await checkout(b, details([small, big]))
+      // Orders come back in listing-id order, which is random: pick each by its listing.
+      const byListing = async (listing: string) => (await admin<{ id: string }>(`select id from public.orders where id = any($1) and listing_id = $2`, [ids, listing]))[0].id
+      const one = await byListing(small)
+      const two = await byListing(big)
       for (const id of [one, two]) await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
       const held = async () => (await admin<{ n: number }>(`select private.rider_jobs_held($1) n`, [carrier]))[0].n
       const riderOf = async (id: string) => (await admin<{ rider_id: string | null }>(`select rider_id from public.orders where id = $1`, [id]))[0].rider_id
@@ -2649,6 +2653,48 @@ describe('cart and checkout', () => {
       const [{ expected }] = await admin<{ expected: string }>(
         `select private.rider_pay(m.delivery_area, private.buyer_area(o), 'large') expected from public.orders o join public.merchants m on m.id = o.merchant_id where o.id = $1`, [one])
       expect(pay[0].amount_kobo).toBe(expected)
+    }, 60_000)
+
+    it('shows the buyer where an opted-in rider is on the last leg only, and forgets it after', async () => {
+      const carrier = await newUser('location-rider@example.com', { role: 'delivery' })
+      const b = await newUser('location-buyer@example.com')
+      const nosy = await newUser('location-nosy@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const item = await newProduct('Location lamp')
+      await add(b, item)
+      const [id] = await checkout(b, details([item]))
+      await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+      await asUser(store, `select public.dispatch_order($1)`, [id])
+      await asUser(carrier, `select public.take_delivery($1)`, [id])
+      const share = async () => (await asUser<{ ok: boolean }>(carrier, `select public.share_location(6.5, 3.4) ok`))[0].ok
+      const seen = async (who: string) => (await asUser<{ l: { location: { lat: number; lng: number } } | null }>(who, `select public.rider_location($1) l`, [id]))[0].l
+      const kept = async () => admin(`select 1 from private.rider_positions where rider_id = $1`, [carrier])
+
+      // Not without opting in, and not before collecting.
+      expect(await share()).toBe(false)
+      await asUser(carrier, `select public.set_location_sharing(true)`)
+      expect((await asUser<{ sharing: boolean }>(carrier, `select public.my_location_sharing() sharing`))[0].sharing).toBe(true)
+      expect(await share()).toBe(false)
+      await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+      expect(await share()).toBe(true)
+
+      // Only this order's buyer sees it, only while it's fresh, and nobody reads the table.
+      expect((await seen(b))?.location).toEqual({ lat: 6.5, lng: 3.4 })
+      expect(await seen(nosy)).toBeNull()
+      await expect(asUser(carrier, `select * from private.rider_positions`)).rejects.toThrow(/permission denied/)
+      await admin(`update private.rider_positions set updated_at = now() - interval '6 minutes'`)
+      expect(await seen(b)).toBeNull()
+
+      // Stopping forgets it; so does delivering.
+      await asUser(carrier, `select public.set_location_sharing(false)`)
+      expect(await kept()).toHaveLength(0)
+      await asUser(carrier, `select public.set_location_sharing(true)`)
+      expect(await share()).toBe(true)
+      const pins = await pinsOf(b)
+      await tryPin(carrier, id, pins[id])
+      expect(await kept()).toHaveLength(0)
+      expect(await share()).toBe(false)
+      await expectFail(asUser(b, `select public.share_location(6.5, 3.4)`), 'forbidden')
     }, 60_000)
 
     it('lets a rider report an incident in one tap, pauses the job and spares the seller', async () => {

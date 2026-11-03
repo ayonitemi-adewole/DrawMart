@@ -69,6 +69,7 @@ import {
 import { checkPin, isDeliveryPin, newDeliveryPin, type PinState } from '@/domain/delivery'
 import { COLLECT_WARNING_MINUTES, MAX_RIDER_JOBS, collectBy, collectionOverdue, takeJobError } from '@/domain/riderLimits'
 import { DEFAULT_STUCK_LIMITS, assignJobError, claimStage, dispatchStuck, orderStage } from '@/domain/dispatch'
+import { locationFresh, positionError } from '@/domain/riderLocation'
 import { incidentNoteError, resolveIncidentError, sellerStillPaid, type IncidentOutcome, type IncidentType } from '@/domain/incidents'
 import { STATS_DAYS, canRateDelivery, ratingError, riderPerformance, riderStats, type DeliveryRating, type TimedJob } from '@/domain/deliveryRatings'
 import { canTakeYet, takeTooSoonError, windowError, windowOpens, windowTimes } from '@/domain/deliveryWindows'
@@ -105,6 +106,7 @@ import {
   type DispatchJob,
   type RiderPerformanceRow,
   type OpenIncident,
+  type RiderLocation,
   type RiderApplicationView,
   type RiderFleet,
   type NotificationView,
@@ -217,6 +219,9 @@ interface Db {
   deliveryRatings: Record<string, DeliveryRating & { riderId: string; buyerId: string }>
   /** incidents.ts. */
   incidents: MockIncident[]
+  /** riderLocation.ts: who has opted in, and each one's latest point only. */
+  riderSharing: Record<string, boolean>
+  riderPositions: Record<string, { location: GeoPoint; updatedAt: string }>
   riderFleets: RiderFleet[]
   riderTrust: Record<string, { fleetId: string | null; trusted: boolean }>
   /** Buyer accounts an approved application turned into a store's: user id → store id. */
@@ -710,6 +715,8 @@ async function freshDb(): Promise<Db> {
     riderAccounts: {},
     deliveryRatings: {},
     incidents: [],
+    riderSharing: {},
+    riderPositions: {},
     riderFleets: [],
     // The demo rider has a track record, so demos can carry anything.
     riderTrust: { 'u-rider': { fleetId: null, trusted: true } },
@@ -1147,6 +1154,11 @@ function syncPayouts(db: Db, now: number) {
   }
 }
 
+/** private.forget_rider_position: never kept once a rider is carrying nothing to a buyer's door. */
+function forgetRiderPositions(db: Db) {
+  for (const riderId of Object.keys(db.riderPositions ?? {})) if (!db.orders.some((o) => o.riderId === riderId && chatOpen(o))) delete db.riderPositions[riderId]
+}
+
 /** A shared pickup's one fee follows all its draws (listing.ts settlePickupFee). */
 function settlePickups(db: Db) {
   const batches = new Map<string, Listing[]>()
@@ -1413,6 +1425,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       applyPendingLimits(db, t)
       await runDueDraws(db, t)
       settlePickups(db)
+      forgetRiderPositions(db)
       syncPayouts(db, now()) // time alone can make a payout due
       const actor = teamMember(db)
       const before = actor ? storeSnapshot(db, actor.merchantId) : null
@@ -2284,6 +2297,35 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         return riderIds(db)
           .map((id) => ({ id, name: riderName(db, id), photo: db.riderPhotos[id] ?? null, fleetId: db.riderTrust[id]?.fleetId ?? null, trusted: !!db.riderTrust[id]?.trusted, completed: riderCompleted(db, id), holding: riderJobsHeld(db, id), joinedAt: db.riderApplications[id]?.reviewedAt ?? '2026-10-01T00:00:00.000Z' }))
           .sort((a, b) => a.name.localeCompare(b.name))
+      }),
+
+    getLocationSharing: () => tx((db) => !!db.riderSharing[rider()]),
+
+    setLocationSharing: (on) =>
+      tx((db) => {
+        const me = rider()
+        db.riderSharing[me] = on
+        if (!on) delete db.riderPositions[me]
+      }),
+
+    shareLocation: (at) =>
+      tx((db) => {
+        const me = rider()
+        const problem = positionError(at)
+        if (problem) throw new ApiError('invalid_input', problem)
+        if (!db.riderSharing[me] || !db.orders.some((o) => o.riderId === me && chatOpen(o))) {
+          delete db.riderPositions[me]
+          return false
+        }
+        db.riderPositions[me] = { location: at, updatedAt: iso(now()) }
+        return true
+      }),
+
+    getRiderLocation: (orderId) =>
+      tx((db): RiderLocation | null => {
+        const o = db.orders.find((x) => x.id === orderId && x.buyerId === buyer())
+        const p = o?.riderId && chatOpen(o) ? db.riderPositions[o.riderId] : undefined
+        return p && locationFresh(p.updatedAt, now()) ? p : null
       }),
 
     reportIncident: (kind, id, type, at) =>

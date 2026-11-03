@@ -2,6 +2,7 @@ import type { ClaimInput } from './types'
 import type { StoreRole } from '@/domain/team'
 import type { DeliveryRatingReason } from '@/domain/deliveryRatings'
 import { deliveryJobsToKeep, returnJobsToKeep } from '@/domain/offlineJobs'
+import { SHARE_EVERY_SECONDS } from '@/domain/riderLocation'
 import { clearSavedJobs, loadSavedJobs, saveJobs } from '@/lib/offlineJobs'
 import type { IncidentOutcome, IncidentType } from '@/domain/incidents'
 import type { DiscountInput } from '@/domain/discounts'
@@ -64,6 +65,8 @@ export const keys = {
   dispatchBoard: ['dispatch-board'] as const,
   myRiderStats: ['my-rider-stats'] as const,
   myOpenIncidents: ['my-open-incidents'] as const,
+  locationSharing: ['location-sharing'] as const,
+  riderLocation: (orderId: string) => ['rider-location', orderId] as const,
   openIncidents: ['open-incidents'] as const,
   riderPerformance: ['rider-performance'] as const,
   riderLevel: ['rider-level'] as const,
@@ -509,6 +512,16 @@ export const useRiderApplications = () => useQuery({ queryKey: keys.riderApplica
 export const useRiderFleets = () => useQuery({ queryKey: keys.riderFleets, queryFn: () => api.listRiderFleets(), enabled: useIs('admin') })
 export const useAdminRiders = () => useQuery({ queryKey: keys.adminRiders, queryFn: () => api.listRiders(), enabled: useIs('admin') })
 /** Riders move jobs on their own, so it keeps itself fresh. */
+export const useLocationSharing = () => useQuery({ queryKey: keys.locationSharing, queryFn: () => api.getLocationSharing(), enabled: useIs('delivery') })
+export function useSetLocationSharing() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (on: boolean) => api.setLocationSharing(on), onSettled: () => qc.invalidateQueries({ queryKey: keys.locationSharing }) })
+}
+/** The phone's position, sent every 30 seconds on the last leg. */
+export const useShareLocation = () => useMutation({ mutationFn: (at: GeoPoint) => api.shareLocation(at) })
+/** Where the rider is, for the buyer, while they're on their way (riderLocation.ts). */
+export const useRiderLocation = (orderId: string, enabled: boolean) =>
+  useQuery({ queryKey: keys.riderLocation(orderId), queryFn: () => api.getRiderLocation(orderId), enabled: useIs('buyer') && enabled, refetchInterval: SHARE_EVERY_SECONDS * 1000 })
 export const useMyOpenIncidents = () => useQuery({ queryKey: keys.myOpenIncidents, queryFn: () => api.getMyOpenIncidents(), enabled: useIs('delivery') })
 /** Someone may be in trouble, so admins see new reports without reloading. */
 export const useOpenIncidents = () => useQuery({ queryKey: keys.openIncidents, queryFn: () => api.listOpenIncidents(), enabled: useIs('admin'), refetchInterval: 30_000 })

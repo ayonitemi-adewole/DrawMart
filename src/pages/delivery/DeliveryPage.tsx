@@ -24,6 +24,8 @@ import { RouteStops, TripList } from './Trips'
 import { RiderStatsCard } from './RiderStats'
 import { WaitingForSignal } from '@/components/Offline'
 import { ReportProblem } from './ReportProblem'
+import { ShareLocationPrompt } from './ShareLocation'
+import { carryingToBuyer } from '@/domain/riderLocation'
 import { directionsUrl } from '@/domain/location'
 import { matchesProductSearch } from '@/domain/productCode'
 import { takeJobError } from '@/domain/riderLimits'
@@ -275,6 +277,7 @@ function JobDetails({ job: j }: { job: DeliveryJob }) {
         </Notice>
       ) : j.collected ? (
         <>
+          {carryingToBuyer(j) ? <ShareLocationPrompt /> : null}
           <PinForm job={j} />
           <NotHome job={j} />
           <RefuseAtDoor job={j} />
