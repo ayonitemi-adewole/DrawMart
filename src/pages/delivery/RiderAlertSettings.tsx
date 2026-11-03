@@ -10,7 +10,7 @@ import { RIDER_JOB_ALERTS_PER_HOUR } from '@/domain/riderAlerts'
 
 const [NEW_JOBS, RETURNS, YOUR_JOBS] = RIDER_PUSH_CATEGORIES
 
-/** On a rider's notifications page: which jobs to hear about, and where. */
+/** In a rider's notifications settings (gear button): which jobs to hear about, and where. */
 export function RiderAlertSettings() {
   const prefs = usePushPreferences()
   const setPreference = useSetPushPreference()

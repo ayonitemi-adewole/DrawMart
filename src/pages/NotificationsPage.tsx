@@ -1,10 +1,11 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { useAccess, useMarkNotificationsRead, useNotifications } from '@/api/hooks'
 import type { NotificationView } from '@/api/types'
-import { AlertIcon, BellIcon, CalendarIcon, ChatIcon, CheckIcon, ClockIcon, HeartIcon, LockIcon, NairaIcon, StarIcon, StoreIcon, TicketIcon, TrophyIcon, TruckIcon, XIcon, type IconComponent } from '@/components/icons'
+import { AlertIcon, BellIcon, CalendarIcon, ChatIcon, CheckIcon, ClockIcon, HeartIcon, LockIcon, NairaIcon, SettingsIcon, StarIcon, StoreIcon, TicketIcon, TrophyIcon, TruckIcon, XIcon, type IconComponent } from '@/components/icons'
 import { DrawRevealToggle, PushToggle, StorePushSettings } from '@/components/PushSettings'
-import { Card, EmptyState, ErrorState, PageTitle, Skeleton, cx } from '@/components/ui'
+import { Sheet } from '@/components/Sheet'
+import { Card, EmptyState, ErrorState, IconButton, PageTitle, Skeleton, cx } from '@/components/ui'
 import { handoverMethodFor } from '@/domain/listing'
 import { areaName } from '@/domain/riderAlerts'
 import { RiderAlertSettings } from './delivery/RiderAlertSettings'
@@ -142,6 +143,8 @@ export function NotificationsPage() {
   const markRead = useMarkNotificationsRead()
   const unread = q.data?.some((n) => !n.read) ?? false
   const marked = useRef(false)
+  // Settings stay out of the way until asked for: the page is the notifications.
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   useEffect(() => {
     if (!unread || marked.current) return
@@ -151,19 +154,30 @@ export function NotificationsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <PageTitle eyebrow="Notifications" sub={rider ? 'New jobs and returns, and reminders about the jobs you’ve taken.' : store ? 'New orders, listing reviews, draws, pickups and messages.' : 'Updates on the draws you’re in and the items you’ve saved.'}>
-        What’s new
-      </PageTitle>
-      {rider ? (
-        <RiderAlertSettings />
-      ) : store ? (
-        <StorePushSettings />
-      ) : (
-        <>
-          <PushToggle />
-          <DrawRevealToggle />
-        </>
-      )}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <PageTitle eyebrow="Notifications" sub={rider ? 'New jobs and returns, and reminders about the jobs you’ve taken.' : store ? 'New orders, listing reviews, draws, pickups and messages.' : 'Updates on the draws you’re in and the items you’ve saved.'}>
+            What’s new
+          </PageTitle>
+        </div>
+        <IconButton aria-label="Notification settings" title="Notification settings" aria-haspopup="dialog" onClick={() => setSettingsOpen(true)}>
+          <SettingsIcon />
+        </IconButton>
+      </div>
+      <Sheet open={settingsOpen} onClose={() => setSettingsOpen(false)} title="Notification settings">
+        <div className="flex flex-col gap-4">
+          {rider ? (
+            <RiderAlertSettings />
+          ) : store ? (
+            <StorePushSettings />
+          ) : (
+            <>
+              <PushToggle />
+              <DrawRevealToggle />
+            </>
+          )}
+        </div>
+      </Sheet>
       {q.isPending ? (
         <Skeleton className="h-60" />
       ) : q.isError ? (

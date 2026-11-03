@@ -92,7 +92,7 @@ export function SavedAlertsToggle() {
   )
 }
 
-/** On the notifications page: the short reveal when a draw you're in has a result. */
+/** In the notifications page's settings (gear button): the short reveal when a draw you're in has a result. */
 export function DrawRevealToggle() {
   const prefs = usePushPreferences()
   const set = useSetPushPreference()
@@ -119,7 +119,7 @@ export function DrawRevealToggle() {
   )
 }
 
-/** On the notifications page: one switch for this device. Which kinds to get stays in Account. */
+/** In the notifications page's settings (gear button): one switch for this device. Which kinds to get stays in Account. */
 export function PushToggle() {
   const state = usePushDeviceState()
   const disable = useDisablePush()
@@ -167,7 +167,7 @@ export function PushToggle() {
   )
 }
 
-/** On a store's notifications page, since stores have no Account page. */
+/** In a store's notifications settings (gear button), since stores have no Account page. */
 export function StorePushSettings() {
   return api.pushPublicKey ? <PushSettings categories={STORE_PUSH_CATEGORIES} /> : <PushToggle />
 }

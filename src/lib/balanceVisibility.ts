@@ -3,7 +3,7 @@ import { formatNaira } from '@/domain/money'
 import type { Kobo } from '@/domain/types'
 
 const KEY = 'drawmart:balance-hidden'
-export const HIDDEN_BALANCE = '₦ ••••••'
+export const HIDDEN_BALANCE = '₦ ••••'
 
 function read(): boolean {
   try {

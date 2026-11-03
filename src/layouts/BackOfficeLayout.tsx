@@ -150,7 +150,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
                 })
               }
             />
-            <nav className="hidden flex-col items-stretch gap-1 lg:flex" aria-label={APP_NAME[app].label}>
+            <nav className="hidden flex-col items-stretch gap-1 lg:flex h-full overflow-y-scroll scrollbar-thumb-brand scrollbar-thin" aria-label={APP_NAME[app].label}>
               {nav.map((n) => (
                 <NavLink
                   key={n.to}
@@ -169,11 +169,11 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
                 </NavLink>
               ))}
             </nav>
-            <div className="mt-auto hidden flex-col gap-3 lg:flex">
+            <div className="mt-auto hidden flex-col gap-3 lg:flex border-t border-line pt-3">
               {shopCard}
               <button
                 onClick={() => signOut.mutate(undefined, { onSuccess: () => navigate('/login') })}
-                className="flex min-h-11 items-center justify-between gap-2 rounded-xl px-3 text-left text-sm font-bold text-muted hover:bg-sunken hover:text-ink"
+                className="flex min-h-11 items-center justify-between gap-2 rounded-xl px-3 text-left text-sm font-bold bg-red-600 text-on-brand hover:bg-hot hover:text-white transition-all duration-300 cursor-pointer"
               >
                 <span className="min-w-0 truncate">Sign out{access.email ? <span className="font-normal"> · {access.email}</span> : null}</span>
                 <LogOutIcon size={16} className="shrink-0" />
