@@ -12,7 +12,7 @@ import { canSaveListing } from '@/domain/saved'
 import { crossedAlmostSold, isClosingSoon, isRelistOf, relistAlertKind, sameLagosDay, savedAlertAllowed, type SavedAlertKind } from '@/domain/savedAlerts'
 import { DEFAULT_PUSH_PREFERENCES, pushSubscriptionValid, type PushPreferences, type PushSubscriptionKeys } from '@/domain/push'
 import { WINNER_CONSENT_VERSION, WINNER_STORY_ERROR_TEXT, winnerStoryError } from '@/domain/winnerStories'
-import { commitmentFor, createSeed, randomHex, winningTicketNumber, announcementDate } from '@/domain/draw'
+import { commitmentFor, createSeed, pickTicketNumbers, randomHex, winningTicketNumber, announcementDate } from '@/domain/draw'
 import { LISTING_ERROR_TEXT, computeListingEconomics, platformFeeBps, validateListingEconomics } from '@/domain/fees'
 import {
   HANDOVER_ERROR_TEXT,
@@ -637,12 +637,18 @@ async function makeListing(s: SeedListing, now: number, seeds: Record<string, st
   }
 }
 
+/** Random free numbers for a purchase (pickTicketNumbers), recorded as sold. */
+function issueTickets(db: Db, listing: Listing, userId: string, quantity: number, purchaseId: string, at: string): number[] {
+  const taken = db.tickets.filter((t) => t.listingId === listing.id).map((t) => t.number)
+  const numbers = pickTicketNumbers(listing.ticketCount, taken, quantity)
+  for (const number of numbers) db.tickets.push({ id: uid('T'), listingId: listing.id, userId, number, purchaseId, purchasedAt: at })
+  listing.ticketsSold += quantity
+  return numbers
+}
+
 function crowdBuys(db: Db, listing: Listing, quantity: number, at: string): string {
   const purchaseId = `P-${randomHex(3).toUpperCase()}`
-  for (let i = 0; i < quantity; i++) {
-    listing.ticketsSold += 1
-    db.tickets.push({ id: uid('T'), listingId: listing.id, userId: CROWD, number: listing.ticketsSold, purchaseId, purchasedAt: at })
-  }
+  issueTickets(db, listing, CROWD, quantity, purchaseId, at)
   return purchaseId
 }
 
@@ -1186,7 +1192,7 @@ function applyPendingLimits(db: Db, now: number): boolean {
 function resultView(db: Db, r: DrawResult): DrawResultView {
   const me = db.viewer ?? ME
   const l = db.listings.find((x) => x.id === r.listingId)!
-  const myNumbers = db.tickets.filter((t) => t.listingId === l.id && t.userId === me).map((t) => t.number)
+  const myNumbers = db.tickets.filter((t) => t.listingId === l.id && t.userId === me).map((t) => t.number).sort((x, y) => x - y)
   const myCreditKobo = db.ledger.filter((e) => e.userId === me && e.kind === 'store_credit' && e.listingId === l.id).reduce((s, e) => s + e.creditKobo, 0)
   return { ...r, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, ticketCount: l.ticketCount, iWon: r.winnerUserId === me, myNumbers, myCreditKobo }
 }
@@ -1213,7 +1219,7 @@ const publicMerchant = (m: Merchant): Merchant => ({ ...m, cacNumber: m.showCac 
 
 function listingView(db: Db, l: Listing, audience: 'buyer' | 'full' = 'buyer'): ListingView {
   const merchant = db.merchants.find((m) => m.id === l.merchantId)!
-  const myNumbers = db.tickets.filter((t) => t.listingId === l.id && t.userId === (db.viewer ?? ME)).map((t) => t.number)
+  const myNumbers = db.tickets.filter((t) => t.listingId === l.id && t.userId === (db.viewer ?? ME)).map((t) => t.number).sort((x, y) => x - y)
   const r = db.results.find((x) => x.listingId === l.id)
   return { ...l, sale: listingSale(db, l), merchant: publicMerchant(merchant), handover: audience === 'full' ? l.handover : null, rejection: audience === 'full' ? l.rejection : null, pendingPriceKobo: audience === 'full' ? (db.priceReviews.find((r) => r.listingId === l.id)?.newPriceKobo ?? null) : null, myNumbers, result: r ? resultView(db, r) : null }
 }
@@ -1855,13 +1861,8 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const { fromCash, fromCredit } = splitPayment(costKobo, balance)
         const purchaseId = `P-${randomHex(3).toUpperCase()}`
         const at = iso(now())
-        const numbers: number[] = []
         const soldBefore = listing.ticketsSold
-        for (let i = 0; i < quantity; i++) {
-          listing.ticketsSold += 1
-          numbers.push(listing.ticketsSold)
-          db.tickets.push({ id: uid('T'), listingId, userId: buyer(), number: listing.ticketsSold, purchaseId, purchasedAt: at })
-        }
+        const numbers = issueTickets(db, listing, buyer(), quantity, purchaseId, at)
         db.ledger.push({
           id: uid('E'), userId: buyer(), kind: 'ticket_purchase', cashKobo: -fromCash, creditKobo: -fromCredit,
           memo: `${quantity} ${quantity === 1 ? 'ticket' : 'tickets'} · ${listing.title}`, listingId, createdAt: at,

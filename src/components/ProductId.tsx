@@ -22,7 +22,7 @@ export function ProductSearch({ value, onChange, id = 'product-search', placehol
         {placeholder}
       </label>
       <SearchIcon size={18} className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-subtle" />
-      <input id={id} type="search" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} autoComplete="off" autoFocus={autoFocus} className={cx(inputCls, 'min-h-11 pl-10')} />
+      <input id={id} type="search" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} autoComplete="off" enterKeyHint="search" autoFocus={autoFocus} className={cx(inputCls, 'min-h-11 pl-10')} />
     </div>
   )
 }

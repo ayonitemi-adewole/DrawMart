@@ -53,6 +53,35 @@ export async function winningTicketNumber(seed: string, closingRef: string, tick
   return Number(BigInt('0x' + h) % BigInt(ticketCount)) + 1
 }
 
+/** A whole number from 0 to below `n`, from the browser's secure random source. */
+export function secureRandomInt(n: number): number {
+  // Drop the top values that would make some answers likelier than others.
+  const limit = Math.floor(0x1_0000_0000 / n) * n
+  const buf = new Uint32Array(1)
+  do globalThis.crypto.getRandomValues(buf)
+  while (buf[0] >= limit)
+  return buf[0] % n
+}
+
+/**
+ * The numbers a purchase gets: picked at random from those still free, so the
+ * first buyer doesn't get ticket 1 or the 13th ticket 13. They don't change who
+ * wins (that's the seed and the closing ref), only which numbers people hold.
+ * Sorted, for showing. ↔ private.pick_ticket_numbers
+ */
+export function pickTicketNumbers(ticketCount: number, taken: Iterable<number>, quantity: number, randomInt: (n: number) => number = secureRandomInt): number[] {
+  const used = new Set(taken)
+  const free: number[] = []
+  for (let n = 1; n <= ticketCount; n++) if (!used.has(n)) free.push(n)
+  if (!Number.isInteger(quantity) || quantity < 0 || quantity > free.length) throw new Error('Not enough tickets left')
+  // A partial Fisher–Yates shuffle: the first `quantity` places end up a fair random pick.
+  for (let i = 0; i < quantity; i++) {
+    const j = i + randomInt(free.length - i)
+    ;[free[i], free[j]] = [free[j], free[i]]
+  }
+  return free.slice(0, quantity).sort((a, b) => a - b)
+}
+
 export interface VerifyInput {
   commitment: string
   seed: string

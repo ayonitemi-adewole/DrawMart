@@ -4,10 +4,12 @@ import type { DeliveryRatingReason } from '@/domain/deliveryRatings'
 import { deliveryJobsToKeep, returnJobsToKeep } from '@/domain/offlineJobs'
 import { SHARE_EVERY_SECONDS } from '@/domain/riderLocation'
 import { clearSavedJobs, loadSavedJobs, saveJobs } from '@/lib/offlineJobs'
+import { clearFeedHistory, recentSearches, recentViews } from '@/lib/feedHistory'
+import { tasteFrom, type FeedItem, type Taste } from '@/domain/feed'
 import type { IncidentOutcome, IncidentType } from '@/domain/incidents'
 import type { DiscountInput } from '@/domain/discounts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ShopPickup } from '@/domain/shopPickup'
 import type { ShopProfileInput } from '@/domain/shopProfile'
 import type { ReviewInput } from '@/domain/reviews'
@@ -327,6 +329,25 @@ export function useRecordListingView(listingId: string | undefined) {
   }, [listingId])
 }
 
+/**
+ * What the explore feed goes on (domain/feed.ts): the buyer's own tickets, orders
+ * and saves, and this device's searches and views. Read once per visit to the page.
+ */
+export function useFeedTaste(): Taste {
+  const held = useMyListings()
+  const orders = useMyOrders()
+  const saved = useSavedListings()
+  const [local] = useState(() => ({ searches: recentSearches(), viewed: recentViews() }))
+  return useMemo(() => {
+    const fromListing = (l: { id: string; category: Category; merchantId: string }): FeedItem => ({ listingId: l.id, category: l.category, merchantId: l.merchantId })
+    const bought = [
+      ...(held.data ?? []).filter((l) => l.myNumbers.length > 0).map(fromListing),
+      ...(orders.data ?? []).map((o) => ({ listingId: o.listingId, category: o.category, merchantId: o.merchantId })),
+    ]
+    return tasteFrom({ bought, saved: (saved.data ?? []).map(fromListing), ...local })
+  }, [held.data, orders.data, saved.data, local])
+}
+
 // Auth. SessionSync (App.tsx) clears the cache when the account changes.
 export const useSendSignInLink = () => useMutation({ mutationFn: ({ email, redirectTo }: { email: string; redirectTo: string }) => api.auth.sendSignInLink(email, redirectTo) })
 export const usePasswordSignIn = () => useMutation({ mutationFn: ({ email, password }: { email: string; password: string }) => api.auth.signInWithPassword(email, password) })
@@ -341,6 +362,8 @@ export function useSignOut() {
       await api.auth.signOut()
       // Buyers' addresses and numbers on a rider's jobs don't stay on a shared phone.
       clearSavedJobs()
+      // Nor what they searched for and looked at (the explore feed).
+      clearFeedHistory()
     },
     // Don't wait for SessionSync: whatever opens next must already see "signed out".
     onSuccess: () => {

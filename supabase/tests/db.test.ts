@@ -287,7 +287,13 @@ describe('buy_tickets', () => {
   it('sells numbered tickets and charges the wallet, credit first', async () => {
     await admin(`insert into public.ledger_entries (user_id, kind, credit_kobo, memo) values ($1, 'store_credit', 200000, 'test credit')`, [buyer])
     const [{ r }] = await asUser<{ r: { numbers: number[]; costKobo: number; soldOut: boolean } }>(buyer, `select public.buy_tickets($1, 3) r`, [iphone.id])
-    expect(r.numbers).toEqual([iphone.tickets_sold + 1, iphone.tickets_sold + 2, iphone.tickets_sold + 3])
+    // Random free numbers (pickTicketNumbers), not the next three in line.
+    expect(r.numbers).toHaveLength(3)
+    expect(new Set(r.numbers).size).toBe(3)
+    expect([...r.numbers].sort((a, b) => a - b)).toEqual(r.numbers)
+    for (const n of r.numbers) expect(n >= 1 && n <= iphone.ticket_count).toBe(true)
+    const [{ count }] = await admin<{ count: string }>(`select count(*) from public.tickets where listing_id = $1 and number = any ($2::int[])`, [iphone.id, r.numbers])
+    expect(Number(count)).toBe(3) // each number belongs to exactly one ticket
     expect(r.costKobo).toBe(1_500_000)
     expect(r.soldOut).toBe(false)
     expect(await balance(buyer)).toEqual({ cash: String(2_500_000 - 1_300_000), credit: '0' })
@@ -399,6 +405,17 @@ describe('store → admin → draw', () => {
     await asUser(adminUser, `select public.approve_listing($1)`, [listingId])
     await expectFail(asUser(adminUser, `select public.approve_listing($1)`, [listingId]), 'invalid_input')
     expect((await asUser(alice, `select * from public.listings where id = $1`, [listingId])).length).toBe(1)
+  })
+
+  it('sells every number from 1 to the ticket count exactly once', async () => {
+    const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput({ title: 'Every number' })])
+    await asUser(adminUser, `select public.approve_listing($1)`, [id])
+    await admin(`insert into public.tickets (listing_id, user_id, number, purchase_ref) values ($1, null, 3, 'TEST-1')`, [id])
+    await admin(`update public.listings set tickets_sold = 1 where id = $1`, [id])
+    await asUser(adminUser, `select public.demo_sell_out($1)`, [id])
+    const rows = await admin<{ number: number }>(`select number from public.tickets where listing_id = $1 order by number`, [id])
+    const [{ ticket_count }] = await admin<{ ticket_count: number }>(`select ticket_count from public.listings where id = $1`, [id])
+    expect(rows.map((r) => r.number)).toEqual(Array.from({ length: ticket_count }, (_, i) => i + 1))
   })
 
   it('announces the winner later: on the deadline, or 7 days after the last ticket', async () => {

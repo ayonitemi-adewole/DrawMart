@@ -1,13 +1,14 @@
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { Link, useSearchParams } from "react-router";
-import { useSearchParam } from "@/lib/useSearchParam";
+import { useExploreSearch } from "@/lib/useSearchParam";
 import { listingMatchesSearch } from "@/domain/productCode";
-import { useListings, useWinnersWall } from "@/api/hooks";
+import { useFeedTaste, useListings, useWinnersWall } from "@/api/hooks";
 import type { ListingView } from "@/api/types";
 import { AllCategoriesIcon, CATEGORY_STYLE } from "@/components/category";
 import { Countdown } from "@/components/Countdown";
 import { HowItWorksGrid } from "@/components/HowItWorks";
 import { PracticePrompt } from "@/components/PracticePrompt";
+import { WithRecentSearches } from "@/components/RecentSearches";
 import {
   ArrowRightIcon,
   NairaIcon,
@@ -39,10 +40,13 @@ import type { BrowseOptions } from "@/domain/browse";
 import { formatNaira, nairaToKobo } from "@/domain/money";
 import { RULES } from "@/domain/rules";
 import { withSponsoredFirst } from "@/domain/boosts";
+import { categoryOrder, personalFeed, type Taste } from "@/domain/feed";
+import { feedSeed, recordSearch } from "@/lib/feedHistory";
 import { CATEGORIES, type Category } from "@/domain/types";
 
-type Sort = "popular" | "ending" | "cheapest" | "value";
+type Sort = "foryou" | "popular" | "ending" | "cheapest" | "value";
 const SORTS: { value: Sort; label: string }[] = [
+  { value: "foryou", label: "For you" },
   { value: "popular", label: "Selling fast" },
   { value: "ending", label: "Ending soon" },
   { value: "cheapest", label: "Cheapest ticket" },
@@ -56,7 +60,8 @@ const BROWSE_SHORTCUTS: { label: string; options: Partial<BrowseOptions> }[] = [
   { label: "New this week", options: { newThisWeek: true } },
 ];
 
-function sortListings(list: ListingView[], sort: Sort) {
+function sortListings(list: ListingView[], sort: Sort, taste: Taste) {
+  if (sort === "foryou") return personalFeed(list, taste, feedSeed());
   const out = [...list];
   if (sort === "ending")
     out.sort((a, b) => a.closesAt.localeCompare(b.closesAt));
@@ -73,12 +78,17 @@ export function HomePage() {
     ? (raw as Category)
     : undefined;
   const query = params.get("q") ?? "";
-  const search = useSearchParam();
+  const search = useExploreSearch();
   const sort = (
     SORTS.some((s) => s.value === params.get("sort"))
       ? params.get("sort")
-      : "popular"
+      : "foryou"
   ) as Sort;
+  const taste = useFeedTaste();
+  // What they searched for shapes later visits (domain/feed.ts).
+  useEffect(() => {
+    if (query) recordSearch(query);
+  }, [query]);
 
   const listings = useListings({ category });
   const all = useListings();
@@ -101,18 +111,26 @@ export function HomePage() {
     );
     // Paid boosts sit on top whatever the sort, a few at a time.
     const { sponsored, rest } = withSponsoredFirst(
-      sortListings(filtered, sort),
+      sortListings(filtered, sort, taste),
       Date.now(),
     );
     return [...sponsored, ...rest];
-  }, [listings.data, query, sort]);
+  }, [listings.data, query, sort, taste]);
   const shop = useMemo(() => {
     const { sponsored, rest } = withSponsoredFirst(
-      (forSale.data ?? []).filter((l) => listingMatchesSearch(l, query)),
+      personalFeed(
+        (forSale.data ?? []).filter((l) => listingMatchesSearch(l, query)),
+        taste,
+        feedSeed(),
+      ),
       Date.now(),
     );
     return [...sponsored, ...rest];
-  }, [forSale.data, query]);
+  }, [forSale.data, query, taste]);
+  const categories = useMemo(
+    () => categoryOrder(CATEGORIES, taste, feedSeed()),
+    [taste],
+  );
 
   // A new filter or search changes the page's length, so from further down it
   // would land somewhere random. Start at the results, and also go to them when
@@ -136,11 +154,16 @@ export function HomePage() {
         listings={all.data}
         query={search.text}
         onQuery={search.change}
+        onSubmit={search.submit}
       />
 
       {!category && !query ? <PracticePrompt /> : null}
 
       {!category && !query ? <SponsoredCarousel /> : null}
+
+      {!category && !query && taste.known ? (
+        <ForYou listings={[...visible, ...shop]} taste={taste} />
+      ) : null}
 
       {!category && !query ? <BigPrizes listings={all.data} /> : null}
 
@@ -202,7 +225,7 @@ export function HomePage() {
               onChange={(e) =>
                 update({
                   sort:
-                    e.target.value === "popular" ? undefined : e.target.value,
+                    e.target.value === "foryou" ? undefined : e.target.value,
                 })
               }
               className={cx(
@@ -301,7 +324,7 @@ export function HomePage() {
             />
           </div>
         ) : (
-          <ByCategory listings={visible} type="draws" />
+          <ByCategory listings={visible} type="draws" categories={categories} />
         )}
       </section>
 
@@ -339,7 +362,7 @@ export function HomePage() {
               />
             </div>
           ) : (
-            <ByCategory listings={shop} type="buy" />
+            <ByCategory listings={shop} type="buy" categories={categories} />
           )}
         </section>
       ) : null}
@@ -400,17 +423,19 @@ function WinnersStrip() {
   );
 }
 
-/** One scrolling row per category, in the usual category order. */
+/** One scrolling row per category, the buyer's favourites first (categoryOrder). */
 function ByCategory({
   listings,
   type,
+  categories,
 }: {
   listings: ListingView[];
   type: "draws" | "buy";
+  categories: Category[];
 }) {
   return (
     <div className="flex flex-col gap-8">
-      {CATEGORIES.map((c) => {
+      {categories.map((c) => {
         const items = listings.filter((l) => l.category === c);
         if (!items.length) return null;
         const Icon = CATEGORY_STYLE[c].icon;
@@ -434,6 +459,40 @@ function ByCategory({
         );
       })}
     </div>
+  );
+}
+
+/**
+ * Draws and items picked from what this buyer has bought, saved, viewed and
+ * searched for. Only once there's something to go on; new things before ones
+ * they already have.
+ */
+function ForYou({ listings, taste }: { listings: ListingView[]; taste: Taste }) {
+  const picks = useMemo(
+    () =>
+      personalFeed(
+        listings.filter((l) => !taste.owned.has(l.id)),
+        taste,
+        feedSeed(),
+      ).slice(0, 10),
+    [listings, taste],
+  );
+  if (picks.length < 3) return null;
+  return (
+    <section className="flex flex-col gap-3" aria-labelledby="for-you-heading">
+      <div className="flex flex-col gap-1">
+        <span className="text-xs font-extrabold tracking-[0.14em] text-brand uppercase">
+          Picked for you
+        </span>
+        <h2
+          id="for-you-heading"
+          className="font-display text-2xl font-extrabold tracking-tight"
+        >
+          Based on what you’ve looked at
+        </h2>
+      </div>
+      <ListingRow listings={picks} label="Picked for you" />
+    </section>
   );
 }
 
@@ -525,10 +584,12 @@ function Hero({
   listings,
   query,
   onQuery,
+  onSubmit,
 }: {
   listings?: ListingView[];
   query: string;
   onQuery: (q: string) => void;
+  onSubmit: (term?: string) => void;
 }) {
   const live = listings?.filter((l) => l.status === "live") ?? [];
   const sold = live.reduce((s, l) => s + l.ticketsSold, 0);
@@ -571,24 +632,35 @@ function Hero({
 
           <form
             role="search"
-            onSubmit={(e) => e.preventDefault()}
-            className="relative max-w-md"
+            onSubmit={(e) => {
+              e.preventDefault();
+              onSubmit();
+              // Puts the phone keyboard away so the results can be seen.
+              (document.activeElement as HTMLElement | null)?.blur();
+            }}
+            className="max-w-md"
           >
-            <label htmlFor="search" className="sr-only">
-              Search products
-            </label>
-            <SearchIcon
-              size={20}
-              className="pointer-events-none absolute top-1/2 left-4 -translate-y-1/2 text-subtle"
-            />
-            <input
-              id="search"
-              type="search"
-              value={query}
-              onChange={(e) => onQuery(e.target.value)}
-              placeholder="Search items or a product ID"
-              className="min-h-14 w-full rounded-2xl border-0 bg-surface pr-4 pl-12 text-base text-ink shadow-lift placeholder:text-subtle focus:ring-4 focus:ring-ticket/50 focus:outline-none"
-            />
+            <WithRecentSearches typed={query} onPick={onSubmit} inline>
+              <div className="relative">
+                <label htmlFor="search" className="sr-only">
+                  Search products
+                </label>
+                <SearchIcon
+                  size={20}
+                  className="pointer-events-none absolute top-1/2 left-4 -translate-y-1/2 text-subtle"
+                />
+                <input
+                  id="search"
+                  type="search"
+                  value={query}
+                  onChange={(e) => onQuery(e.target.value)}
+                  enterKeyHint="search"
+                  autoComplete="off"
+                  placeholder="Search items or a product ID"
+                  className="min-h-14 w-full rounded-2xl border-0 bg-surface pr-4 pl-12 text-base text-ink shadow-lift placeholder:text-subtle focus:ring-4 focus:ring-ticket/50 focus:outline-none"
+                />
+              </div>
+            </WithRecentSearches>
           </form>
 
           <ul className="flex flex-wrap gap-x-5 gap-y-2 text-sm font-semibold text-on-brand-muted">

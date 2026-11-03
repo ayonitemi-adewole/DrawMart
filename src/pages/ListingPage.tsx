@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useBalanceText } from "@/lib/balanceVisibility";
+import { recordView } from "@/lib/feedHistory";
 import { SaveButton } from "@/components/SaveButton";
 import { ShareButtons } from "@/components/ShareButtons";
 import { PushPrompt } from "@/components/PushSettings";
@@ -71,6 +72,13 @@ export function ListingPage() {
   const { id = "" } = useParams();
   const listing = useListing(id);
   useRecordListingView(listing.data?.id);
+  // For the buyer's explore feed (domain/feed.ts); stays on this device.
+  const { role } = useAccess();
+  const viewed = listing.data;
+  useEffect(() => {
+    if (viewed && (role === null || role === "buyer"))
+      recordView({ listingId: viewed.id, category: viewed.category, merchantId: viewed.merchantId });
+  }, [viewed, role]);
 
   if (listing.isPending)
     return (

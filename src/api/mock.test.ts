@@ -101,7 +101,11 @@ describe('mock api', () => {
     const api = make()
     const [inverter] = await api.listListings({ category: 'Home' })
     const receipt = await api.buyTickets(inverter.id, 3)
-    expect(receipt.numbers).toEqual([inverter.ticketsSold + 1, inverter.ticketsSold + 2, inverter.ticketsSold + 3])
+    // Random free numbers, not the next three in line.
+    expect(receipt.numbers).toHaveLength(3)
+    expect(new Set(receipt.numbers).size).toBe(3)
+    for (const n of receipt.numbers) expect(n >= 1 && n <= inverter.ticketCount).toBe(true)
+    expect((await api.getListing(inverter.id)).myNumbers).toEqual(receipt.numbers)
     const wallet = await api.getWallet()
     expect(wallet.balance.cashKobo).toBe(k(25_000) - 3 * inverter.buyerTicketPriceKobo)
     expect((await api.getListing(inverter.id)).myNumbers).toHaveLength(3)
@@ -167,7 +171,9 @@ describe('mock api', () => {
     expect(created.handover?.method).toBe('pickup')
     await expect(api.buyTickets(created.id, 1)).rejects.toMatchObject({ code: 'not_live' })
     await api.approveListing(created.id)
-    await expect(api.buyTickets(created.id, 1)).resolves.toMatchObject({ numbers: [1] })
+    const { numbers } = await api.buyTickets(created.id, 1)
+    expect(numbers).toHaveLength(1)
+    expect(numbers[0] >= 1 && numbers[0] <= 120).toBe(true)
   })
 
   it('books an inspection instead of a pickup for cars', async () => {

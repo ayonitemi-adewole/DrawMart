@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { announcementDate } from './draw'
-import { commitmentFor, createSeed, sha256Hex, verifyDraw, winningTicketNumber } from './draw'
+import { commitmentFor, createSeed, pickTicketNumbers, secureRandomInt, sha256Hex, verifyDraw, winningTicketNumber } from './draw'
 
 describe('provably fair draw', () => {
   it('uses real SHA-256', async () => {
@@ -59,3 +59,49 @@ describe('announcementDate', () => {
   })
 })
 
+
+describe('pickTicketNumbers', () => {
+  it('picks distinct free numbers in range, sorted', () => {
+    const taken = [2, 5, 7]
+    for (let i = 0; i < 50; i++) {
+      const picked = pickTicketNumbers(10, taken, 4)
+      expect(picked).toHaveLength(4)
+      expect(new Set(picked).size).toBe(4)
+      expect([...picked].sort((a, b) => a - b)).toEqual(picked)
+      for (const n of picked) {
+        expect(n).toBeGreaterThanOrEqual(1)
+        expect(n).toBeLessThanOrEqual(10)
+        expect(taken).not.toContain(n)
+      }
+    }
+  })
+
+  it('isn’t sequential: the first buyer doesn’t get ticket 1', () => {
+    const firsts = new Set(Array.from({ length: 40 }, () => pickTicketNumbers(1000, [], 1)[0]))
+    expect(firsts.size).toBeGreaterThan(30)
+    expect(pickTicketNumbers(1000, [], 5)).not.toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('fills every number exactly once when selling out', () => {
+    const first = pickTicketNumbers(20, [], 7)
+    const rest = pickTicketNumbers(20, first, 13)
+    expect([...first, ...rest].sort((a, b) => a - b)).toEqual(Array.from({ length: 20 }, (_, i) => i + 1))
+  })
+
+  it('follows the random source it’s given', () => {
+    expect(pickTicketNumbers(5, [], 2, () => 0)).toEqual([1, 2])
+    expect(pickTicketNumbers(5, [1], 1, (n) => n - 1)).toEqual([5])
+  })
+
+  it('refuses more than are left', () => {
+    expect(() => pickTicketNumbers(3, [1, 2], 2)).toThrow()
+  })
+
+  it('secureRandomInt stays in range', () => {
+    for (let i = 0; i < 200; i++) {
+      const n = secureRandomInt(7)
+      expect(n).toBeGreaterThanOrEqual(0)
+      expect(n).toBeLessThan(7)
+    }
+  })
+})

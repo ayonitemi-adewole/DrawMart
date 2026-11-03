@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
+import { isPhoneOrTablet, thisDevice } from '@/lib/device'
 
 /** Long enough to cover a burst of typing, short enough that results feel live. */
 const WAIT_MS = 200
@@ -9,8 +10,12 @@ const WAIT_MS = 200
  * The box holds its own text, because the URL updates too late to be an input's
  * value: fast typing or a pasted ID would lose characters. Going to a new search
  * also starts the list from its first page.
+ *
+ * `live: false` searches only on `submit` (the keyboard's Search key), for pages
+ * whose length jumps as results change: on a phone that moves the box while
+ * someone is typing in it.
  */
-export function useSearchParam(name = 'q') {
+export function useSearchParam(name = 'q', { live = true }: { live?: boolean } = {}) {
   const [params, setParams] = useSearchParams()
   const inUrl = params.get(name) ?? ''
   const [text, setText] = useState(inUrl)
@@ -30,24 +35,43 @@ export function useSearchParam(name = 'q') {
 
   useEffect(() => () => clearTimeout(timer.current), [])
 
+  function send(value: string) {
+    clearTimeout(timer.current)
+    latest.current = value
+    sent.current.add(value)
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        if (value) next.set(name, value)
+        else next.delete(name)
+        next.delete('page')
+        return next
+      },
+      { replace: true, preventScrollReset: true },
+    )
+  }
+
   function change(value: string) {
     setText(value)
     clearTimeout(timer.current)
-    timer.current = setTimeout(() => {
-      latest.current = value
-      sent.current.add(value)
-      setParams(
-        (prev) => {
-          const next = new URLSearchParams(prev)
-          if (value) next.set(name, value)
-          else next.delete(name)
-          next.delete('page')
-          return next
-        },
-        { replace: true, preventScrollReset: true },
-      )
-    }, WAIT_MS)
+    if (live) timer.current = setTimeout(() => send(value), WAIT_MS)
   }
 
-  return { text, change }
+  /** Searches for what's in the box now, or for `value`. */
+  function submit(value = text) {
+    setText(value)
+    send(value.trim() ? value : '')
+  }
+
+  return { text, change, submit }
+}
+
+/**
+ * The explore page's search (the hero box and the top bar's). Live on computers;
+ * on phones and tablets it waits for the Search key, since results arriving while
+ * typing make the page jump under the keyboard.
+ */
+export function useExploreSearch() {
+  const [live] = useState(() => !isPhoneOrTablet(thisDevice()))
+  return useSearchParam('q', { live })
 }
