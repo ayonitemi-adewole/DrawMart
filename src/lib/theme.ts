@@ -3,18 +3,19 @@ import { useSyncExternalStore } from 'react'
 export type ThemePref = 'light' | 'dark' | 'system'
 const KEY = 'drawmart:theme'
 
+/** Light unless they've chosen dark or Auto (follow the device). */
 function read(): ThemePref {
   try {
     const v = localStorage.getItem(KEY)
-    return v === 'light' || v === 'dark' ? v : 'system'
+    return v === 'dark' || v === 'system' ? v : 'light'
   } catch {
-    return 'system'
+    return 'light'
   }
 }
 
 const media = () => window.matchMedia('(prefers-color-scheme: dark)')
 const listeners = new Set<() => void>()
-let current: ThemePref = typeof window === 'undefined' ? 'system' : read()
+let current: ThemePref = typeof window === 'undefined' ? 'light' : read()
 
 function apply() {
   const dark = current === 'dark' || (current === 'system' && media().matches)
@@ -28,7 +29,7 @@ if (typeof window !== 'undefined') {
 
 export function setTheme(p: ThemePref) {
   try {
-    if (p === 'system') localStorage.removeItem(KEY)
+    if (p === 'light') localStorage.removeItem(KEY)
     else localStorage.setItem(KEY, p)
   } catch {
     /* storage blocked: the theme still applies for this visit */

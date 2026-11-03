@@ -2,10 +2,10 @@ import { useTheme, type ThemePref } from '@/lib/theme'
 import { MonitorIcon, MoonIcon, SunIcon } from './icons'
 import { IconButton, Segmented } from './ui'
 
-const NEXT: Record<ThemePref, ThemePref> = { system: 'light', light: 'dark', dark: 'system' }
+const NEXT: Record<ThemePref, ThemePref> = { light: 'dark', dark: 'system', system: 'light' }
 const ICON = { light: SunIcon, dark: MoonIcon, system: MonitorIcon }
 
-/** Compact header toggle that cycles system → light → dark. */
+/** Compact header toggle that cycles light → dark → system. */
 export function ThemeToggle() {
   const [pref, setPref] = useTheme()
   const Icon = ICON[pref]

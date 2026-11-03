@@ -16,12 +16,12 @@
     <meta name="theme-color" content="#053B25" />
     <title>DrawMart: win it for the price of a ticket</title>
     <script>
-      // Apply the saved theme before first paint so there's no flash.
+      // Apply the saved theme before first paint so there's no flash. Light unless chosen.
       try {
         var t = localStorage.getItem("drawmart:theme");
         if (
           t === "dark" ||
-          (t !== "light" && matchMedia("(prefers-color-scheme: dark)").matches)
+          (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches)
         )
           document.documentElement.classList.add("dark");
       } catch (e) {}
