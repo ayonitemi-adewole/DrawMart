@@ -8,6 +8,8 @@ import { AddressPicker } from './AddressPicker'
 import { RiderPhotos } from './RiderPhotos'
 import { ShopPickupSheet } from './ShopPickup'
 import { needsConfirming } from '@/domain/orderConfirm'
+import { collectFromCounterBy } from '@/domain/counter'
+import { windowText } from '@/domain/deliveryWindows'
 import { isPhoneOrTablet, thisDevice } from '@/lib/device'
 import type { OrderView } from '@/api/types'
 import { APOLOGY_CREDIT_KOBO, COLLECTION_PROBLEM_TEXT } from '@/domain/deliveryChecks'
@@ -18,6 +20,9 @@ import { formatNaira } from '@/domain/money'
 import { dateTime } from '@/lib/time'
 import { ProductId } from './ProductId'
 import { DeliveryPin } from './DeliveryPin'
+import { Rebook } from './Rebook'
+import { RateDelivery } from './RateDelivery'
+import { DeliveryTracker } from './DeliveryTracker'
 import { CameraCapture } from './CameraCapture'
 import { ReviewSheet } from './ReviewSheet'
 import { Stars } from './Stars'
@@ -34,6 +39,7 @@ function statusOf(o: OrderView, audience: 'buyer' | 'store' | 'admin'): { label:
       if (needsConfirming(o)) return { label: audience === 'buyer' ? 'Paid · waiting for the seller' : 'Paid · confirm it', tone: 'ticket' }
       return { label: o.isPrize ? 'Being prepared' : o.confirmedAt ? 'Confirmed · being prepared' : 'Paid · being prepared', tone: 'ticket' }
     case 'dispatched':
+      if (pickup && o.atCounterAt) return { label: 'Ready to collect', tone: 'brand' }
       return { label: pickup ? 'On its way to the pickup location' : 'On the way', tone: 'sky' }
     case 'delivered':
       return { label: pickup ? 'Collected' : 'Delivered', tone: 'brand' }
@@ -156,6 +162,11 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
             ) : null}
           </>
         )}
+        {!pickup && o.windowStart && o.windowEnd && o.status !== 'delivered' && !o.redeliverAt ? (
+          <span className="flex items-center gap-2 font-bold">
+            <ClockIcon size={14} className="shrink-0" /> {audience === 'buyer' ? 'Arriving' : 'The buyer wants it'} {windowText({ start: o.windowStart, end: o.windowEnd }, Date.now()).replace(/^(Today|Tomorrow)/, (d) => d.toLowerCase())}
+          </span>
+        ) : null}
         {sender ? (
           <a href={`tel:${o.delivery.contactPhone.replace(/\s/g, '')}`} className="flex min-h-11 w-fit items-center gap-2">
             <PhoneIcon size={14} /> {o.delivery.contactPhone}
@@ -168,6 +179,11 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
         ) : null}
       </div>}
 
+      {audience === 'buyer' && o.status === 'dispatched' && o.pausedAt ? (
+        <Notice tone="ticket" icon={ClockIcon} title="There’s a delay on the way">
+          We’re looking into it and will keep you posted. If it can’t reach you, you’ll be refunded in full.
+        </Notice>
+      ) : null}
       {waiting && o.confirmBy ? (
         <Notice tone="ticket" icon={ClockIcon} title={audience === 'buyer' ? `The seller has until ${dateTime(o.confirmBy)} to confirm` : `Confirm by ${dateTime(o.confirmBy)}`}>
           {audience === 'buyer' ? 'They’ll send a photo of your item. If they don’t, you’re refunded automatically.' : 'Take a fresh photo of the item on your phone. If you don’t, the order cancels, the buyer is refunded and the product is paused. Your time doesn’t run from 10pm to 9am.'}
@@ -184,6 +200,14 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
           {audience === 'buyer' ? 'The seller’s photo of your item.' : 'Your photo for this order.'}
         </div>
       ) : null}
+      {audience === 'buyer' && pickup && o.status === 'dispatched' && o.atCounterAt ? (
+        <Notice tone="brand" icon={StoreIcon} title={`Ready at ${o.pickupPoint?.name ?? 'the pickup location'}`}>
+          It arrived {dateTime(o.atCounterAt)}. Bring your PIN, and open it there before you give it.
+          {o.isPrize ? '' : ` Collect it by ${dateTime(collectFromCounterBy(o.atCounterAt))}, or it goes back to the seller and you’re refunded, less delivery.`}
+        </Notice>
+      ) : null}
+      {audience === 'buyer' ? <DeliveryTracker order={o} /> : null}
+      {audience === 'buyer' ? <Rebook order={o} /> : null}
       {audience === 'buyer' && o.deliveryPin ? <DeliveryPin pin={o.deliveryPin} pickup={pickup} /> : null}
       {sender && waiting ? (
         <Button onClick={() => setConfirming(true)}>
@@ -249,6 +273,7 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
         </Button>
       ) : null}
       {reviewing ? <ReviewSheet order={o} onClose={() => setReviewing(false)} /> : null}
+      {audience === 'buyer' ? <RateDelivery order={o} /> : null}
       {audience === 'buyer' && o.isPrize && o.status === 'delivered' ? (
         <Link to={`/draws/${o.listingId}`} className="flex min-h-11 w-fit items-center text-sm">
           Choose whether to show this on the Winners page

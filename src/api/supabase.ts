@@ -5,12 +5,15 @@
  * sees). Every write is an RPC to a database function in
  * supabase/migrations, which enforces the same rules as src/domain.
  */
+import { RIDER_APPLICATION_ERROR_TEXT, validateRiderApplication, type RiderApplicationStatus, type VehicleType } from '@/domain/riderApplications'
 import type { StoreRole } from '@/domain/team'
 import type { Discount } from '@/domain/discounts'
 import type { PricingStats } from '@/domain/drawPricing'
 import { STORE_APPLICATION_ERROR_TEXT, validateStoreApplication } from '@/domain/storeApplications'
+import type { RiderEarning } from '@/domain/riderPay'
+import type { DeliveryRating, RiderStats } from '@/domain/deliveryRatings'
 import type { PayoutAccount, PayoutKind, PayoutStatus } from '@/domain/payouts'
-import type { ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews, StoreApplicationView, SupportMessage, SupportThreadSummary, QuickReply, BulkUploadResult, IncomingStoreInvite, StoreActivityEntry, StoreTeam } from './types'
+import type { RiderLocation, MyIncident, OpenIncident, RiderPerformanceRow, ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews, StoreApplicationView, SupportMessage, SupportThreadSummary, QuickReply, BulkUploadResult, IncomingStoreInvite, StoreActivityEntry, StoreTeam } from './types'
 import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js'
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
@@ -39,6 +42,14 @@ import {
   type NewListingInput,
   type NewPickupInput,
   type DeliveryJob,
+  type CounterItem,
+  type AdminRider,
+  type DispatchBoard,
+  type RiderApplicationView,
+  type RiderLevel,
+  type DeliveryChatView,
+  type RiderCard,
+  type RiderPayDue,
   type NotificationView,
   type PickupItemInput,
   type SavedPickupView,
@@ -141,6 +152,27 @@ interface ListingRow {
   merchant: MerchantRow
   result: DrawResultRow | null
   handover: HandoverRow | null
+}
+
+interface RiderApplicationRow {
+  id: string
+  status: RiderApplicationStatus
+  full_name: string
+  nin: string
+  phone: string
+  address: string
+  area: string
+  vehicle: VehicleType
+  plate: string | null
+  guarantor_name: string
+  guarantor_phone: string
+  guarantor_relationship: string
+  id_photo_path: string
+  selfie_path: string
+  review_note: string | null
+  created_at: string
+  updated_at: string
+  reviewed_at: string | null
 }
 
 interface PayoutAccountRow {
@@ -261,6 +293,7 @@ interface OrderRow {
   confirmed_at: string | null
   confirm_photo: string | null
   refunded_at: string | null
+  paused_at?: string | null
   claim: { id: string; kind: ClaimKind; status: ClaimStatus; description: string; photos: string[] | null; return_fee_kobo: number; review_note: string | null } | null
   review: { id: string; rating: number; seller_comment: string; product_comment: string; reply: string | null; replied_at: string | null; hidden_at: string | null; created_at: string } | null
   ready_by: string | null
@@ -270,6 +303,12 @@ interface OrderRow {
   refusal_photo: string | null
   return_state: 'returning' | 'returned' | null
   returned_at: string | null
+  counter_at: string | null
+  arrived_at: string | null
+  failed_attempts: number
+  last_failed_at: string | null
+  redelivery_choice: 'redeliver' | 'pickup' | null
+  redeliver_at: string | null
   delivery_fee_kobo: number
   discount_kobo?: number
   cancelled_at: string | null
@@ -463,6 +502,7 @@ function toOrderView(o: OrderRow): OrderView {
     feeKobo: num(o.fee_kobo),
     quantity: o.quantity,
     refundedAt: o.refunded_at,
+    pausedAt: o.paused_at ?? null,
     claim: o.claim ? { id: o.claim.id, kind: o.claim.kind, status: o.claim.status, description: o.claim.description, photos: o.claim.photos ?? [], returnFeeKobo: num(o.claim.return_fee_kobo), reviewNote: o.claim.review_note } : null,
     confirmBy: o.confirm_by,
     confirmedAt: o.confirmed_at,
@@ -474,6 +514,12 @@ function toOrderView(o: OrderRow): OrderView {
     refusalPhoto: o.refusal_photo,
     returnState: o.return_state,
     returnedAt: o.returned_at,
+    atCounterAt: o.counter_at,
+    arrivedAt: o.arrived_at ?? null,
+    failedAttempts: o.failed_attempts ?? 0,
+    lastFailedAt: o.last_failed_at ?? null,
+    redeliveryChoice: o.redelivery_choice ?? null,
+    redeliverAt: o.redeliver_at ?? null,
     deliveryFeeKobo: num(o.delivery_fee_kobo),
     discountKobo: num(o.discount_kobo ?? 0),
     cancelledAt: o.cancelled_at,
@@ -598,10 +644,14 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     return row ? { items: row.items, savedAt: row.saved_at, expiresAt: row.expires_at } : null
   }
 
-  /** The buyer's own PINs, which the orders table doesn't hold. */
+  /** The buyer's PINs, who's bringing each order now, and how they rated each delivery. */
   async function withPins(orders: OrderView[]): Promise<OrderView[]> {
-    const pins = await rpc<Record<string, string>>('my_delivery_pins')
-    return orders.map((o) => ({ ...o, deliveryPin: pins[o.id] ?? null }))
+    const [pins, riders, ratings] = await Promise.all([
+      rpc<Record<string, string>>('my_delivery_pins'),
+      rpc<Record<string, RiderCard>>('my_order_riders'),
+      rpc<Record<string, DeliveryRating>>('my_delivery_ratings'),
+    ])
+    return orders.map((o) => ({ ...o, deliveryPin: pins[o.id] ?? null, rider: riders[o.id] ?? null, deliveryRating: ratings[o.id] ?? null }))
   }
 
   /** Row security limits these to the signed-in buyer's own. */
@@ -634,6 +684,16 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       createdAt: a.created_at,
       updatedAt: a.updated_at,
       reviewedAt: a.reviewed_at,
+    }
+  }
+
+  async function toRiderApplicationView(a: RiderApplicationRow): Promise<RiderApplicationView> {
+    const { data } = await client.storage.from(ID_BUCKET).createSignedUrls([a.id_photo_path, a.selfie_path], 60 * 60)
+    return {
+      id: a.id, status: a.status, fullName: a.full_name, nin: a.nin, phone: a.phone, address: a.address, area: a.area, vehicle: a.vehicle, plate: a.plate,
+      guarantorName: a.guarantor_name, guarantorPhone: a.guarantor_phone, guarantorRelationship: a.guarantor_relationship,
+      idPhotoUrl: data?.[0]?.signedUrl ?? null, selfieUrl: data?.[1]?.signedUrl ?? null,
+      reviewNote: a.review_note, createdAt: a.created_at, updatedAt: a.updated_at, reviewedAt: a.reviewed_at,
     }
   }
 
@@ -834,8 +894,8 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     removeFromCart: (listingId) => rpc('remove_from_cart', { p_listing_id: listingId }),
 
     getPushPreferences: async () => {
-      const row = unwrap(await client.from('push_preferences').select('wins, draw_results, orders, messages, saved_items, draw_reveal, store_orders, store_listings, store_draws, store_pickups, store_payouts').maybeSingle<{ wins: boolean; draw_results: boolean; orders: boolean; messages: boolean; saved_items: boolean; draw_reveal: boolean; store_orders: boolean; store_listings: boolean; store_draws: boolean; store_pickups: boolean; store_payouts: boolean }>())
-      return row ? { wins: row.wins, drawResults: row.draw_results, orders: row.orders, messages: row.messages, savedItems: row.saved_items, drawReveal: row.draw_reveal, storeOrders: row.store_orders, storeListings: row.store_listings, storeDraws: row.store_draws, storePickups: row.store_pickups, storePayouts: row.store_payouts } : DEFAULT_PUSH_PREFERENCES
+      const row = unwrap(await client.from('push_preferences').select('wins, draw_results, orders, messages, saved_items, draw_reveal, store_orders, store_listings, store_draws, store_pickups, store_payouts, rider_new_jobs, rider_returns, rider_jobs').maybeSingle<{ wins: boolean; draw_results: boolean; orders: boolean; messages: boolean; saved_items: boolean; draw_reveal: boolean; store_orders: boolean; store_listings: boolean; store_draws: boolean; store_pickups: boolean; store_payouts: boolean; rider_new_jobs: boolean; rider_returns: boolean; rider_jobs: boolean }>())
+      return row ? { wins: row.wins, drawResults: row.draw_results, orders: row.orders, messages: row.messages, savedItems: row.saved_items, drawReveal: row.draw_reveal, storeOrders: row.store_orders, storeListings: row.store_listings, storeDraws: row.store_draws, storePickups: row.store_pickups, storePayouts: row.store_payouts, riderNewJobs: row.rider_new_jobs, riderReturns: row.rider_returns, riderJobs: row.rider_jobs } : DEFAULT_PUSH_PREFERENCES
     },
     setPushPreference: (category, enabled) => rpc('set_push_preference', { p_category: category, p_enabled: enabled }),
     savePushSubscription: ({ endpoint, p256dh, auth }) => rpc('save_push_subscription', { p_endpoint: endpoint, p_p256dh: p256dh, p_auth: auth }),
@@ -1010,6 +1070,23 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       return toApplicationView(row)
     },
 
+    getRiderSignupsOpen: async () => unwrap(await client.from('app_settings').select('rider_signups_open').single<{ rider_signups_open: boolean }>()).rider_signups_open,
+
+    getMyRiderApplication: async () => {
+      const me = await requireId()
+      const row = unwrap(await client.from('rider_applications').select('*').eq('user_id', me).maybeSingle<RiderApplicationRow>())
+      return row ? toRiderApplicationView(row) : null
+    },
+
+    submitRiderApplication: async (input) => {
+      const me = await requireId()
+      const problems = validateRiderApplication(input).map((e) => RIDER_APPLICATION_ERROR_TEXT[e])
+      if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+      const [idPhoto, selfiePhoto] = await Promise.all([uploadIdPhoto(me, input.idPhoto, 'rider-id'), uploadIdPhoto(me, input.selfiePhoto, 'rider-selfie')])
+      await rpc('submit_rider_application', { p: { ...input, idPhoto, selfiePhoto } })
+      return toRiderApplicationView(unwrap(await client.from('rider_applications').select('*').eq('user_id', me).single<RiderApplicationRow>()))
+    },
+
     getMyStoreApplication: async () => {
       const me = await requireId()
       const row = unwrap(await client.from('store_applications').select('*').eq('user_id', me).maybeSingle<StoreApplicationRow>())
@@ -1032,15 +1109,15 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       const rows = unwrap(
         await client
           .from('notifications')
-          .select('id, kind, listing_id, created_at, read_at, celebrated_at, listing:listings(title, images, category, draw_at, result:draw_results(winning_number))')
+          .select('id, kind, listing_id, area, created_at, read_at, celebrated_at, listing:listings(title, images, category, draw_at, result:draw_results(winning_number))')
           .eq('user_id', me)
           .order('created_at', { ascending: false })
           .limit(100)
-          .returns<{ id: string; kind: NotificationView['kind']; listing_id: string; created_at: string; read_at: string | null; celebrated_at: string | null; listing: { title: string; images: string[]; category: Category; draw_at: string | null; result: { winning_number: number } | null } }[]>(),
+          .returns<{ id: string; kind: NotificationView['kind']; listing_id: string; area: string | null; created_at: string; read_at: string | null; celebrated_at: string | null; listing: { title: string; images: string[]; category: Category; draw_at: string | null; result: { winning_number: number } | null } }[]>(),
       )
       return rows.map((n) => ({
         id: n.id, kind: n.kind, listingId: n.listing_id ?? '', listingTitle: n.listing?.title ?? '', listingImage: n.listing?.images?.[0] ?? null, listingCategory: n.listing?.category, drawAt: n.listing?.draw_at,
-        winningNumber: n.listing?.result?.winning_number ?? null, createdAt: n.created_at, read: n.read_at !== null, celebrated: n.celebrated_at !== null,
+        winningNumber: n.listing?.result?.winning_number ?? null, area: n.area, createdAt: n.created_at, read: n.read_at !== null, celebrated: n.celebrated_at !== null,
       }))
     },
 
@@ -1149,6 +1226,11 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     },
 
     getPayoutAccount: async () => {
+      const p = await myProfile()
+      if (p.role === 'delivery') {
+        const row = unwrap(await client.from('rider_payout_accounts').select(PAYOUT_ACCOUNT_SELECT).eq('rider_id', p.id).maybeSingle<PayoutAccountRow>())
+        return row ? toPayoutAccount(row) : null
+      }
       const id = await myMerchantId()
       const row = unwrap(await client.from('payout_accounts').select(PAYOUT_ACCOUNT_SELECT).eq('merchant_id', id).maybeSingle<PayoutAccountRow>())
       return row ? toPayoutAccount(row) : null
@@ -1215,7 +1297,25 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       return { areas: unwrap(areas), prices: unwrap(prices).map((p) => ({ areaA: p.area_a, areaB: p.area_b, priceKobo: num(p.price_kobo) })), sizeExtras }
     },
     setDeliveryPrice: (areaA, areaB, priceKobo) => rpc('set_delivery_price', { p_area_a: areaA, p_area_b: areaB, p_price_kobo: priceKobo }),
+    getRiderPayRates: async () => {
+      const [pays, extras, settings] = await Promise.all([
+        client.from('rider_pay_rates').select('area_a, area_b, pay_kobo').returns<{ area_a: string; area_b: string; pay_kobo: number }[]>(),
+        client.from('rider_pay_size_extras').select('size, extra_kobo').returns<{ size: PackageSize; extra_kobo: number }[]>(),
+        client.from('app_settings').select('rider_attempt_pay_kobo').single<{ rider_attempt_pay_kobo: number }>(),
+      ])
+      const sizeExtras: Record<PackageSize, Kobo> = { small: 0, medium: 0, large: 0 }
+      for (const e of unwrap(extras)) sizeExtras[e.size] = num(e.extra_kobo)
+      return { pays: unwrap(pays).map((p) => ({ areaA: p.area_a, areaB: p.area_b, payKobo: num(p.pay_kobo) })), sizeExtras, attemptKobo: num(unwrap(settings).rider_attempt_pay_kobo) }
+    },
+    setRiderPay: (areaA, areaB, payKobo) => rpc('set_rider_pay', { p_area_a: areaA, p_area_b: areaB, p_pay_kobo: payKobo }),
+    setRiderSizeExtra: (size, extraKobo) => rpc('set_rider_size_extra', { p_size: size, p_extra_kobo: extraKobo }),
+    setRiderAttemptPay: (payKobo) => rpc('set_rider_attempt_pay', { p_kobo: payKobo }),
+    listMyEarnings: () => rpc<RiderEarning[]>('my_earnings'),
+    listRiderPayDue: () => rpc<RiderPayDue[]>('rider_pay_due').then((rows) => rows.map((r) => ({ ...r, lines: r.lines ?? [] }))),
+    markRiderPaid: (riderId, reference) => rpc('mark_rider_paid', { p_rider: riderId, p_reference: reference }),
     setDeliverySizeExtra: (size, extraKobo) => rpc('set_delivery_size_extra', { p_size: size, p_extra_kobo: extraKobo }),
+    chooseRedelivery: (orderId, choice) =>
+      rpc('choose_redelivery', { p_order_id: orderId, p_window_start: 'windowStart' in choice ? choice.windowStart : null, p_pickup_point_id: 'pickupPointId' in choice ? choice.pickupPointId : null }),
     openClaim: async (orderId, input) => {
       const photos = await uploadPhotos(`claims/${await requireId()}`, input.photos)
       await rpc('open_claim', { p_order_id: orderId, p_kind: input.kind, p_description: input.description, p_photos: photos, p_address: input.address ?? null, p_lat: input.location?.lat ?? null, p_lng: input.location?.lng ?? null, p_phone: input.phone ?? null })
@@ -1391,10 +1491,31 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       unwrap(await client.from('orders').select(ORDER_SELECT).eq('handled_by', 'drawmart').order('created_at', { ascending: false }).returns<OrderRow[]>()).map(toOrderView),
 
     // Delivery accounts
+    getRiderAreas: async () => unwrap(await client.from('rider_areas').select('area').returns<{ area: string }[]>()).map((r) => r.area),
+    setRiderAreas: (areas) => rpc('set_rider_areas', { p_areas: areas }),
     listDeliveryJobs: () => rpc<DeliveryJob[]>('delivery_jobs'),
     takeDelivery: (orderId) => rpc('take_delivery', { p_order_id: orderId }),
+    takeDeliveries: (orderIds) => rpc('take_deliveries', { p_order_ids: orderIds }),
     releaseDelivery: (orderId) => rpc('release_delivery', { p_order_id: orderId }),
     confirmDelivery: (orderId, pin) => rpc<PinResult>('confirm_delivery', { p_order_id: orderId, p_pin: pin }),
+    getRiderLevel: () => rpc<RiderLevel>('my_rider_level'),
+    getRiderProfile: () => rpc<RiderCard>('my_rider_profile'),
+    setRiderPhoto: async (photo) => {
+      const [url] = await uploadPhotos(`riders/${await requireId()}`, [photo])
+      await rpc('set_rider_photo', { p_photo: url })
+    },
+    getDeliveryChat: (orderId) => rpc<DeliveryChatView>('delivery_chat', { p_order_id: orderId }),
+    sendDeliveryMessage: (orderId, body) => rpc('send_delivery_message', { p_order_id: orderId, p_body: body }),
+    markArrived: (orderId) => rpc<string>('mark_arrived', { p_order_id: orderId }),
+    failDeliveryAttempt: async (orderId, photo, at) => {
+      const [url] = await uploadPhotos(`riders/${await requireId()}`, [photo])
+      await rpc('fail_delivery_attempt', { p_order_id: orderId, p_photo: url, p_lat: at.lat, p_lng: at.lng })
+    },
+    getMyCounter: () => rpc<PickupPoint | null>('my_counter'),
+    listCounterItems: () => rpc<CounterItem[]>('counter_items'),
+    receiveAtCounter: (orderId, productCode) => rpc('receive_at_counter', { p_order_id: orderId, p_product_code: productCode }),
+    counterHandOver: (orderId, pin) => rpc<PinResult>('counter_hand_over', { p_order_id: orderId, p_pin: pin }),
+    releaseToRider: (orderId) => rpc('release_to_rider', { p_order_id: orderId }),
 
     listSellerApplications: async () => {
       const rows = unwrap(await client.from('seller_applications').select('*').eq('status', 'pending').order('updated_at').returns<SellerApplicationRow[]>())
@@ -1407,6 +1528,42 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
       return Promise.all(rows.map(toStoreApplicationView))
     },
     approveStoreApplication: (id) => rpc('approve_store_application', { p_application_id: id }),
+    setRiderSignupsOpen: (open) => rpc('set_rider_signups_open', { p_open: open }),
+    listRiderApplications: async () => {
+      const rows = unwrap(await client.from('rider_applications').select('*').eq('status', 'pending').order('updated_at').returns<RiderApplicationRow[]>())
+      return Promise.all(rows.map(toRiderApplicationView))
+    },
+    approveRiderApplication: (id) => rpc('approve_rider_application', { p_application_id: id }),
+    rejectRiderApplication: (id, note) => rpc('reject_rider_application', { p_application_id: id, p_note: note }),
+    listRiderFleets: async () =>
+      unwrap(await client.from('rider_fleets').select('id, name, contact_phone, trusted').order('name').returns<{ id: string; name: string; contact_phone: string; trusted: boolean }[]>()).map((f) => ({
+        id: f.id, name: f.name, contactPhone: f.contact_phone, trusted: f.trusted,
+      })),
+    createRiderFleet: async (name, contactPhone) => {
+      await rpc('create_rider_fleet', { p_name: name, p_phone: contactPhone })
+    },
+    setFleetTrusted: (fleetId, trusted) => rpc('set_fleet_trusted', { p_fleet: fleetId, p_trusted: trusted }),
+    listRiders: () => rpc<AdminRider[]>('admin_riders'),
+    setRiderFleet: (riderId, fleetId) => rpc('set_rider_fleet', { p_rider: riderId, p_fleet: fleetId }),
+    setRiderTrusted: (riderId, trusted) => rpc('set_rider_trusted', { p_rider: riderId, p_trusted: trusted }),
+    getDispatchBoard: () => rpc<DispatchBoard>('dispatch_board'),
+    getLocationSharing: () => rpc<boolean>('my_location_sharing'),
+    setLocationSharing: (on) => rpc('set_location_sharing', { p_on: on }),
+    shareLocation: (at) => rpc<boolean>('share_location', { p_lat: at.lat, p_lng: at.lng }),
+    getRiderLocation: (orderId) => rpc<RiderLocation | null>('rider_location', { p_order_id: orderId }),
+    reportIncident: (kind, id, type, at) => rpc<string>('report_incident', { p_kind: kind, p_id: id, p_type: type, p_lat: at?.lat ?? null, p_lng: at?.lng ?? null }),
+    addIncidentDetails: async (incidentId, d) => {
+      const photo = d.photo ? (await uploadPhotos(`riders/${await requireId()}`, [d.photo]))[0] : null
+      await rpc('add_incident_details', { p_id: incidentId, p_note: d.note ?? null, p_photo: photo, p_lat: d.at?.lat ?? null, p_lng: d.at?.lng ?? null })
+    },
+    getMyOpenIncidents: () => rpc<Record<string, MyIncident>>('my_open_incidents'),
+    listOpenIncidents: () => rpc<OpenIncident[]>('open_incidents'),
+    resolveIncident: (incidentId, outcome, note) => rpc('resolve_incident', { p_id: incidentId, p_outcome: outcome, p_note: note }),
+    rateDelivery: (orderId, good, reasons) => rpc('rate_delivery', { p_order_id: orderId, p_good: good, p_reasons: reasons }),
+    getMyRiderStats: () => rpc<RiderStats>('my_rider_stats'),
+    getRiderPerformance: () => rpc<RiderPerformanceRow[]>('rider_performance'),
+    assignJob: (kind, id, riderId) => rpc('assign_job', { p_kind: kind, p_id: id, p_rider: riderId }),
+    unassignJob: (kind, id) => rpc('unassign_job', { p_kind: kind, p_id: id }),
     rejectStoreApplication: (id, note) => rpc('reject_store_application', { p_application_id: id, p_note: note }),
     rejectSeller: (id, note) => rpc('reject_seller', { p_application_id: id, p_note: note }),
     rejectListing: (id, reason, note) => rpc('reject_listing', { p_listing_id: id, p_reason: reason, p_note: note }),

@@ -1,21 +1,27 @@
 import type { ClaimInput } from './types'
 import type { StoreRole } from '@/domain/team'
+import type { DeliveryRatingReason } from '@/domain/deliveryRatings'
+import { deliveryJobsToKeep, returnJobsToKeep } from '@/domain/offlineJobs'
+import { SHARE_EVERY_SECONDS } from '@/domain/riderLocation'
+import { clearSavedJobs, loadSavedJobs, saveJobs } from '@/lib/offlineJobs'
+import type { IncidentOutcome, IncidentType } from '@/domain/incidents'
 import type { DiscountInput } from '@/domain/discounts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import type { ShopPickup } from '@/domain/shopPickup'
 import type { ShopProfileInput } from '@/domain/shopProfile'
 import type { ReviewInput } from '@/domain/reviews'
-import type { CancelReason, CollectionProblem, Kobo, PackageSize, RefusalReason, RejectionReason, Category } from '@/domain/types'
+import type { CancelReason, CollectionProblem, GeoPoint, Kobo, PackageSize, RefusalReason, RejectionReason, Category } from '@/domain/types'
 import { api } from './index'
 import type { MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput } from '@/domain/sellers'
 import type { StoreApplicationInput } from '@/domain/storeApplications'
+import type { RiderApplicationInput } from '@/domain/riderApplications'
 import { visitorId } from '@/lib/visitor'
 import { pushDeviceState, subscribeThisDevice, unsubscribeThisDevice } from '@/lib/push'
 import type { NotificationPreference } from '@/domain/push'
 import type { SavedAddressInput } from '@/domain/addresses'
-import type { AccountRole, BoostSettings, CheckoutInput, ListingFilter, NewListingInput, NewPickupInput, NewProductInput, PickupItemInput } from './types'
+import type { AccountRole, BoostSettings, DeliveryJob, ReturnJob, DispatchJobKind, CheckoutInput, ListingFilter, NewListingInput, NewPickupInput, NewProductInput, PickupItemInput } from './types'
 
 export const keys = {
   session: ['session'] as const,
@@ -49,6 +55,27 @@ export const keys = {
   listingCheckPlan: ['listing-check-plan'] as const,
   listingCheck: (id: string) => ['listing-check', id] as const,
   returnJobs: ['return-jobs'] as const,
+  riderAreas: ['rider-areas'] as const,
+  myCounter: ['my-counter'] as const,
+  riderSignupsOpen: ['rider-signups-open'] as const,
+  myRiderApplication: ['my-rider-application'] as const,
+  riderApplications: ['rider-applications'] as const,
+  riderFleets: ['rider-fleets'] as const,
+  adminRiders: ['admin-riders'] as const,
+  dispatchBoard: ['dispatch-board'] as const,
+  myRiderStats: ['my-rider-stats'] as const,
+  myOpenIncidents: ['my-open-incidents'] as const,
+  locationSharing: ['location-sharing'] as const,
+  riderLocation: (orderId: string) => ['rider-location', orderId] as const,
+  openIncidents: ['open-incidents'] as const,
+  riderPerformance: ['rider-performance'] as const,
+  riderLevel: ['rider-level'] as const,
+  riderProfile: ['rider-profile'] as const,
+  deliveryChat: (orderId: string) => ['delivery-chat', orderId] as const,
+  riderPayRates: ['rider-pay-rates'] as const,
+  myEarnings: ['my-earnings'] as const,
+  riderPayDue: ['rider-pay-due'] as const,
+  counterItems: ['counter-items'] as const,
   pending: ['pending'] as const,
   myOrders: ['my-orders'] as const,
   merchantOrders: ['merchant-orders'] as const,
@@ -101,7 +128,7 @@ const useIs = (role: AccountRole) => useAccess().role === role
 /** Buyers and stores get notifications. Riders and admins don't. */
 const useHasInbox = () => {
   const role = useAccess().role
-  return role === 'buyer' || role === 'store'
+  return role === 'buyer' || role === 'store' || role === 'delivery'
 }
 export const useMe = () => useQuery({ queryKey: keys.me, queryFn: () => api.getCurrentUser(), enabled: useIs('buyer') })
 export const useMyListings = () => useQuery({ queryKey: keys.myListings, queryFn: () => api.listMyListings(), enabled: useIs('buyer') })
@@ -118,7 +145,21 @@ export const useShopPickup = () => useQuery({ queryKey: keys.shopPickup, queryFn
 export const useListingCheckPlan = (enabled: boolean) => useQuery({ queryKey: keys.listingCheckPlan, queryFn: () => api.getListingCheckPlan(), enabled: useHasShop() && enabled, staleTime: Infinity })
 export const useListingCheck = (id: string | null) => useQuery({ queryKey: keys.listingCheck(id ?? ''), queryFn: () => api.getListingCheck(id!), enabled: !!id, staleTime: 5 * 60_000 })
 export const useOpenClaims = () => useQuery({ queryKey: keys.openClaims, queryFn: () => api.listOpenClaims(), enabled: useIs('admin') })
-export const useReturnJobs = () => useQuery({ queryKey: keys.returnJobs, queryFn: () => api.listReturnJobs(), enabled: useIs('delivery'), refetchInterval: 30_000 })
+export function useReturnJobs() {
+  const userId = useSession().data?.userId ?? null
+  return useQuery({
+    queryKey: keys.returnJobs,
+    queryFn: async () => {
+      const jobs = await api.listReturnJobs()
+      if (userId) saveJobs('returns', userId, returnJobsToKeep(jobs))
+      return jobs
+    },
+    initialData: () => loadSavedJobs<ReturnJob>('returns', userId)?.jobs,
+    initialDataUpdatedAt: 0,
+    enabled: useIs('delivery'),
+    refetchInterval: 30_000,
+  })
+}
 /** Cached per band, so typing a price doesn't ask again on every key. */
 export const useDrawPriceStats = (category: Category, band: number | null) =>
   useQuery({ queryKey: keys.drawPriceStats(category, band ?? -1), queryFn: () => api.getDrawPriceStats(category, band!), enabled: useIs('store') && band !== null, staleTime: 10 * 60_000 })
@@ -298,6 +339,8 @@ export function useSignOut() {
         .then((endpoint) => (endpoint ? api.deletePushSubscription(endpoint) : undefined))
         .catch(() => {})
       await api.auth.signOut()
+      // Buyers' addresses and numbers on a rider's jobs don't stay on a shared phone.
+      clearSavedJobs()
     },
     // Don't wait for SessionSync: whatever opens next must already see "signed out".
     onSuccess: () => {
@@ -414,14 +457,133 @@ export function useSetSaved() {
 }
 
 // Delivery accounts. No push channel yet, so the pool polls.
-export const useDeliveryJobs = () => useQuery({ queryKey: keys.deliveryJobs, queryFn: () => api.listDeliveryJobs(), enabled: useIs('delivery'), refetchInterval: 30_000 })
+/** The rider's own unfinished jobs are kept on the phone, so they open without signal (offlineJobs.ts). */
+export function useDeliveryJobs() {
+  const userId = useSession().data?.userId ?? null
+  return useQuery({
+    queryKey: keys.deliveryJobs,
+    queryFn: async () => {
+      const jobs = await api.listDeliveryJobs()
+      if (userId) saveJobs('deliveries', userId, deliveryJobsToKeep(jobs))
+      return jobs
+    },
+    initialData: () => loadSavedJobs<DeliveryJob>('deliveries', userId)?.jobs,
+    // Shown at once, then fetched again as soon as there's signal.
+    initialDataUpdatedAt: 0,
+    enabled: useIs('delivery'),
+    refetchInterval: 30_000,
+  })
+}
+
+/** The pickup location a counter account works at; null for riders. */
+export const useMyCounter = () => useQuery({ queryKey: keys.myCounter, queryFn: () => api.getMyCounter(), enabled: useIs('delivery'), staleTime: 5 * 60_000 })
+export function useCounterItems() {
+  const isCounter = !!useMyCounter().data
+  return useQuery({ queryKey: keys.counterItems, queryFn: () => api.listCounterItems(), enabled: isCounter, refetchInterval: 30_000 })
+}
+
+export function useCounterActions() {
+  const invalidate = useInvalidateAll()
+  return {
+    receive: useMutation({ mutationFn: ({ id, code }: { id: string; code: string }) => api.receiveAtCounter(id, code), onSettled: invalidate }),
+    handOver: useMutation({ mutationFn: ({ id, pin }: { id: string; pin: string }) => api.counterHandOver(id, pin), onSettled: invalidate }),
+    release: useMutation({ mutationFn: (id: string) => api.releaseToRider(id), onSettled: invalidate }),
+  }
+}
+
+export const useRiderProfile = () => useQuery({ queryKey: keys.riderProfile, queryFn: () => api.getRiderProfile(), enabled: useIs('delivery') })
+
+export function useSetRiderPhoto() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (photo: string) => api.setRiderPhoto(photo), onSettled: () => qc.invalidateQueries({ queryKey: keys.riderProfile }) })
+}
+
+/** Polls like an open chat while it's on screen. */
+export const useDeliveryChat = (orderId: string) => useQuery({ queryKey: keys.deliveryChat(orderId), queryFn: () => api.getDeliveryChat(orderId), refetchInterval: 4_000 })
+
+export function useSendDeliveryMessage(orderId: string) {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (body: string) => api.sendDeliveryMessage(orderId, body), onSettled: () => qc.invalidateQueries({ queryKey: keys.deliveryChat(orderId) }) })
+}
+
+export const useRiderSignupsOpen = () => useQuery({ queryKey: keys.riderSignupsOpen, queryFn: () => api.getRiderSignupsOpen(), staleTime: 5 * 60_000 })
+export const useMyRiderApplication = () => useQuery({ queryKey: keys.myRiderApplication, queryFn: () => api.getMyRiderApplication(), enabled: useIs('buyer') })
+export const useRiderApplications = () => useQuery({ queryKey: keys.riderApplications, queryFn: () => api.listRiderApplications(), enabled: useIs('admin') })
+export const useRiderFleets = () => useQuery({ queryKey: keys.riderFleets, queryFn: () => api.listRiderFleets(), enabled: useIs('admin') })
+export const useAdminRiders = () => useQuery({ queryKey: keys.adminRiders, queryFn: () => api.listRiders(), enabled: useIs('admin') })
+/** Riders move jobs on their own, so it keeps itself fresh. */
+export const useLocationSharing = () => useQuery({ queryKey: keys.locationSharing, queryFn: () => api.getLocationSharing(), enabled: useIs('delivery') })
+export function useSetLocationSharing() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (on: boolean) => api.setLocationSharing(on), onSettled: () => qc.invalidateQueries({ queryKey: keys.locationSharing }) })
+}
+/** The phone's position, sent every 30 seconds on the last leg. */
+export const useShareLocation = () => useMutation({ mutationFn: (at: GeoPoint) => api.shareLocation(at) })
+/** Where the rider is, for the buyer, while they're on their way (riderLocation.ts). */
+export const useRiderLocation = (orderId: string, enabled: boolean) =>
+  useQuery({ queryKey: keys.riderLocation(orderId), queryFn: () => api.getRiderLocation(orderId), enabled: useIs('buyer') && enabled, refetchInterval: SHARE_EVERY_SECONDS * 1000 })
+export const useMyOpenIncidents = () => useQuery({ queryKey: keys.myOpenIncidents, queryFn: () => api.getMyOpenIncidents(), enabled: useIs('delivery') })
+/** Someone may be in trouble, so admins see new reports without reloading. */
+export const useOpenIncidents = () => useQuery({ queryKey: keys.openIncidents, queryFn: () => api.listOpenIncidents(), enabled: useIs('admin'), refetchInterval: 30_000 })
+export function useIncidentActions() {
+  const invalidate = useInvalidateAll()
+  return {
+    report: useMutation({ mutationFn: ({ kind, id, type, at }: { kind: DispatchJobKind; id: string; type: IncidentType; at: GeoPoint | null }) => api.reportIncident(kind, id, type, at), onSettled: invalidate }),
+    addDetails: useMutation({ mutationFn: ({ id, details }: { id: string; details: { note?: string; photo?: string; at?: GeoPoint | null } }) => api.addIncidentDetails(id, details), onSettled: invalidate }),
+    resolve: useMutation({ mutationFn: ({ id, outcome, note }: { id: string; outcome: IncidentOutcome; note: string }) => api.resolveIncident(id, outcome, note), onSettled: invalidate }),
+  }
+}
+export const useMyRiderStats = () => useQuery({ queryKey: keys.myRiderStats, queryFn: () => api.getMyRiderStats(), enabled: useIs('delivery') })
+export const useRiderPerformance = () => useQuery({ queryKey: keys.riderPerformance, queryFn: () => api.getRiderPerformance(), enabled: useIs('admin') })
+export function useRateDelivery() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: ({ orderId, good, reasons }: { orderId: string; good: boolean; reasons: DeliveryRatingReason[] }) => api.rateDelivery(orderId, good, reasons), onSettled: invalidate })
+}
+export const useDispatchBoard = () => useQuery({ queryKey: keys.dispatchBoard, queryFn: () => api.getDispatchBoard(), enabled: useIs('admin'), refetchInterval: 30_000 })
+
+export function useDispatchActions() {
+  const invalidate = useInvalidateAll()
+  return {
+    assign: useMutation({ mutationFn: ({ kind, id, riderId }: { kind: DispatchJobKind; id: string; riderId: string }) => api.assignJob(kind, id, riderId), onSettled: invalidate }),
+    takeBack: useMutation({ mutationFn: ({ kind, id }: { kind: DispatchJobKind; id: string }) => api.unassignJob(kind, id), onSettled: invalidate }),
+  }
+}
+
+export const useRiderLevel = () => useQuery({ queryKey: keys.riderLevel, queryFn: () => api.getRiderLevel(), enabled: useIs('delivery') })
+
+export function useSubmitRiderApplication() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: (input: RiderApplicationInput) => api.submitRiderApplication(input), onSettled: invalidate })
+}
+
+export function useRiderAdminActions() {
+  const invalidate = useInvalidateAll()
+  return {
+    setOpen: useMutation({ mutationFn: (open: boolean) => api.setRiderSignupsOpen(open), onSettled: invalidate }),
+    review: useMutation({ mutationFn: ({ id, approve, note }: { id: string; approve: boolean; note?: string }) => (approve ? api.approveRiderApplication(id) : api.rejectRiderApplication(id, note ?? '')), onSettled: invalidate }),
+    createFleet: useMutation({ mutationFn: ({ name, phone }: { name: string; phone: string }) => api.createRiderFleet(name, phone), onSettled: invalidate }),
+    setFleetTrusted: useMutation({ mutationFn: ({ id, trusted }: { id: string; trusted: boolean }) => api.setFleetTrusted(id, trusted), onSettled: invalidate }),
+    setFleet: useMutation({ mutationFn: ({ riderId, fleetId }: { riderId: string; fleetId: string | null }) => api.setRiderFleet(riderId, fleetId), onSettled: invalidate }),
+    setTrusted: useMutation({ mutationFn: ({ riderId, trusted }: { riderId: string; trusted: boolean }) => api.setRiderTrusted(riderId, trusted), onSettled: invalidate }),
+  }
+}
+
+export const useRiderAreas = () => useQuery({ queryKey: keys.riderAreas, queryFn: () => api.getRiderAreas(), enabled: useIs('delivery') })
+
+export function useSetRiderAreas() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (areas: string[]) => api.setRiderAreas(areas), onSettled: () => qc.invalidateQueries({ queryKey: keys.riderAreas }) })
+}
 
 export function useDeliveryActions() {
   const invalidate = useInvalidateAll()
   return {
     take: useMutation({ mutationFn: (orderId: string) => api.takeDelivery(orderId), onSettled: invalidate }),
+    takeTrip: useMutation({ mutationFn: (orderIds: string[]) => api.takeDeliveries(orderIds), onSettled: invalidate }),
     release: useMutation({ mutationFn: (orderId: string) => api.releaseDelivery(orderId), onSettled: invalidate }),
     confirm: useMutation({ mutationFn: ({ id, pin }: { id: string; pin: string }) => api.confirmDelivery(id, pin), onSettled: invalidate }),
+    arrived: useMutation({ mutationFn: (orderId: string) => api.markArrived(orderId), onSettled: invalidate }),
+    failAttempt: useMutation({ mutationFn: ({ id, photo, at }: { id: string; photo: string; at: GeoPoint }) => api.failDeliveryAttempt(id, photo, at), onSettled: invalidate }),
     pass: useMutation({ mutationFn: ({ id, photos }: { id: string; photos: string[] }) => api.passCollection(id, photos), onSettled: invalidate }),
     fail: useMutation({ mutationFn: ({ id, problems, note, photos }: { id: string; problems: CollectionProblem[]; note: string; photos: string[] }) => api.failCollection(id, problems, note, photos), onSettled: invalidate }),
     refuse: useMutation({ mutationFn: ({ id, pin, reason, note, photo }: { id: string; pin: string; reason: RefusalReason; note: string; photo: string }) => api.refuseDelivery(id, pin, reason, note, photo), onSettled: invalidate }),
@@ -546,6 +708,7 @@ export function useClaimActions() {
   const invalidate = useInvalidateAll()
   return {
     open: useMutation({ mutationFn: ({ id, input }: { id: string; input: ClaimInput }) => api.openClaim(id, input), onSettled: invalidate }),
+    rebook: useMutation({ mutationFn: ({ id, choice }: { id: string; choice: { windowStart: string } | { pickupPointId: string } }) => api.chooseRedelivery(id, choice), onSettled: invalidate }),
     contest: useMutation({ mutationFn: ({ id, note }: { id: string; note: string }) => api.contestFailure(id, note), onSettled: invalidate }),
     review: useMutation({ mutationFn: ({ id, approve, note }: { id: string; approve: boolean; note: string }) => api.reviewClaim(id, approve, note), onSettled: invalidate }),
   }
@@ -598,7 +761,25 @@ export function useWithdrawListing() {
 }
 
 export const usePayouts = () => useQuery({ queryKey: keys.payouts, queryFn: () => api.listPayouts(), enabled: useHasShop() })
-export const usePayoutAccount = () => useQuery({ queryKey: keys.payoutAccount, queryFn: () => api.getPayoutAccount(), enabled: useHasShop() })
+export function usePayoutAccount() {
+  const hasShop = useHasShop()
+  const rider = useIs('delivery')
+  const enabled = hasShop || rider
+  return useQuery({ queryKey: keys.payoutAccount, queryFn: () => api.getPayoutAccount(), enabled })
+}
+export const useRiderPayRates = () => useQuery({ queryKey: keys.riderPayRates, queryFn: () => api.getRiderPayRates(), enabled: useIs('admin') })
+export const useMyEarnings = () => useQuery({ queryKey: keys.myEarnings, queryFn: () => api.listMyEarnings(), enabled: useIs('delivery') })
+export const useRiderPayDue = () => useQuery({ queryKey: keys.riderPayDue, queryFn: () => api.listRiderPayDue(), enabled: useIs('admin') })
+
+export function useRiderPayActions() {
+  const invalidate = useInvalidateAll()
+  return {
+    setPay: useMutation({ mutationFn: ({ areaA, areaB, payKobo }: { areaA: string; areaB: string; payKobo: Kobo }) => api.setRiderPay(areaA, areaB, payKobo), onSettled: invalidate }),
+    setExtra: useMutation({ mutationFn: ({ size, extraKobo }: { size: PackageSize; extraKobo: Kobo }) => api.setRiderSizeExtra(size, extraKobo), onSettled: invalidate }),
+    setAttempt: useMutation({ mutationFn: (payKobo: Kobo) => api.setRiderAttemptPay(payKobo), onSettled: invalidate }),
+    markPaid: useMutation({ mutationFn: ({ riderId, reference }: { riderId: string; reference: string }) => api.markRiderPaid(riderId, reference), onSettled: invalidate }),
+  }
+}
 export const useBanks = () => useQuery({ queryKey: keys.banks, queryFn: () => api.listBanks(), staleTime: 60 * 60_000 })
 export const useDuePayouts = () => useQuery({ queryKey: keys.duePayouts, queryFn: () => api.listDuePayouts(), enabled: useIs('admin') })
 

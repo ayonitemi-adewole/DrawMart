@@ -46,14 +46,14 @@ import { MAX_OPEN_DISCOUNTS, bestPrice, discountActive, discountErrors, normaliz
 import { DUPLICATE_CAC_TEXT, STORE_APPLICATION_ERROR_TEXT, normalizeCac, storeAccountBlocker, validateStoreApplication } from '@/domain/storeApplications'
 import { REVIEWS_SHOWN_FROM, averageRating, canReview, hideReasonError, replyError, reviewError, reviewerName } from '@/domain/reviews'
 import { shopPickupErrorText, shopPickupErrors, type ShopPickup } from '@/domain/shopPickup'
-import { DELIVERY_AREAS, areaFromText, nearestArea, checkoutDeliveryFees, deliveryPriceError, placeholderPricing, sizeExtraError, type DeliveryPricing } from '@/domain/deliveryFees'
+import { DEFAULT_AREA, DELIVERY_AREAS, areaFromText, nearestArea, checkoutDeliveryFees, deliveryPriceError, placeholderPricing, sizeExtraError, type DeliveryPricing } from '@/domain/deliveryFees'
 import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO, REFUSAL_REASONS, SUSPEND_AFTER_FAILURES, collectionFailError, photosError } from '@/domain/deliveryChecks'
 import { CONFIRM_HOURS, addConfirmTime, confirmDeadline, confirmOverdue, confirmReminderDue, needsConfirming } from '@/domain/orderConfirm'
 import { canCancelOrder, cancelError, stockAfterCancel } from '@/domain/orderCancel'
 import { canControlProduct, repriceNeedsReview, statusAfterStock, stockChangeError } from '@/domain/productControls'
 import { closingReminderSent, pickupReminderDue } from '@/domain/storeNotifications'
 import type { PayoutLineView } from './types'
-import { PAYOUT_ACCOUNT_HOLD_HOURS, accountNumberError, markPaidError, maskAccountNumber, payoutsFor, type PayoutAccount, type PayoutLine } from '@/domain/payouts'
+import { MIN_REFERENCE_LENGTH, PAYOUT_ACCOUNT_HOLD_HOURS, accountNumberError, accountPayable, markPaidError, maskAccountNumber, payoutsFor, type PayoutAccount, type PayoutLine } from '@/domain/payouts'
 import { newRejection, REJECTION_ERROR_TEXT, rejectionError, resentCautionFee } from '@/domain/rejection'
 import { DEMO_ACCOUNTS } from './demoAccounts'
 import {
@@ -67,6 +67,20 @@ import {
   topUpError,
 } from '@/domain/rules'
 import { checkPin, isDeliveryPin, newDeliveryPin, type PinState } from '@/domain/delivery'
+import { COLLECT_WARNING_MINUTES, MAX_RIDER_JOBS, collectBy, collectionOverdue, takeJobError } from '@/domain/riderLimits'
+import { DEFAULT_STUCK_LIMITS, assignJobError, claimStage, dispatchStuck, orderStage } from '@/domain/dispatch'
+import { locationFresh, positionError } from '@/domain/riderLocation'
+import { incidentNoteError, resolveIncidentError, sellerStillPaid, type IncidentOutcome, type IncidentType } from '@/domain/incidents'
+import { STATS_DAYS, canRateDelivery, ratingError, riderPerformance, riderStats, type DeliveryRating, type TimedJob } from '@/domain/deliveryRatings'
+import { canTakeYet, takeTooSoonError, windowError, windowOpens, windowTimes } from '@/domain/deliveryWindows'
+import { tripRoomError } from '@/domain/trips'
+import { feeGroupOf, largestSize, tripAlreadyPaid } from '@/domain/feeGroups'
+import { riderAreasError, riderJobAlertAllowed } from '@/domain/riderAlerts'
+import { counterCodeError, counterReminderDue, counterReturnDue } from '@/domain/counter'
+import { NEW_RIDER_JOBS, NEW_RIDER_MAX_KOBO, RIDER_APPLICATION_ERROR_TEXT, newRiderLimitError, riderAccountBlocker, validateRiderApplication } from '@/domain/riderApplications'
+import { CHOOSE_WITHIN_HOURS, attemptError, redeliveryWindowError } from '@/domain/deliveryAttempts'
+import { deliveryMessageError, firstName } from '@/domain/deliveryChat'
+import { attemptPayError, pairPayError, payableNow, placeholderRiderPay, riderPayError, tripPay, type EarningKind, type RiderEarning, type RiderPayRates } from '@/domain/riderPay'
 import { newProductCode } from '@/domain/productCode'
 import { MAX_SAVED_ADDRESSES, SAVED_ADDRESS_ERROR_TEXT, sortAddresses, validateSavedAddress, type SavedAddress, type SavedAddressInput } from '@/domain/addresses'
 import { CART_ERROR_TEXT, CHECKOUT_ERROR_TEXT, cartError, checkoutTotalKobo, isCar, isWonPrize, lineAmountKobo, validateCheckout } from '@/domain/cart'
@@ -75,7 +89,7 @@ import { MAX_MESSAGES_PER_MINUTE, messageError } from '@/domain/messages'
 import { fillDays, lagosDay } from '@/domain/metrics'
 import { BOOST_DEFAULTS, BOOST_ERROR_TEXT, DEFAULT_BOOST_PACKAGES, boostEndsAt, boostWindow, boostsUnlocked, canBoost } from '@/domain/boosts'
 import { SELLER_APPLICATION_ERROR_TEXT, normalizeNin, validateSellerApplication } from '@/domain/sellers'
-import type { CancelReason, Category, DrawResult, GeoPoint, Kobo, NotificationKind, PickupPoint, LedgerEntry, Listing, ListingStatus, Merchant, Order, Ticket, UnsoldPolicy, User } from '@/domain/types'
+import type { CancelReason, Category, DrawResult, GeoPoint, Kobo, NotificationKind, PackageSize, PickupPoint, LedgerEntry, Listing, ListingStatus, Merchant, Order, Ticket, UnsoldPolicy, User } from '@/domain/types'
 import {
   ApiError,
   type DrawMartApi,
@@ -86,6 +100,15 @@ import {
   type WalletView,
   type NewPickupInput,
   type DeliveryJob,
+  type CounterItem,
+  type AdminRider,
+  type DispatchBoard,
+  type DispatchJob,
+  type RiderPerformanceRow,
+  type OpenIncident,
+  type RiderLocation,
+  type RiderApplicationView,
+  type RiderFleet,
   type NotificationView,
   type PickupItemInput,
   type SavedPickupView,
@@ -104,7 +127,7 @@ import {
   type AuthSession,
 } from './types'
 
-const STORAGE_KEY = 'drawmart:mock-db:v49' // bump when seed data or the Db shape changes
+const STORAGE_KEY = 'drawmart:mock-db:v56' // bump when seed data or the Db shape changes
 const SESSION_KEY = 'drawmart:mock-session:v2'
 /** buyer@drawmart.test, and whoever uses the API with nobody signed in (the tests). */
 const ME = 'u-me'
@@ -116,7 +139,25 @@ const TOLU_SHOP = 'm-tolu'
 const DAY = 24 * 60 * 60 * 1000
 
 /** The PIN and who's carrying it stay out of the order everyone else sees. */
-type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState; paidCashKobo: Kobo; paidCreditKobo: Kobo; paidFeeCashKobo: Kobo; paidFeeCreditKobo: Kobo; checkoutId: string; confirmRemindedAt: string | null }
+type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState; paidCashKobo: Kobo; paidCreditKobo: Kobo; paidFeeCashKobo: Kobo; paidFeeCreditKobo: Kobo; checkoutId: string; confirmRemindedAt: string | null; riderTakenAt?: string | null; counterRemindedAt?: string | null; counterOutAt?: string | null; windowAlertedAt?: string | null }
+
+interface MockIncident {
+  id: string
+  orderId: string | null
+  claimId: string | null
+  riderId: string
+  type: IncidentType
+  note: string | null
+  photo: string | null
+  location: GeoPoint | null
+  createdAt: string
+  resolvedAt: string | null
+  outcome: IncidentOutcome | null
+}
+
+/** A rider's open report pauses the job (incidents.ts). */
+const openIncident = (db: Db, job: { orderId?: string; claimId?: string }) =>
+  db.incidents.find((i) => !i.resolvedAt && (job.orderId ? i.orderId === job.orderId : i.claimId === job.claimId))
 
 interface Db {
   users: User[]
@@ -126,7 +167,9 @@ interface Db {
   seeds: Record<string, string>
   /** Reference of the purchase that sold the last ticket, kept for the draw. */
   closingRefs: Record<string, string>
-  notifications: { id: string; userId: string; kind: NotificationKind; listingId: string | null; createdAt: string; read: boolean; celebrated: boolean }[]
+  notifications: { id: string; userId: string; kind: NotificationKind; listingId: string | null; area?: string | null; createdAt: string; read: boolean; celebrated: boolean }[]
+  /** riderAlerts.ts: areas each rider wants new jobs from. */
+  riderAreas: Record<string, string[]>
   tickets: Ticket[]
   ledger: LedgerEntry[]
   results: DrawResult[]
@@ -139,10 +182,17 @@ interface Db {
   checkTickets: Record<string, { code: string; videoRequired: boolean; issuedAt: string }>
   listingChecks: Record<string, { code: string | null; videoKey: string | null; serial: string | null; proofKey: string | null }>
   /** The rest of each claim, by claim id: never sent to the buyer or seller. */
-  claimDetails: Record<string, { riderId: string | null; address: string; location: GeoPoint; phone: string; tripKobo: Kobo; sellerShareKobo: Kobo }>
+  claimDetails: Record<string, { riderId: string | null; takenAt?: string | null; openedAt?: string; pickedUpAt?: string; address: string; location: GeoPoint; phone: string; tripKobo: Kobo; sellerShareKobo: Kobo }>
   shopPickups: Record<string, ShopPickup>
   excusedFailures: string[]
   deliveryPricing: DeliveryPricing
+  /** riderPay.ts. */
+  riderPayRates: RiderPayRates
+  riderEarnings: (RiderEarning & { riderId: string; sourceKey: string; paidBy: string | null })[]
+  riderPayoutAccounts: Record<string, PayoutAccount>
+  /** deliveryChat.ts: riders' photos, and buyer ↔ rider chats. */
+  riderPhotos: Record<string, string>
+  deliveryMessages: { id: string; orderId: string; riderId: string; sender: 'buyer' | 'rider'; body: string; createdAt: string }[]
   priceReviews: { listingId: string; newPriceKobo: Kobo; requestedAt: string }[]
   /** By buyer, then listing. Anything not in here is one. */
   cartQuantities: Record<string, Record<string, number>>
@@ -161,6 +211,19 @@ interface Db {
   sellerShops: Record<string, string>
   /** Businesses' applications for a store, by user id. */
   storeApplications: Record<string, StoreApplicationView>
+  /** riderApplications.ts. Approved applicants' accounts become delivery accounts (riderAccounts), like storeAccounts. */
+  riderSignupsOpen: boolean
+  riderApplications: Record<string, RiderApplicationView>
+  riderAccounts: Record<string, true>
+  /** deliveryRatings.ts, by order id. Only ever read back as the buyer's own, or as totals. */
+  deliveryRatings: Record<string, DeliveryRating & { riderId: string; buyerId: string }>
+  /** incidents.ts. */
+  incidents: MockIncident[]
+  /** riderLocation.ts: who has opted in, and each one's latest point only. */
+  riderSharing: Record<string, boolean>
+  riderPositions: Record<string, { location: GeoPoint; updatedAt: string }>
+  riderFleets: RiderFleet[]
+  riderTrust: Record<string, { fleetId: string | null; trusted: boolean }>
   /** Buyer accounts an approved application turned into a store's: user id → store id. */
   storeAccounts: Record<string, string>
   /** Shops' chats with DrawMart, by shop id. */
@@ -627,10 +690,16 @@ async function freshDb(): Promise<Db> {
       return [m.id, { address: `12 Market Road, ${m.area}, Lagos`, location: { lat: a.lat, lng: a.lng }, contactPhone: '0803 000 0000' }]
     })),
     deliveryPricing: placeholderPricing(),
+    riderPayRates: placeholderRiderPay(placeholderPricing()),
+    riderEarnings: [],
+    riderPayoutAccounts: {},
+    riderPhotos: {},
+    deliveryMessages: [],
     priceReviews: [],
     cartQuantities: {},
     saved: {},
     pushPreferences: {},
+    riderAreas: {},
     savedAlertsSent: [],
     pushSubscriptions: [],
     payouts: [],
@@ -641,6 +710,16 @@ async function freshDb(): Promise<Db> {
     sellerApplications: {},
     sellerShops: {},
     storeApplications: {},
+    riderSignupsOpen: false,
+    riderApplications: {},
+    riderAccounts: {},
+    deliveryRatings: {},
+    incidents: [],
+    riderSharing: {},
+    riderPositions: {},
+    riderFleets: [],
+    // The demo rider has a track record, so demos can carry anything.
+    riderTrust: { 'u-rider': { fleetId: null, trusted: true } },
     storeAccounts: {},
     supportThreads: {},
     supportMessages: [],
@@ -766,9 +845,33 @@ function participants(db: Db, listing: Listing): Set<string> {
   return new Set(db.tickets.filter((t) => t.listingId === listing.id && t.userId !== CROWD).map((t) => t.userId))
 }
 
-function notify(db: Db, userId: string, kind: NotificationKind, listingId: string | null, at: string) {
-  db.notifications.push({ id: uid('N'), userId, kind, listingId, createdAt: at, read: false, celebrated: false })
+function notify(db: Db, userId: string, kind: NotificationKind, listingId: string | null, at: string, area: string | null = null) {
+  db.notifications.push({ id: uid('N'), userId, kind, listingId, area, createdAt: at, read: false, celebrated: false })
 }
+
+/** A job has reached the pool: riderAlerts.ts decides who hears (private.alert_riders). Not the rider who just let it go. */
+function alertRiders(db: Db, kind: 'rider_new_job' | 'rider_new_return', listingId: string, area: string | null, except: string | null, now: number) {
+  for (const r of riderIds(db).filter((id) => id !== except).map((mockId) => ({ mockId }))) {
+    const prefs = db.pushPreferences[r.mockId]
+    const allowed = riderJobAlertAllowed({
+      enabled: (kind === 'rider_new_job' ? prefs?.riderNewJobs : prefs?.riderReturns) !== false,
+      areas: db.riderAreas[r.mockId] ?? [],
+      jobArea: area,
+      held: riderJobsHeld(db, r.mockId),
+      sentLastHour: db.notifications.filter((n) => n.userId === r.mockId && (n.kind === 'rider_new_job' || n.kind === 'rider_new_return') && Date.parse(n.createdAt) > now - 3_600_000).length,
+    })
+    if (allowed) notify(db, r.mockId, kind, listingId, iso(now), area)
+  }
+}
+const orderArea = (db: Db, o: MockOrder) => (o.handledBy === 'drawmart' ? null : sellerAreaOf(db.merchants.find((m) => m.id === o.merchantId)!))
+/** A job for a later day's window is announced on its day (deliveryWindows.ts), in processDeadlines. */
+const alertNewJob = (db: Db, o: MockOrder, except: string | null, now: number) =>
+  (o.status !== 'dispatched' || canTakeYet(o.windowStart ?? null, now)) &&
+  alertRiders(db, 'rider_new_job', o.listingId, o.atCounterAt && o.pickupPoint ? nearestArea(o.pickupPoint.location, DELIVERY_AREAS) : orderArea(db, o), except, now)
+/** Going back to the seller from a pickup counter, not yet handed to a rider. */
+const waitingAtCounter = (o: MockOrder) => o.returnState === 'returning' && !!o.atCounterAt && !o.counterOutAt
+const alertNewReturn = (db: Db, o: MockOrder, except: string | null, now: number) => alertRiders(db, 'rider_new_return', o.listingId, nearestArea(db.claimDetails[o.claim!.id].location, DELIVERY_AREAS), except, now)
+const notifiedSince = (db: Db, userId: string, kind: NotificationKind, listingId: string, since: string) => db.notifications.some((n) => n.userId === userId && n.kind === kind && n.listingId === listingId && n.createdAt >= since)
 
 /** Everyone running this shop: its store account (whose id is the shop's), or an individual seller. */
 function notifyShop(db: Db, merchantId: string, kind: NotificationKind, listingId: string | null, at: string) {
@@ -839,6 +942,12 @@ function refundBuyers(db: Db, l: Listing, at: string) {
 /** deliveryChecks.ts: the seller's charge, the buyer's apology, and suspension if it keeps happening. */
 function penaliseSeller(db: Db, o: MockOrder, nowMs: number) {
   const at = iso(nowMs)
+  // incidents.ts: something happened after the rider collected it, so it isn't the seller's to pay for.
+  if (o.collectedAt && db.incidents.some((i) => i.orderId === o.id && i.createdAt >= o.collectedAt!)) {
+    db.excusedFailures.push(o.id)
+    db.ledger.push({ id: uid('E'), userId: o.buyerId, kind: 'store_credit', cashKobo: 0, creditKobo: APOLOGY_CREDIT_KOBO, memo: 'Sorry about your order', listingId: o.listingId, createdAt: at })
+    return
+  }
   db.payouts.push({ id: uid('Y'), merchantId: o.merchantId, listingId: o.listingId, orderId: o.id, kind: 'charge', amountKobo: -FAILURE_CHARGE_KOBO, status: 'due', createdAt: at, dueAt: at, paidAt: null, reference: null, paidTo: null })
   db.ledger.push({ id: uid('E'), userId: o.buyerId, kind: 'store_credit', cashKobo: 0, creditKobo: APOLOGY_CREDIT_KOBO, memo: 'Sorry about your order', listingId: o.listingId, createdAt: at })
   notifyShop(db, o.merchantId, 'store_order_failed', o.listingId, at)
@@ -860,7 +969,8 @@ function cancelOrderNow(db: Db, o: MockOrder, reason: CancelReason, note: string
   db.payouts = db.payouts.filter((p) => !(p.orderId === o.id && p.status === 'waiting'))
   db.ledger.push({ id: uid('E'), userId: o.buyerId, kind: 'order_refund', cashKobo: o.paidCashKobo, creditKobo: o.paidCreditKobo, memo: `Refund · ${l.title}`, listingId: l.id, createdAt: at })
   // One fee covers everything from this seller in this checkout: it moves to what's still coming, or comes back with the last.
-  if (o.deliveryFeeKobo > 0) {
+  // Not collected from a counter: the trip happened, so the fee stays paid.
+  if (o.deliveryFeeKobo > 0 && reason !== 'not_collected' && reason !== 'not_delivered') {
     const other = db.orders.find((x) => x.checkoutId === o.checkoutId && x.merchantId === o.merchantId && x.id !== o.id && x.status !== 'cancelled' && !x.isPrize)
     if (other) {
       other.deliveryFeeKobo += o.deliveryFeeKobo
@@ -920,8 +1030,116 @@ function processDeadlines(db: Db, now: number): boolean {
       notifyShop(db, o.merchantId, 'store_order_confirm_soon', o.listingId, iso(now))
     }
   }
+  // Rider reminders (riderAlerts.ts, private.rider_reminders), then jobs not collected in time go back to the pool (riderLimits.ts).
+  const remindAt = (takenAt: string) => Date.parse(collectBy(takenAt)) - COLLECT_WARNING_MINUTES * 60_000 <= now
+  for (const o of db.orders) {
+    if (o.status === 'dispatched' && o.riderId && !o.collectedAt && o.riderTakenAt && remindAt(o.riderTakenAt) && !notifiedSince(db, o.riderId, 'rider_collect_soon', o.listingId, o.riderTakenAt)) notify(db, o.riderId, 'rider_collect_soon', o.listingId, iso(now))
+    const d = o.claim?.status === 'awaiting_pickup' ? db.claimDetails[o.claim.id] : null
+    if (d?.riderId && d.takenAt && remindAt(d.takenAt) && !notifiedSince(db, d.riderId, 'rider_collect_soon', o.listingId, d.takenAt)) notify(db, d.riderId, 'rider_collect_soon', o.listingId, iso(now))
+    const lock = o.pinState.lockedUntil
+    if (o.status === 'dispatched' && o.riderId && !o.atCounterAt && lock && Date.parse(lock) <= now && Date.parse(lock) > now - 3_600_000 && !notifiedSince(db, o.riderId, 'rider_pin_unlocked', o.listingId, lock)) notify(db, o.riderId, 'rider_pin_unlocked', o.listingId, iso(now))
+  }
+  // No new time chosen after a failed attempt (deliveryAttempts.ts).
+  for (const o of db.orders) {
+    if (o.status === 'dispatched' && !o.pausedAt && o.failedAttempts === 1 && !o.redeliveryChoice && o.lastFailedAt && Date.parse(o.lastFailedAt) + CHOOSE_WITHIN_HOURS * 3_600_000 <= now) returnUndelivered(db, o, now)
+  }
+  for (const o of db.orders) {
+    if (o.status !== 'dispatched' || o.riderId || o.atCounterAt || !o.windowStart || o.windowAlertedAt || !canTakeYet(o.windowStart, now)) continue
+    if (o.dispatchedAt && Date.parse(o.dispatchedAt) >= Date.parse(windowOpens(o.windowStart))) continue
+    o.windowAlertedAt = iso(now)
+    changed = true
+    alertNewJob(db, o, null, now)
+  }
+  for (const o of db.orders) {
+    if (o.status !== 'dispatched' || !o.atCounterAt) continue
+    if (!o.counterRemindedAt && counterReminderDue(o.atCounterAt, now)) {
+      o.counterRemindedAt = iso(now)
+      notify(db, o.buyerId, 'order_collect_reminder', o.listingId, iso(now))
+    }
+    // Won items stay until they're collected.
+    if (!o.isPrize && counterReturnDue(o.atCounterAt, now)) {
+      cancelOrderNow(db, o, 'not_collected', '', now)
+      Object.assign(o, { returnState: 'returning', riderId: null, riderTakenAt: null })
+      notifyShop(db, o.merchantId, 'store_order_uncollected', o.listingId, iso(now))
+      alertNewJob(db, o, null, now)
+    }
+  }
+  for (const o of db.orders) {
+    if (o.status === 'dispatched' && !o.pausedAt && o.riderId && !o.collectedAt && o.riderTakenAt && collectionOverdue(collectBy(o.riderTakenAt), now)) {
+      const was = o.riderId
+      Object.assign(o, { riderId: null, riderTakenAt: null, collectionPhotos: null })
+      notify(db, was, 'rider_job_released', o.listingId, iso(now))
+      alertNewJob(db, o, was, now)
+    }
+    const d = o.claim?.status === 'awaiting_pickup' ? db.claimDetails[o.claim.id] : null
+    if (d?.riderId && d.takenAt && !openIncident(db, { claimId: o.claim!.id }) && collectionOverdue(collectBy(d.takenAt), now)) {
+      const was = d.riderId
+      Object.assign(d, { riderId: null, takenAt: null })
+      notify(db, was, 'rider_job_released', o.listingId, iso(now))
+      alertNewReturn(db, o, was, now)
+    }
+  }
   return changed
 }
+
+/** Back to the seller with the rider: refunded the price, not delivery, and not the seller's fault. */
+function returnUndelivered(db: Db, o: MockOrder, now: number) {
+  cancelOrderNow(db, o, 'not_delivered', '', now)
+  Object.assign(o, { returnState: 'returning', arrivedAt: null })
+  notifyShop(db, o.merchantId, 'store_order_undelivered', o.listingId, iso(now))
+}
+
+/** One earning at today's rates, once per job (private.earn). */
+function earn(db: Db, riderId: string | null, kind: EarningKind, sourceKey: string, o: MockOrder, from: string | null, to: string | null, now: number) {
+  if (!riderId || db.riderEarnings.some((e) => e.sourceKey === sourceKey && e.kind === kind)) return
+  const l = db.listings.find((x) => x.id === o.listingId)!
+  // feeGroups.ts: an order's trip pays once, at its largest package (private.trip_paid, trip_size). Not a buyer's return.
+  const forOrder = sourceKey.split(':')[0] === o.id
+  if (forOrder) {
+    const paid = db.riderEarnings.flatMap((e) => {
+      const s = db.orders.find((x) => x.id === e.sourceKey.split(':')[0])
+      return s && s.id !== o.id && e.riderId === riderId && onTripWith(s, o) ? [{ feeGroup: feeGroup(s), riderId, takenAt: s.riderTakenAt ?? null, kind: e.kind, at: e.earnedAt }] : []
+    })
+    if (tripAlreadyPaid(paid, { feeGroup: feeGroup(o), riderId, takenAt: o.riderTakenAt ?? null, kind, at: iso(now) })) return
+  }
+  const [a, b] = [from ?? to ?? DEFAULT_AREA, to ?? from ?? DEFAULT_AREA]
+  const amountKobo = kind === 'failed_attempt' ? db.riderPayRates.attemptKobo : tripPay(db.riderPayRates, a, b, forOrder ? tripSize(db, o) : packageSizeOf(l))
+  if (amountKobo <= 0) return
+  db.riderEarnings.push({
+    id: uid('R'), riderId, sourceKey, kind, amountKobo, productCode: l.productCode, listingTitle: l.title, fromArea: kind === 'failed_attempt' ? null : a, toArea: kind === 'failed_attempt' ? null : b,
+    earnedAt: iso(now), paidAt: null, reference: null, paidTo: null, paidBy: null,
+  })
+}
+const sellerArea = (db: Db, o: MockOrder) => sellerAreaOf(db.merchants.find((m) => m.id === o.merchantId)!)
+const buyerArea = (o: MockOrder) => (o.delivery.location ? nearestArea(o.delivery.location, DELIVERY_AREAS) : o.delivery.address ? areaFromText(o.delivery.address) : null)
+const pointArea = (o: MockOrder) => (o.pickupPoint ? nearestArea(o.pickupPoint.location, DELIVERY_AREAS) : null)
+
+/** Where a job goes from and to, and what it pays, as private.earn will work it out (jobPool.ts). */
+function poolPay(db: Db, o: MockOrder, fromArea: string | null, toArea: string | null, postedAt: string | null, paySize?: PackageSize) {
+  const size = packageSizeOf(db.listings.find((l) => l.id === o.listingId)!)
+  return { fromArea, toArea, size, payKobo: tripPay(db.riderPayRates, fromArea ?? toArea ?? DEFAULT_AREA, toArea ?? fromArea ?? DEFAULT_AREA, paySize ?? size), postedAt }
+}
+function poolFields(db: Db, o: MockOrder) {
+  // What the trip pays, once for its fee group.
+  if (o.returnState === 'returning') return poolPay(db, o, o.atCounterAt ? pointArea(o) : buyerArea(o), sellerArea(db, o), o.cancelledAt ?? o.dispatchedAt, tripSize(db, o))
+  return poolPay(db, o, o.handledBy === 'drawmart' ? null : sellerArea(db, o), o.fulfilment === 'pickup' ? pointArea(o) : buyerArea(o), o.dispatchedAt, tripSize(db, o))
+}
+
+/** Everything a rider is holding: deliveries, refused items going back, and returns (private.rider_jobs_held). */
+function riderJobsHeld(db: Db, riderId: string): number {
+  // Orders sharing one delivery fee are one job.
+  const orders = new Set(db.orders.filter((o) => o.riderId === riderId && ((o.status === 'dispatched' && !o.atCounterAt) || o.returnState === 'returning')).map(feeGroup))
+  return orders.size + db.orders.filter((o) => o.claim && (o.claim.status === 'awaiting_pickup' || o.claim.status === 'returning') && db.claimDetails[o.claim.id]?.riderId === riderId).length
+}
+
+/** feeGroups.ts: orders sharing one delivery fee (private.fee_group). */
+const feeGroup = (o: MockOrder) => feeGroupOf({ id: o.id, checkoutId: o.checkoutId ?? null, merchantId: o.merchantId, isPrize: o.isPrize })
+/** On one trip with o: taken with it, or in the pool, the ready ones that would be (private.on_trip_with). */
+const onTripWith = (s: MockOrder, o: MockOrder) =>
+  s.id === o.id ||
+  (feeGroup(s) === feeGroup(o) &&
+    (o.riderId ? s.riderId === o.riderId && s.riderTakenAt === o.riderTakenAt : !s.riderId && s.status === 'dispatched' && !s.atCounterAt && o.status === 'dispatched' && !o.atCounterAt))
+const tripSize = (db: Db, o: MockOrder) => largestSize(db.orders.filter((s) => onTripWith(s, o)).map((s) => packageSizeOf(db.listings.find((l) => l.id === s.listingId)!)))
 
 /** payouts.ts payoutsFor decides; this records it. A line only ever moves forward. */
 function syncPayouts(db: Db, now: number) {
@@ -934,6 +1152,11 @@ function syncPayouts(db: Db, now: number) {
     }
     if (d.due && line.status === 'waiting') Object.assign(line, { status: 'due', dueAt: iso(now) })
   }
+}
+
+/** private.forget_rider_position: never kept once a rider is carrying nothing to a buyer's door. */
+function forgetRiderPositions(db: Db) {
+  for (const riderId of Object.keys(db.riderPositions ?? {})) if (!db.orders.some((o) => o.riderId === riderId && chatOpen(o))) delete db.riderPositions[riderId]
 }
 
 /** A shared pickup's one fee follows all its draws (listing.ts settlePickupFee). */
@@ -1085,19 +1308,46 @@ function logStoreActivity(db: Db, actor: { merchantId: string; name: string }, b
 function accountFacts(db: Db, userId: string) {
   const individual = db.sellerApplications[userId]
   return {
-    isBuyer: !db.storeAccounts[userId] && db.users.some((u) => u.id === userId),
+    isBuyer: !db.storeAccounts[userId] && !db.riderAccounts[userId] && db.users.some((u) => u.id === userId),
     sellsAsIndividual: !!db.sellerShops[userId] || (!!individual && individual.status !== 'rejected'),
     hasBought: db.tickets.some((t) => t.userId === userId) || db.orders.some((o) => o.buyerId === userId),
   }
 }
 
+/** Every rider: the demo ones (not counter staff), and accounts approved to ride. */
+/** private.rider_done_jobs: handed to the buyer or a counter, in the last 30 days (riderStats filters by date). */
+const riderDoneJobs = (db: Db, riderId: string): TimedJob[] =>
+  db.orders
+    .filter((o) => o.riderId === riderId && !o.returnState && (o.atCounterAt ?? o.deliveredAt))
+    .map((o) => ({ collectedAt: o.collectedAt, doneAt: (o.atCounterAt ?? o.deliveredAt)!, windowEnd: o.windowEnd ?? null, redeliverAt: o.redeliveryChoice === 'redeliver' ? o.redeliverAt : null }))
+const ratingsOf = (db: Db, riderId: string) => Object.values(db.deliveryRatings).filter((r) => r.riderId === riderId)
+const riderIds = (db: Db) => [...DEMO_ACCOUNTS.filter((a) => a.role === 'delivery' && !a.pickupPointId).map((a) => a.mockId), ...Object.keys(db.riderAccounts)]
+const riderName = (db: Db, id: string) => db.riderApplications[id]?.fullName ?? DEMO_ACCOUNTS.find((a) => a.mockId === id)?.name ?? 'Rider'
+const riderCompleted = (db: Db, id: string) => db.orders.filter((o) => o.riderId === id && (o.status === 'delivered' || !!o.atCounterAt)).length
+const riderTrusted = (db: Db, id: string) => {
+  const t = db.riderTrust[id]
+  return !!t?.trusted || !!db.riderFleets.find((f) => f.id === t?.fleetId)?.trusted
+}
+/** riderApplications.ts newRiderLimitError, for this rider and order. */
+const riderLimit = (db: Db, id: string, o: MockOrder) => newRiderLimitError({ completed: riderCompleted(db, id), trusted: riderTrusted(db, id), orderKobo: o.priceKobo, isPrize: o.isPrize })
+/** The same, for everything that comes with it (private.group_limit). */
+const groupLimit = (db: Db, id: string, o: MockOrder) => {
+  const trip = db.orders.filter((s) => onTripWith(s, o))
+  return newRiderLimitError({ completed: riderCompleted(db, id), trusted: riderTrusted(db, id), orderKobo: trip.reduce((n, s) => n + s.priceKobo, 0), isPrize: trip.some((s) => s.isPrize) })
+}
+
+/** Open from collection until it's delivered, handed in, or goes back (private.delivery_chat_open). */
+const chatOpen = (o: MockOrder) => o.status === 'dispatched' && o.fulfilment === 'delivery' && !!o.riderId && !!o.collectedAt && !o.atCounterAt
+const riderCard = (db: Db, riderId: string) => ({ firstName: firstName(riderName(db, riderId)), photo: db.riderPhotos[riderId] ?? null })
+
 function orderView(db: Db, order: MockOrder, forBuyer = false): OrderView {
-  const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, paidFeeCashKobo: _feeCash, paidFeeCreditKobo: _feeCredit, checkoutId: _checkoutId, confirmRemindedAt: _reminded, ...o } = order
+  const { pin, riderId: _riderId, pinState: _pinState, paidCashKobo: _cash, paidCreditKobo: _credit, paidFeeCashKobo: _feeCash, paidFeeCreditKobo: _feeCredit, checkoutId: _checkoutId, confirmRemindedAt: _reminded, riderTakenAt: _taken, counterRemindedAt: _counterReminded, counterOutAt: _counterOut, windowAlertedAt: _alerted, ...o } = order
   const l = db.listings.find((x) => x.id === o.listingId)!
   const merchant = db.merchants.find((m) => m.id === o.merchantId)!
   const r = db.reviews.find((x) => x.orderId === o.id)
   const review = r ? { id: r.id, rating: r.rating, sellerComment: r.sellerComment, productComment: r.productComment, reply: r.reply, repliedAt: r.repliedAt, hidden: !!r.hiddenAt, createdAt: r.createdAt } : null
-  return { ...o, review, deliveryPin: forBuyer && o.status !== 'delivered' && o.status !== 'cancelled' ? pin : null, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, merchantName: merchant.name }
+  const rated = forBuyer ? db.deliveryRatings[o.id] : undefined
+  return { ...o, review, deliveryRating: rated ? { good: rated.good, reasons: rated.reasons, ratedAt: rated.ratedAt } : null, rider: forBuyer && chatOpen(order) ? riderCard(db, order.riderId!) : null, deliveryPin: forBuyer && o.status !== 'delivered' && o.status !== 'cancelled' ? pin : null, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, merchantName: merchant.name }
 }
 
 // -------------------------------------------------------------------- API
@@ -1175,6 +1425,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       applyPendingLimits(db, t)
       await runDueDraws(db, t)
       settlePickups(db)
+      forgetRiderPositions(db)
       syncPayouts(db, now()) // time alone can make a payout due
       const actor = teamMember(db)
       const before = actor ? storeSnapshot(db, actor.merchantId) : null
@@ -1212,7 +1463,13 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     getSession: async () => {
       const s = readSession()
       // An approved store application: the account is now the store's.
-      const shop = s?.role === 'buyer' ? (await load()).storeAccounts[s.userId] : undefined
+      const db = s?.role === 'buyer' ? await load() : null
+      const shop = db?.storeAccounts[s!.userId]
+      if (s && db?.riderAccounts[s.userId]) {
+        const next: AuthSession = { userId: s.userId, email: s.email, role: 'delivery' }
+        store.setItem(SESSION_KEY, JSON.stringify(next))
+        return next
+      }
       if (!s || !shop) return s
       const next: AuthSession = { userId: shop, email: s.email, role: 'store' }
       store.setItem(SESSION_KEY, JSON.stringify(next))
@@ -1230,8 +1487,9 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       const a = DEMO_ACCOUNTS.find((d) => d.email === email.trim().toLowerCase())
       if (!a || a.password !== password) throw new ApiError('invalid_input', 'That email and password don’t match. Try one of the demo accounts.')
       // Stores sign in as their store: userId is the store id on the mock.
-      const shop = a.role === 'buyer' ? (await load()).storeAccounts[a.mockId] : undefined
-      setSession(shop ? { userId: shop, email: a.email, role: 'store' } : { userId: a.mockId, email: a.email, role: a.role })
+      const db = a.role === 'buyer' ? await load() : null
+      const shop = db?.storeAccounts[a.mockId]
+      setSession(shop ? { userId: shop, email: a.email, role: 'store' } : db?.riderAccounts[a.mockId] ? { userId: a.mockId, email: a.email, role: 'delivery' } : { userId: a.mockId, email: a.email, role: a.role })
     },
     async signOut() {
       setSession(null)
@@ -1245,11 +1503,70 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
   }
   const me = (db: Db) => db.users.find((u) => u.id === buyer())!
   /** Whose notifications and devices these are: a store's own, or a buyer's. */
-  const inbox = () => (readSession()?.role === 'store' ? readSession()!.userId : buyer())
-  const hasInbox = () => { const role = readSession()?.role; return !role || role === 'buyer' || role === 'store' }
+  const inbox = () => (readSession()?.role === 'store' || readSession()?.role === 'delivery' ? readSession()!.userId : buyer())
+  const hasInbox = () => { const role = readSession()?.role; return !role || role === 'buyer' || role === 'store' || role === 'delivery' }
   const addressesOf = (db: Db) => sortAddresses(db.addresses[buyer()] ?? [])
   const makeDefault = (list: SavedAddress[], id: string) => {
     for (const a of list) a.isDefault = a.id === id
+  }
+  /** The pickup location a counter account works at (counter.ts). */
+  const counterPoint = () => (readSession()?.role === 'delivery' ? (DEMO_ACCOUNTS.find((a) => a.mockId === readSession()!.userId)?.pickupPointId ?? null) : null)
+  function counter(): string {
+    rider()
+    const point = counterPoint()
+    if (!point) throw new ApiError('forbidden', 'Only pickup counter staff can do this.')
+    return point
+  }
+  /** The buyer, or the rider carrying it: nobody else has this chat. */
+  function chatParty(db: Db, orderId: string): { o: MockOrder; me: 'buyer' | 'rider' } {
+    const s = readSession()
+    const o = db.orders.find((x) => x.id === orderId)
+    const me = !o ? null : s?.role === 'delivery' ? (o.riderId === s.userId ? 'rider' : null) : o.buyerId === buyer() && (!s || s.role === 'buyer') ? 'buyer' : null
+    if (!o || !me) throw new ApiError('not_found', 'That order doesn’t exist.')
+    return { o, me }
+  }
+  /** The order this rider is at the door with (private.door_order). */
+  function doorOrder(db: Db, orderId: string): MockOrder {
+    const o = db.orders.find((x) => x.id === orderId && x.riderId === rider() && x.status === 'dispatched' && x.collectedAt)
+    if (!o) throw new ApiError('invalid_input', 'Only deliveries you’re carrying can be marked.')
+    if (o.fulfilment !== 'delivery') throw new ApiError('invalid_input', 'Hand pickup orders to the counter staff.')
+    if (o.isPrize) throw new ApiError('invalid_input', 'Won items can’t be marked as not delivered. Contact DrawMart.')
+    if (o.failedAttempts === 1 && o.redeliveryChoice !== 'redeliver') throw new ApiError('invalid_input', 'The buyer hasn’t chosen a new time yet.')
+    return o
+  }
+  /** take_delivery: within the job limit and the new-rider limits. */
+  function takeOne(db: Db, me: string, orderId: string) {
+    if (counterPoint()) throw new ApiError('forbidden', 'Counter staff don’t take deliveries.')
+    const full = takeJobError(riderJobsHeld(db, me))
+    if (full) throw new ApiError('invalid_input', full)
+    const limited = db.orders.find((x) => x.id === orderId)
+    const limit = limited && groupLimit(db, me, limited)
+    if (limit) throw new ApiError('invalid_input', limit)
+    const o = db.orders.find((x) => x.id === orderId && !x.riderId && ((x.status === 'dispatched' && !x.atCounterAt) || waitingAtCounter(x)))
+    if (!o) throw new ApiError('invalid_input', 'Another rider has taken this delivery.')
+    takeGroup(db, me, o)
+  }
+  /** private.take_group: the order and every one ready on the same fee, in the same place. */
+  function takeGroup(db: Db, riderId: string, o: MockOrder) {
+    const tooSoon = o.status === 'dispatched' ? takeTooSoonError(o.windowStart ?? null, now()) : null
+    if (tooSoon) throw new ApiError('invalid_input', tooSoon)
+    const at = iso(now())
+    const same = (x: MockOrder) => (waitingAtCounter(o) ? waitingAtCounter(x) : x.status === 'dispatched' && !x.atCounterAt)
+    for (const x of db.orders.filter((x) => x.id === o.id || (feeGroup(x) === feeGroup(o) && !x.riderId && same(x)))) {
+      Object.assign(x, { riderId, riderTakenAt: at })
+      if (x.isPrize) x.collectedAt = at
+    }
+  }
+  /** Admins, or nobody signed in (the demo). */
+  function requireAdmin() {
+    const role = readSession()?.role
+    if (role && role !== 'admin') throw new ApiError('forbidden', 'Only admins can do this.')
+  }
+  /** A rider paid through the app: not counter staff. */
+  function payee(): string {
+    const me = rider()
+    if (counterPoint()) throw new ApiError('forbidden', 'Only sellers can add a bank account.')
+    return me
   }
   function rider(): string {
     const s = readSession()
@@ -1600,14 +1917,14 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     setPushPreference: (category, enabled) =>
       tx((db) => {
-        if (!hasInbox()) throw new ApiError('forbidden', 'Only buyer and store accounts have this setting.')
+        if (!hasInbox()) throw new ApiError('forbidden', 'Only buyer, store and delivery accounts have this setting.')
         if (!Object.keys(DEFAULT_PUSH_PREFERENCES).includes(category)) throw new ApiError('invalid_input', 'That isn’t a kind of notification.')
         db.pushPreferences[inbox()] = { ...DEFAULT_PUSH_PREFERENCES, ...db.pushPreferences[inbox()], [category]: enabled }
       }),
 
     savePushSubscription: (subscription) =>
       tx((db) => {
-        if (!hasInbox()) throw new ApiError('forbidden', 'Only buyer and store accounts have this setting.')
+        if (!hasInbox()) throw new ApiError('forbidden', 'Only buyer, store and delivery accounts have this setting.')
         if (!pushSubscriptionValid(subscription)) throw new ApiError('invalid_input', 'This device’s notification details don’t look right.')
         db.pushSubscriptions = db.pushSubscriptions.filter((s) => s.endpoint !== subscription.endpoint)
         db.pushSubscriptions.push({ ...subscription, userId: inbox() })
@@ -1615,7 +1932,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     deletePushSubscription: (endpoint) =>
       tx((db) => {
-        db.pushSubscriptions = db.pushSubscriptions.filter((s) => !(s.endpoint === endpoint && s.userId === buyer()))
+        db.pushSubscriptions = db.pushSubscriptions.filter((s) => !(s.endpoint === endpoint && s.userId === inbox()))
       }),
 
     listWinnersWall: () =>
@@ -1707,7 +2024,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     listPickupPoints: () => tx(() => PICKUP_POINTS),
 
-    checkout: ({ listingIds, quantities = {}, expectedTotalKobo, code, ...details }) =>
+    checkout: ({ listingIds, quantities = {}, expectedTotalKobo, code, window: chosenWindow, ...details }) =>
       tx((db) => {
         const codeDiscount = code?.trim() ? usableCode(db, code) : null
         const codePrices: Record<string, Kobo> = {}
@@ -1716,7 +2033,10 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const listings = listingIds.map((id) => getListingOr404(db, id))
         const views = listings.map((l) => listingView(db, l))
         const problems = validateCheckout(details, views.some(isCar)).map((e) => CHECKOUT_ERROR_TEXT[e])
-        if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+        if (chosenWindow) problems.push(details.fulfilment === 'delivery' ? windowError(chosenWindow, now()) ?? '' : 'Delivery windows are only for delivery.')
+        if (chosenWindow && views.some(isCar)) problems.push('Cars are arranged with the dealer, so there’s no delivery window.')
+        const times = chosenWindow ? windowTimes(chosenWindow) : null
+        if (problems.some(Boolean)) throw new ApiError('invalid_input', problems.filter(Boolean).join(' '))
         for (const v of views) {
           if (v.merchantId === db.sellerShops[buyer()]) throw new ApiError('forbidden', 'You can’t buy your own item.')
           if (lineAmountKobo(v) === null) throw new ApiError('not_for_sale', `${v.title} isn’t for sale any more.`)
@@ -1769,8 +2089,8 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           }
           const order: MockOrder = {
             pin: newDeliveryPin(), riderId: null, pinState: { attempts: 0, lockedUntil: null }, paidCashKobo: paid.fromCash, paidCreditKobo: paid.fromCredit, paidFeeCashKobo: paidFee.fromCash, paidFeeCreditKobo: paidFee.fromCredit, checkoutId, deliveryFeeKobo,
-            cancelledAt: null, cancelReason: null, cancelNote: null, confirmRemindedAt: null,
-            confirmBy: prize ? null : confirmDeadline(now()), confirmedAt: null, confirmPhoto: null,
+            cancelledAt: null, cancelReason: null, cancelNote: null, confirmRemindedAt: null, atCounterAt: null, arrivedAt: null, failedAttempts: 0, lastFailedAt: null, redeliveryChoice: null, redeliverAt: null,
+            confirmBy: prize ? null : confirmDeadline(now()), confirmedAt: null, confirmPhoto: null, windowStart: times?.start ?? null, windowEnd: times?.end ?? null,
             refundedAt: null, claim: null, readyBy: null, collectedAt: null, collectionPhotos: null, collectionProblems: null, refusalPhoto: null, returnState: null, returnedAt: null,
             discountKobo: used ? quantity * l.priceKobo - price : 0,
             id: uid('O'), listingId: l.id, buyerId: buyer(), merchantId: l.merchantId, quantity, priceKobo: price, feeKobo: prize ? 0 : saleEconomics(price, l.feeBps).feeKobo,
@@ -1794,19 +2114,38 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     listMyOrders: () =>
       tx((db) => db.orders.filter((o) => o.buyerId === buyer()).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((o) => orderView(db, o, true))),
 
+    getRiderAreas: () => tx((db) => db.riderAreas[rider()] ?? []),
+
+    setRiderAreas: (areas) =>
+      tx((db) => {
+        const me = rider()
+        const problem = riderAreasError(areas)
+        if (problem) throw new ApiError('invalid_input', problem)
+        db.riderAreas[me] = [...areas]
+      }),
+
     listDeliveryJobs: () =>
       tx((db): DeliveryJob[] => {
         const me = rider()
         return db.orders
-          .filter((o) => (o.status === 'dispatched' && !o.riderId) || (o.riderId === me && (o.status === 'dispatched' || o.status === 'delivered' || o.returnState === 'returning')))
+          .filter((o) => (o.status === 'dispatched' && !o.riderId && !o.atCounterAt) || (waitingAtCounter(o) && !o.riderId) || (o.riderId === me && (o.status === 'dispatched' || o.status === 'delivered' || o.returnState === 'returning')))
           .sort((a, b) => (b.deliveredAt ?? '9').localeCompare(a.deliveredAt ?? '9') || (a.dispatchedAt ?? '').localeCompare(b.dispatchedAt ?? ''))
           .map((o) => {
             const l = db.listings.find((x) => x.id === o.listingId)!
             const merchant = db.merchants.find((m) => m.id === o.merchantId)!
-            const carrying = o.riderId === me && o.status === 'dispatched' && !!o.collectedAt
+            const carrying = o.riderId === me && o.status === 'dispatched' && !!o.collectedAt && !o.atCounterAt
             return {
               id: o.id, quantity: o.quantity, confirmPhoto: o.confirmPhoto, collected: !!o.collectedAt, returning: o.returnState === 'returning', productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, fulfilment: o.fulfilment, status: o.status,
               dispatchedAt: o.dispatchedAt, deliveredAt: o.deliveredAt, mine: !!o.riderId,
+              collectKey: waitingAtCounter(o) ? `point:${o.pickupPoint?.id}` : o.handledBy === 'drawmart' ? 'drawmart' : `shop:${o.merchantId}`,
+              feeGroup: feeGroup(o),
+              collectBy: o.riderId === me && o.status === 'dispatched' && !o.collectedAt && o.riderTakenAt ? collectBy(o.riderTakenAt) : null,
+              atCounterAt: o.status === 'dispatched' || o.status === 'delivered' ? o.atCounterAt : null, waitingAtCounter: waitingAtCounter(o),
+              arrivedAt: o.arrivedAt ?? null, failedAttempts: o.failedAttempts, awaitingBuyer: o.status === 'dispatched' && o.failedAttempts === 1 && !o.redeliveryChoice,
+              redeliverAt: o.redeliveryChoice === 'redeliver' ? o.redeliverAt : null,
+              windowStart: o.windowStart ?? null, windowEnd: o.windowEnd ?? null,
+              ...poolFields(db, o),
+              locked: !o.riderId && !!riderLimit(db, me, o),
               collectFrom: o.handledBy === 'drawmart' ? { name: 'DrawMart escrow', area: 'Lagos' } : { name: merchant.name, area: merchant.area, ...(o.riderId === me && ((o.status === 'dispatched' && !o.collectedAt) || o.returnState === 'returning') ? db.shopPickups[o.merchantId] : {}) },
               pickupPoint: o.pickupPoint,
               dropOff: carrying ? { buyerName: db.users.find((u) => u.id === o.buyerId)?.displayName ?? 'Buyer', address: o.delivery.address, location: o.delivery.location, contactPhone: o.delivery.contactPhone } : null,
@@ -1815,28 +2154,40 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           })
       }),
 
-    takeDelivery: (orderId) =>
+    takeDelivery: (orderId) => tx((db) => takeOne(db, rider(), orderId)),
+
+    takeDeliveries: (orderIds) =>
       tx((db) => {
         const me = rider()
-        const o = db.orders.find((x) => x.id === orderId && x.status === 'dispatched' && !x.riderId)
-        if (!o) throw new ApiError('invalid_input', 'Another rider has taken this delivery.')
-        o.riderId = me
-        o.collectedAt = o.isPrize ? iso(now()) : null
+        if (orderIds.length < 2 || new Set(orderIds).size !== orderIds.length) throw new ApiError('invalid_input', 'Choose two or more different jobs.')
+        const groups = new Set(db.orders.filter((x) => orderIds.includes(x.id)).map(feeGroup))
+        const room = tripRoomError(riderJobsHeld(db, me), groups.size)
+        if (room) throw new ApiError('invalid_input', room)
+        // All or none, like take_deliveries: a failure part-way leaves the stored data as it was.
+        for (const id of orderIds) if (db.orders.find((x) => x.id === id)?.riderId !== me) takeOne(db, me, id)
       }),
 
     releaseDelivery: (orderId) =>
       tx((db) => {
         const me = rider()
-        const o = db.orders.find((x) => x.id === orderId && x.status === 'dispatched' && x.riderId === me)
+        const back = db.orders.find((x) => x.id === orderId && x.riderId === me && waitingAtCounter(x))
+        if (back) {
+          for (const x of db.orders.filter((x) => feeGroup(x) === feeGroup(back) && x.riderId === me && waitingAtCounter(x))) Object.assign(x, { riderId: null, riderTakenAt: null })
+          return
+        }
+        const o = db.orders.find((x) => x.id === orderId && x.status === 'dispatched' && x.riderId === me && !x.atCounterAt)
         if (!o) throw new ApiError('invalid_input', 'Only deliveries you’re carrying can be handed back.')
-        o.riderId = null
-        o.collectedAt = null
-        o.collectionPhotos = null
+        // The whole group goes back together.
+        for (const x of db.orders.filter((x) => feeGroup(x) === feeGroup(o) && x.riderId === me && x.status === 'dispatched' && !x.atCounterAt)) {
+          Object.assign(x, { riderId: null, riderTakenAt: null, collectedAt: null, collectionPhotos: null })
+        }
+        alertNewJob(db, o, me, now())
       }),
 
     confirmDelivery: (orderId, pin) =>
       tx((db) => {
         const me = rider()
+        if (db.orders.some((x) => x.id === orderId && x.riderId === me && x.fulfilment === 'pickup')) throw new ApiError('invalid_input', 'Hand pickup orders to the counter staff. They complete them with the buyer.')
         const o = db.orders.find((x) => x.id === orderId && x.status === 'dispatched' && x.riderId === me && x.collectedAt)
         if (!o) throw new ApiError('invalid_input', 'Only deliveries you’re carrying can be confirmed.')
         if (!isDeliveryPin(pin)) throw new ApiError('invalid_input', 'Enter the buyer’s 6-digit PIN.')
@@ -1845,8 +2196,531 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (result.confirmed) {
           o.status = 'delivered'
           o.deliveredAt = iso(now())
+          earn(db, me, 'delivery', o.id, o, sellerArea(db, o), buyerArea(o), now())
         }
         return result
+      }),
+
+    getRiderProfile: () => tx((db) => riderCard(db, rider())),
+
+    getRiderLevel: () =>
+      tx((db) => {
+        const me = rider()
+        return { completed: riderCompleted(db, me), trusted: riderTrusted(db, me), jobsToUnlock: NEW_RIDER_JOBS, maxKobo: NEW_RIDER_MAX_KOBO }
+      }),
+
+    getRiderSignupsOpen: () => tx((db) => db.riderSignupsOpen),
+
+    getMyRiderApplication: () => tx((db) => db.riderApplications[buyer()] ?? null),
+
+    submitRiderApplication: (input) =>
+      tx((db) => {
+        const me = buyer()
+        if (!db.riderSignupsOpen) throw new ApiError('invalid_input', 'Rider sign-up isn’t open yet.')
+        const facts = accountFacts(db, me)
+        const blocker = riderAccountBlocker({ ...facts, appliedAsStore: !!db.storeApplications[me] && db.storeApplications[me].status !== 'rejected' })
+        if (blocker) throw new ApiError('invalid_input', blocker)
+        const prev = db.riderApplications[me]
+        if (prev?.status === 'pending') throw new ApiError('invalid_input', 'Your application is already being reviewed.')
+        if (prev?.status === 'approved') throw new ApiError('invalid_input', 'You’re already approved.')
+        const problems = validateRiderApplication(input).map((e) => RIDER_APPLICATION_ERROR_TEXT[e])
+        if (problems.length) throw new ApiError('invalid_input', problems.join(' '))
+        const at = iso(now())
+        db.riderApplications[me] = {
+          id: prev?.id ?? uid('A'), status: 'pending', fullName: input.fullName.trim(), nin: input.nin.trim(), phone: input.phone.trim(), address: input.address.trim(), area: input.area,
+          vehicle: input.vehicle, plate: input.vehicle === 'bicycle' ? null : input.plate.toUpperCase().replace(/[\s-]/g, ''), guarantorName: input.guarantorName.trim(), guarantorPhone: input.guarantorPhone.trim(),
+          guarantorRelationship: input.guarantorRelationship.trim(), idPhotoUrl: input.idPhoto, selfieUrl: input.selfiePhoto, reviewNote: null, createdAt: prev?.createdAt ?? at, updatedAt: at, reviewedAt: null,
+        }
+        return db.riderApplications[me]
+      }),
+
+    setRiderSignupsOpen: (open) =>
+      tx((db) => {
+        requireAdmin()
+        db.riderSignupsOpen = open
+      }),
+
+    listRiderApplications: () =>
+      tx((db) => {
+        requireAdmin()
+        return Object.values(db.riderApplications).filter((a) => a.status === 'pending').sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
+      }),
+
+    approveRiderApplication: (applicationId) =>
+      tx((db) => {
+        requireAdmin()
+        const [userId, a] = Object.entries(db.riderApplications).find(([, x]) => x.id === applicationId) ?? []
+        if (!userId || !a || a.status !== 'pending') throw new ApiError('invalid_input', 'Only applications waiting for review can be approved.')
+        if (riderAccountBlocker({ ...accountFacts(db, userId), appliedAsStore: false }))
+          throw new ApiError('invalid_input', 'This account has bought or sold on DrawMart since applying, so it can’t become a rider’s. Ask them to apply from a new account.')
+        db.riderAccounts[userId] = true
+        delete db.carts[userId]
+        delete db.saved[userId]
+        Object.assign(a, { status: 'approved', reviewedAt: iso(now()) })
+        notify(db, userId, 'rider_approved', null, iso(now()))
+      }),
+
+    rejectRiderApplication: (applicationId, note) =>
+      tx((db) => {
+        requireAdmin()
+        if (note.trim().length < 5) throw new ApiError('invalid_input', 'Tell the applicant what to fix.')
+        const a = Object.values(db.riderApplications).find((x) => x.id === applicationId)
+        if (!a || a.status !== 'pending') throw new ApiError('invalid_input', 'Only applications waiting for review can be rejected.')
+        Object.assign(a, { status: 'rejected', reviewNote: note.trim(), reviewedAt: iso(now()) })
+      }),
+
+    listRiderFleets: () =>
+      tx((db) => {
+        requireAdmin()
+        return [...db.riderFleets].sort((a, b) => a.name.localeCompare(b.name))
+      }),
+
+    createRiderFleet: (name, contactPhone) =>
+      tx((db) => {
+        requireAdmin()
+        if (name.trim().length < 2) throw new ApiError('invalid_input', 'Enter the fleet’s name.')
+        if (!isNigerianMobile(contactPhone)) throw new ApiError('invalid_input', 'Enter a Nigerian mobile number, e.g. 0803 123 4567.')
+        db.riderFleets.push({ id: uid('F'), name: name.trim(), contactPhone: contactPhone.trim(), trusted: false })
+      }),
+
+    setFleetTrusted: (fleetId, trusted) =>
+      tx((db) => {
+        requireAdmin()
+        const f = db.riderFleets.find((x) => x.id === fleetId)
+        if (!f) throw new ApiError('not_found', 'That fleet doesn’t exist.')
+        f.trusted = trusted
+      }),
+
+    listRiders: () =>
+      tx((db): AdminRider[] => {
+        requireAdmin()
+        return riderIds(db)
+          .map((id) => ({ id, name: riderName(db, id), photo: db.riderPhotos[id] ?? null, fleetId: db.riderTrust[id]?.fleetId ?? null, trusted: !!db.riderTrust[id]?.trusted, completed: riderCompleted(db, id), holding: riderJobsHeld(db, id), joinedAt: db.riderApplications[id]?.reviewedAt ?? '2026-10-01T00:00:00.000Z' }))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      }),
+
+    getLocationSharing: () => tx((db) => !!db.riderSharing[rider()]),
+
+    setLocationSharing: (on) =>
+      tx((db) => {
+        const me = rider()
+        db.riderSharing[me] = on
+        if (!on) delete db.riderPositions[me]
+      }),
+
+    shareLocation: (at) =>
+      tx((db) => {
+        const me = rider()
+        const problem = positionError(at)
+        if (problem) throw new ApiError('invalid_input', problem)
+        if (!db.riderSharing[me] || !db.orders.some((o) => o.riderId === me && chatOpen(o))) {
+          delete db.riderPositions[me]
+          return false
+        }
+        db.riderPositions[me] = { location: at, updatedAt: iso(now()) }
+        return true
+      }),
+
+    getRiderLocation: (orderId) =>
+      tx((db): RiderLocation | null => {
+        const o = db.orders.find((x) => x.id === orderId && x.buyerId === buyer())
+        const p = o?.riderId && chatOpen(o) ? db.riderPositions[o.riderId] : undefined
+        return p && locationFresh(p.updatedAt, now()) ? p : null
+      }),
+
+    reportIncident: (kind, id, type, at) =>
+      tx((db) => {
+        const me = rider()
+        const o = kind === 'delivery' ? db.orders.find((x) => x.id === id && x.riderId === me && ((x.status === 'dispatched' && !x.atCounterAt) || x.returnState === 'returning')) : undefined
+        const claimed = kind === 'return' ? db.orders.find((x) => x.claim?.id === id && db.claimDetails[id]?.riderId === me && (x.claim.status === 'awaiting_pickup' || x.claim.status === 'returning')) : undefined
+        if (!o && !claimed) throw new ApiError('invalid_input', 'You can only report a problem on a job you have.')
+        const open = openIncident(db, o ? { orderId: id } : { claimId: id })
+        if (open) return open.id
+        const incident: MockIncident = { id: uid('I'), orderId: o ? id : null, claimId: o ? null : id, riderId: me, type, note: null, photo: null, location: at, createdAt: iso(now()), resolvedAt: null, outcome: null }
+        db.incidents.push(incident)
+        if (o) o.pausedAt = incident.createdAt
+        return incident.id
+      }),
+
+    addIncidentDetails: (incidentId, d) =>
+      tx((db) => {
+        const i = db.incidents.find((x) => x.id === incidentId && x.riderId === rider() && !x.resolvedAt)
+        if (!i) throw new ApiError('invalid_input', 'That report has been closed. Call DrawMart if you need help.')
+        const problem = incidentNoteError(d.note ?? '')
+        if (problem) throw new ApiError('invalid_input', problem)
+        Object.assign(i, { note: d.note?.trim() || i.note, photo: d.photo ?? i.photo, location: d.at ?? i.location })
+      }),
+
+    getMyOpenIncidents: () =>
+      tx((db) => {
+        const me = rider()
+        return Object.fromEntries(db.incidents.filter((i) => i.riderId === me && !i.resolvedAt).map((i) => [(i.orderId ?? i.claimId)!, { id: i.id, type: i.type, createdAt: i.createdAt }]))
+      }),
+
+    listOpenIncidents: () =>
+      tx((db): OpenIncident[] => {
+        requireAdmin()
+        return db.incidents
+          .filter((i) => !i.resolvedAt)
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+          .map((i) => {
+            const o = db.orders.find((x) => (i.orderId ? x.id === i.orderId : x.claim?.id === i.claimId))!
+            const l = getListingOr404(db, o.listingId)
+            return {
+              id: i.id, kind: i.orderId ? 'delivery' : 'return', orderId: o.id, type: i.type, createdAt: i.createdAt, note: i.note, photo: i.photo, location: i.location,
+              productCode: l.productCode, listingTitle: l.title, isPrize: o.isPrize, orderStatus: o.status, collected: !!o.collectedAt,
+              rider: { id: i.riderId, name: riderName(db, i.riderId), phone: db.riderApplications[i.riderId]?.phone ?? db.users.find((u) => u.id === i.riderId)?.phone ?? null },
+            }
+          })
+      }),
+
+    resolveIncident: (incidentId, outcome, note) =>
+      tx((db) => {
+        requireAdmin()
+        const i = db.incidents.find((x) => x.id === incidentId && !x.resolvedAt)
+        if (!i) throw new ApiError('not_found', 'That incident is already closed.')
+        const o = db.orders.find((x) => (i.orderId ? x.id === i.orderId : x.claim?.id === i.claimId))!
+        const problem = resolveIncidentError(outcome, { kind: i.orderId ? 'delivery' : 'return', isPrize: o.isPrize, status: o.status })
+        if (problem) throw new ApiError('invalid_input', problem)
+        const at = now()
+        if (outcome === 'refund') {
+          cancelOrderNow(db, o, 'incident', note, at)
+          // incidents.ts sellerStillPaid: it left the seller as it should.
+          if (sellerStillPaid(!!o.collectedAt) && o.priceKobo - o.feeKobo > 0 && !db.payouts.some((p) => p.orderId === o.id && p.kind === 'sale'))
+            db.payouts.push({ id: uid('Y'), merchantId: o.merchantId, listingId: o.listingId, orderId: o.id, kind: 'sale', amountKobo: o.priceKobo - o.feeKobo, status: 'due', createdAt: iso(at), dueAt: iso(at), paidAt: null, reference: null, paidTo: null })
+        }
+        Object.assign(i, { resolvedAt: iso(at), outcome })
+        // Not yet collected: a fresh collection window, for the whole trip.
+        if (i.orderId && o.status === 'dispatched' && o.riderId && !o.collectedAt) {
+          const was = o.riderTakenAt
+          for (const x of db.orders) if (x.riderId === o.riderId && x.riderTakenAt === was && x.status === 'dispatched' && !x.collectedAt) x.riderTakenAt = iso(at)
+        }
+        if (i.claimId && o.claim?.status === 'awaiting_pickup' && db.claimDetails[i.claimId]) db.claimDetails[i.claimId].takenAt = iso(at)
+        if (i.orderId) o.pausedAt = null
+      }),
+
+    rateDelivery: (orderId, good, reasons) =>
+      tx((db) => {
+        const me = buyer()
+        const o = db.orders.find((x) => x.id === orderId && x.buyerId === me)
+        const l = o && db.listings.find((x) => x.id === o.listingId)
+        if (!o || !l || !o.riderId || !canRateDelivery({ ...o, category: l.category }, now())) throw new ApiError('invalid_input', 'You can rate a delivery to your door for 7 days after it arrives.')
+        const problem = ratingError(good, reasons)
+        if (problem) throw new ApiError('invalid_input', problem)
+        db.deliveryRatings[o.id] = { riderId: o.riderId, buyerId: me, good, reasons: [...reasons], ratedAt: iso(now()) }
+      }),
+
+    getMyRiderStats: () =>
+      tx((db) => {
+        const me = rider()
+        return riderStats(riderDoneJobs(db, me), ratingsOf(db, me), now())
+      }),
+
+    getRiderPerformance: () =>
+      tx((db): RiderPerformanceRow[] => {
+        requireAdmin()
+        const at = now()
+        return riderIds(db)
+          .map((id) => {
+            const ratings = ratingsOf(db, id)
+            const recentDowns = Object.entries(db.deliveryRatings)
+              .filter(([, r]) => r.riderId === id && !r.good && Date.parse(r.ratedAt) > at - STATS_DAYS * DAY)
+              .sort(([, a], [, b]) => b.ratedAt.localeCompare(a.ratedAt))
+              .slice(0, 5)
+              .map(([orderId, r]) => ({ orderId, productCode: getListingOr404(db, db.orders.find((o) => o.id === orderId)!.listingId).productCode, ratedAt: r.ratedAt, reasons: r.reasons }))
+            const name = riderName(db, id)
+            return { ...riderPerformance(riderDoneJobs(db, id), ratings, at), name, rider: { id, name, phone: db.riderApplications[id]?.phone ?? db.users.find((u) => u.id === id)?.phone ?? null }, recentDowns }
+          })
+          .sort((a, b) => a.name.localeCompare(b.name))
+      }),
+
+    getDispatchBoard: () =>
+      tx((db): DispatchBoard => {
+        requireAdmin()
+        const at = now()
+        const riderOf = (id: string | null | undefined) => (id ? { id, name: riderName(db, id), phone: db.riderApplications[id]?.phone ?? db.users.find((u) => u.id === id)?.phone ?? null } : null)
+        const jobs = db.orders.flatMap((o): DispatchJob[] => {
+          const l = getListingOr404(db, o.listingId)
+          const shop = db.merchants.find((m) => m.id === o.merchantId)!
+          const common = { orderId: o.id, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, shopName: o.handledBy === 'drawmart' ? 'DrawMart escrow' : shop.name, isPrize: o.isPrize, fulfilment: o.fulfilment }
+          const out: DispatchJob[] = []
+          const st = orderStage({ status: o.status, hasRider: !!o.riderId, riderTakenAt: o.riderTakenAt ?? null, dispatchedAt: o.dispatchedAt, collectedAt: o.collectedAt, atCounterAt: o.atCounterAt, counterOutAt: o.counterOutAt ?? null, returnState: o.returnState, failedAttempts: o.failedAttempts, lastFailedAt: o.lastFailedAt, cancelledAt: o.cancelledAt, windowStart: o.windowStart })
+          if (st) {
+            const { fromArea, toArea } = poolFields(db, o)
+            out.push({
+              ...common, kind: 'delivery', id: o.id, ...st, stuck: dispatchStuck(st.stage, st.since, at), fromArea, toArea, pickupPointName: o.pickupPoint?.name ?? null,
+              failedAttempts: o.failedAttempts, awaitingBuyer: o.status === 'dispatched' && o.failedAttempts === 1 && !o.redeliveryChoice, redeliverAt: o.redeliveryChoice === 'redeliver' ? o.redeliverAt : null, windowStart: o.windowStart ?? null, windowEnd: o.windowEnd ?? null, rider: riderOf(o.riderId),
+            })
+          }
+          const d = o.claim ? db.claimDetails[o.claim.id] : undefined
+          const cs = o.claim && d ? claimStage({ status: o.claim.status, hasRider: !!d.riderId, riderTakenAt: d.takenAt ?? null, openedAt: d.openedAt ?? null, pickedUpAt: d.pickedUpAt ?? null }) : null
+          if (o.claim && d && cs) {
+            out.push({
+              ...common, kind: 'return', id: o.claim.id, ...cs, stuck: dispatchStuck(cs.stage, cs.since, at), fromArea: nearestArea(d.location, DELIVERY_AREAS), toArea: sellerArea(db, o), pickupPointName: null,
+              failedAttempts: 0, awaitingBuyer: false, redeliverAt: null, windowStart: null, windowEnd: null, rider: riderOf(d.riderId),
+            })
+          }
+          return out
+        })
+        // Stuck first, then the longest waiting (private.dispatch_board).
+        jobs.sort((a, b) => Number(b.stuck) - Number(a.stuck) || (a.since ?? '~').localeCompare(b.since ?? '~'))
+        return { ...DEFAULT_STUCK_LIMITS, maxJobs: MAX_RIDER_JOBS, jobs }
+      }),
+
+    assignJob: (kind, id, riderId) =>
+      tx((db) => {
+        requireAdmin()
+        if (!riderIds(db).includes(riderId)) throw new ApiError('not_found', 'That rider doesn’t exist.')
+        const full = assignJobError(riderJobsHeld(db, riderId))
+        if (full) throw new ApiError('invalid_input', full)
+        const o =
+          kind === 'delivery'
+            ? db.orders.find((x) => x.id === id && !x.riderId && ((x.status === 'dispatched' && !x.atCounterAt) || waitingAtCounter(x)))
+            : db.orders.find((x) => x.claim?.id === id && x.claim.status === 'awaiting_pickup' && !db.claimDetails[id]?.riderId)
+        const limit = o && (kind === 'delivery' ? groupLimit(db, riderId, o) : riderLimit(db, riderId, o))
+        if (limit) throw new ApiError('invalid_input', `This rider is new. ${limit}`)
+        if (!o) throw new ApiError('invalid_input', `Only ${kind === 'delivery' ? 'jobs' : 'returns'} waiting in the pool can be assigned. A rider may have just taken it.`)
+        if (kind === 'delivery') {
+          takeGroup(db, riderId, o)
+        } else {
+          Object.assign(db.claimDetails[id], { riderId, takenAt: iso(now()) })
+        }
+        notify(db, riderId, 'rider_job_assigned', o.listingId, iso(now()))
+      }),
+
+    unassignJob: (kind, id) =>
+      tx((db) => {
+        requireAdmin()
+        if (kind === 'delivery') {
+          const o = db.orders.find((x) => x.id === id && x.riderId && ((x.status === 'dispatched' && !x.atCounterAt && !x.collectedAt) || waitingAtCounter(x)))
+          if (!o?.riderId) throw new ApiError('invalid_input', 'Only jobs the rider hasn’t collected yet can be taken back.')
+          const was = o.riderId
+          const trip = db.orders.filter((x) => onTripWith(x, o) && ((x.status === 'dispatched' && !x.atCounterAt && !x.collectedAt) || waitingAtCounter(x)))
+          for (const x of trip) Object.assign(x, { riderId: null, riderTakenAt: null, collectionPhotos: null })
+          notify(db, was, 'rider_job_taken_back', o.listingId, iso(now()))
+          alertNewJob(db, o, was, now())
+        } else {
+          const o = db.orders.find((x) => x.claim?.id === id && x.claim.status === 'awaiting_pickup')
+          const was = db.claimDetails[id]?.riderId
+          if (!o || !was) throw new ApiError('invalid_input', 'Only returns the rider hasn’t collected yet can be taken back.')
+          Object.assign(db.claimDetails[id], { riderId: null, takenAt: null })
+          notify(db, was, 'rider_job_taken_back', o.listingId, iso(now()))
+          alertNewReturn(db, o, was, now())
+        }
+      }),
+
+    setRiderFleet: (riderId, fleetId) =>
+      tx((db) => {
+        requireAdmin()
+        if (!riderIds(db).includes(riderId)) throw new ApiError('not_found', 'That rider doesn’t exist.')
+        if (fleetId && !db.riderFleets.some((f) => f.id === fleetId)) throw new ApiError('not_found', 'That fleet doesn’t exist.')
+        db.riderTrust[riderId] = { trusted: db.riderTrust[riderId]?.trusted ?? false, fleetId }
+      }),
+
+    setRiderTrusted: (riderId, trusted) =>
+      tx((db) => {
+        requireAdmin()
+        if (!riderIds(db).includes(riderId)) throw new ApiError('not_found', 'That rider doesn’t exist.')
+        db.riderTrust[riderId] = { fleetId: db.riderTrust[riderId]?.fleetId ?? null, trusted }
+      }),
+
+    setRiderPhoto: (photo) =>
+      tx((db) => {
+        const me = rider()
+        if (!/^(https:\/\/|\/assets\/|data:image\/)/.test(photo)) throw new ApiError('invalid_input', 'Take a photo of yourself.')
+        db.riderPhotos[me] = photo
+      }),
+
+    getDeliveryChat: (orderId) =>
+      tx((db) => {
+        const { o, me } = chatParty(db, orderId)
+        if (!chatOpen(o)) return { open: false, me, rider: null, messages: [] }
+        return {
+          open: true,
+          me,
+          rider: riderCard(db, o.riderId!),
+          messages: db.deliveryMessages.filter((m) => m.orderId === o.id && m.riderId === o.riderId).map(({ id, sender, body, createdAt }) => ({ id, sender, body, createdAt })),
+        }
+      }),
+
+    sendDeliveryMessage: (orderId, body) =>
+      tx((db) => {
+        const { o, me } = chatParty(db, orderId)
+        if (!chatOpen(o)) throw new ApiError('invalid_input', 'This chat has closed.')
+        const problem = deliveryMessageError(body)
+        if (problem) throw new ApiError('invalid_input', problem)
+        const recent = db.deliveryMessages.filter((m) => m.orderId === o.id && m.sender === me && Date.parse(m.createdAt) > now() - 60_000).length
+        if (recent >= MAX_MESSAGES_PER_MINUTE) throw new ApiError('invalid_input', 'You’re sending messages too quickly. Wait a moment.')
+        db.deliveryMessages.push({ id: uid('D'), orderId: o.id, riderId: o.riderId!, sender: me, body: body.trim(), createdAt: iso(now()) })
+      }),
+
+    markArrived: (orderId) =>
+      tx((db) => {
+        const o = doorOrder(db, orderId)
+        o.arrivedAt ??= iso(now())
+        return o.arrivedAt
+      }),
+
+    failDeliveryAttempt: (orderId, photo, at) =>
+      tx((db) => {
+        const o = doorOrder(db, orderId)
+        const problem = attemptError({ arrivedAt: o.arrivedAt ?? null, nowMs: now(), photos: [photo], at, dropOff: o.delivery.location }) ?? photosError([photo])
+        if (problem) throw new ApiError('invalid_input', problem)
+        earn(db, rider(), 'failed_attempt', `${o.id}:${o.failedAttempts}`, o, null, null, now())
+        if (o.failedAttempts === 0) {
+          Object.assign(o, { failedAttempts: 1, lastFailedAt: iso(now()), arrivedAt: null, redeliveryChoice: null, redeliverAt: null })
+          notify(db, o.buyerId, 'order_delivery_failed', o.listingId, iso(now()))
+        } else {
+          Object.assign(o, { failedAttempts: 2, lastFailedAt: iso(now()) })
+          returnUndelivered(db, o, now())
+        }
+      }),
+
+    chooseRedelivery: (orderId, choice) =>
+      tx((db) => {
+        const o = db.orders.find((x) => x.id === orderId && x.buyerId === buyer())
+        if (!o) throw new ApiError('not_found', 'That order doesn’t exist.')
+        if (o.status !== 'dispatched' || o.failedAttempts !== 1 || o.redeliveryChoice) throw new ApiError('invalid_input', 'This order doesn’t need a new time.')
+        if (Date.parse(o.lastFailedAt!) + CHOOSE_WITHIN_HOURS * 3_600_000 <= now()) throw new ApiError('invalid_input', 'The time to choose has passed.')
+        if ('pickupPointId' in choice) {
+          const point = PICKUP_POINTS.find((pp) => pp.id === choice.pickupPointId)
+          if (!point) throw new ApiError('invalid_input', 'Choose a pickup location.')
+          Object.assign(o, { fulfilment: 'pickup', pickupPoint: point, delivery: { ...o.delivery, address: '', location: null }, redeliveryChoice: 'pickup' })
+        } else {
+          const problem = redeliveryWindowError(choice.windowStart, o.lastFailedAt!, now())
+          if (problem) throw new ApiError('invalid_input', problem)
+          Object.assign(o, { redeliveryChoice: 'redeliver', redeliverAt: new Date(choice.windowStart).toISOString() })
+        }
+        if (o.riderId) notify(db, o.riderId, 'rider_redelivery_chosen', o.listingId, iso(now()))
+      }),
+
+    getRiderPayRates: () =>
+      tx((db) => {
+        requireAdmin()
+        return db.riderPayRates
+      }),
+
+    setRiderPay: (areaA, areaB, payKobo) =>
+      tx((db) => {
+        requireAdmin()
+        const [a, b] = areaA <= areaB ? [areaA, areaB] : [areaB, areaA]
+        const row = db.riderPayRates.pays.find((p) => p.areaA === a && p.areaB === b)
+        if (!row) throw new ApiError('not_found', 'That area doesn’t exist.')
+        const problem = pairPayError(db.deliveryPricing, a, b, payKobo)
+        if (problem) throw new ApiError('invalid_input', problem)
+        row.payKobo = payKobo
+      }),
+
+    setRiderSizeExtra: (size, extraKobo) =>
+      tx((db) => {
+        requireAdmin()
+        const problem = riderPayError(extraKobo, db.deliveryPricing.sizeExtras[size])
+        if (problem) throw new ApiError('invalid_input', problem)
+        db.riderPayRates.sizeExtras[size] = extraKobo
+      }),
+
+    setRiderAttemptPay: (payKobo) =>
+      tx((db) => {
+        requireAdmin()
+        const problem = attemptPayError(payKobo)
+        if (problem) throw new ApiError('invalid_input', problem)
+        db.riderPayRates.attemptKobo = payKobo
+      }),
+
+    listMyEarnings: () =>
+      tx((db): RiderEarning[] => {
+        const me = rider()
+        return db.riderEarnings
+          .filter((e) => e.riderId === me)
+          .sort((a, b) => b.earnedAt.localeCompare(a.earnedAt))
+          .map(({ riderId: _r, sourceKey: _s, paidBy: _p, ...e }) => e)
+      }),
+
+    listRiderPayDue: () =>
+      tx((db) => {
+        requireAdmin()
+        const due = payableNow(db.riderEarnings, now()) as typeof db.riderEarnings
+        return [...new Set(due.map((e) => e.riderId))].map((riderId) => ({
+          riderId,
+          riderName: riderName(db, riderId),
+          account: db.riderPayoutAccounts[riderId] ?? null,
+          lines: due.filter((e) => e.riderId === riderId).sort((a, b) => a.earnedAt.localeCompare(b.earnedAt)).map(({ riderId: _r, sourceKey: _s, paidBy: _p, ...e }) => e),
+        }))
+      }),
+
+    markRiderPaid: (riderId, reference) =>
+      tx((db) => {
+        requireAdmin()
+        const lines = (payableNow(db.riderEarnings, now()) as typeof db.riderEarnings).filter((e) => e.riderId === riderId)
+        if (!lines.length) throw new ApiError('invalid_input', 'This rider has nothing due from finished weeks.')
+        const a = db.riderPayoutAccounts[riderId]
+        if (!a) throw new ApiError('invalid_input', 'This rider hasn’t added a bank account yet.')
+        if (!accountPayable(a, now())) throw new ApiError('invalid_input', 'This rider changed their bank account recently, so pay is on hold.')
+        if (reference.trim().length < MIN_REFERENCE_LENGTH) throw new ApiError('invalid_input', 'Enter the transfer’s reference.')
+        for (const e of lines) Object.assign(e, { paidAt: iso(now()), reference: reference.trim(), paidTo: `${a.bankName} ${maskAccountNumber(a.accountNumber)}`, paidBy: readSession()!.userId })
+        notify(db, riderId, 'rider_paid', null, iso(now()))
+      }),
+
+    getMyCounter: () =>
+      tx(() => {
+        rider()
+        const point = counterPoint()
+        return point ? (PICKUP_POINTS.find((pp) => pp.id === point) ?? null) : null
+      }),
+
+    listCounterItems: () =>
+      tx((db): CounterItem[] => {
+        const point = counter()
+        return db.orders
+          .filter((o) => o.fulfilment === 'pickup' && o.pickupPoint?.id === point && ((o.status === 'dispatched' && (o.atCounterAt || (o.riderId && o.collectedAt))) || waitingAtCounter(o)))
+          .sort((a, b) => (a.atCounterAt ?? '').localeCompare(b.atCounterAt ?? '') || (a.dispatchedAt ?? '').localeCompare(b.dispatchedAt ?? ''))
+          .map((o) => {
+            const l = db.listings.find((x) => x.id === o.listingId)!
+            const shelf = !!o.atCounterAt && o.status === 'dispatched'
+            return {
+              id: o.id, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, quantity: o.quantity,
+              stage: !o.atCounterAt ? 'incoming' : shelf ? 'shelf' : 'send_back', atCounterAt: o.atCounterAt,
+              buyerName: shelf ? (db.users.find((u) => u.id === o.buyerId)?.displayName ?? 'Buyer') : null,
+              isPrize: o.isPrize, riderAssigned: !!o.riderId,
+              pinLockedUntil: o.status === 'dispatched' && o.pinState.lockedUntil && Date.parse(o.pinState.lockedUntil) > now() ? o.pinState.lockedUntil : null,
+            }
+          })
+      }),
+
+    receiveAtCounter: (orderId, productCode) =>
+      tx((db) => {
+        const point = counter()
+        const o = db.orders.find((x) => x.id === orderId && x.fulfilment === 'pickup' && x.pickupPoint?.id === point)
+        if (!o) throw new ApiError('not_found', 'That order isn’t coming to this counter.')
+        if (o.status !== 'dispatched' || !o.riderId || !o.collectedAt || o.atCounterAt) throw new ApiError('invalid_input', 'Only items a rider has brought can be taken in.')
+        const problem = counterCodeError(productCode, db.listings.find((l) => l.id === o.listingId)!.productCode)
+        if (problem) throw new ApiError('invalid_input', problem)
+        o.atCounterAt = iso(now())
+        notify(db, o.buyerId, 'order_ready_to_collect', o.listingId, iso(now()))
+        earn(db, o.riderId, 'delivery', o.id, o, sellerArea(db, o), pointArea(o), now())
+      }),
+
+    counterHandOver: (orderId, pin) =>
+      tx((db) => {
+        const point = counter()
+        const o = db.orders.find((x) => x.id === orderId && x.pickupPoint?.id === point && x.status === 'dispatched' && x.atCounterAt)
+        if (!o) throw new ApiError('invalid_input', 'Only items on your shelf can be handed over.')
+        if (!isDeliveryPin(pin)) throw new ApiError('invalid_input', 'Enter the buyer’s 6-digit PIN.')
+        const { result, state } = checkPin(o.pin, pin, o.pinState, now())
+        o.pinState = state
+        if (result.confirmed) {
+          o.status = 'delivered'
+          o.deliveredAt = iso(now())
+        }
+        return result
+      }),
+
+    releaseToRider: (orderId) =>
+      tx((db) => {
+        const point = counter()
+        const o = db.orders.find((x) => x.id === orderId && x.pickupPoint?.id === point && waitingAtCounter(x) && x.riderId)
+        if (!o) throw new ApiError('invalid_input', 'Only items a rider has taken to send back can be handed over.')
+        o.counterOutAt = iso(now())
       }),
 
     listNotifications: () =>
@@ -1858,7 +2732,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
             const l = n.listingId ? getListingOr404(db, n.listingId) : null
             return {
               id: n.id, kind: n.kind, listingId: n.listingId ?? '', listingTitle: l?.title ?? '', listingImage: l?.images[0] ?? null, listingCategory: l?.category ?? 'Phones', drawAt: l?.drawAt ?? null,
-              winningNumber: db.results.find((r) => r.listingId === n.listingId)?.winningNumber ?? null, createdAt: n.createdAt, read: n.read, celebrated: n.celebrated,
+              winningNumber: db.results.find((r) => r.listingId === n.listingId)?.winningNumber ?? null, area: n.area ?? null, createdAt: n.createdAt, read: n.read, celebrated: n.celebrated,
             }
           }),
       ),
@@ -2248,6 +3122,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     getPayoutAccount: () =>
       tx((db) => {
+        if (readSession()?.role === 'delivery') return db.riderPayoutAccounts[payee()] ?? null
         requireShopPermission(db, 'bank')
         return db.payoutAccounts[shopId(db)] ?? null
       }),
@@ -2256,6 +3131,10 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     lookupBankAccount: (bankCode, accountNumber) =>
       tx((db) => {
+        if (readSession()?.role === 'delivery') {
+          payee()
+          return { accountName: mockAccountName(bankCode, accountNumber) }
+        }
         requireShopPermission(db, 'bank')
         shopId(db)
         return { accountName: mockAccountName(bankCode, accountNumber) }
@@ -2263,6 +3142,17 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
 
     savePayoutAccount: (bankCode, accountNumber) =>
       tx((db) => {
+        if (readSession()?.role === 'delivery') {
+          const me = payee()
+          const old = db.riderPayoutAccounts[me]
+          if (old?.bankCode === bankCode && old.accountNumber === accountNumber) return
+          const bankName = { '044': 'Access Bank', '058': 'GTBank', '057': 'Zenith Bank' }[bankCode]
+          if (!bankName) throw new ApiError('invalid_input', 'Pick a bank from the list.')
+          const at = now()
+          db.riderPayoutAccounts[me] = { bankCode, bankName, accountNumber, accountName: mockAccountName(bankCode, accountNumber), confirmedAt: iso(at), payableFrom: iso(old ? at + PAYOUT_ACCOUNT_HOLD_HOURS * 3_600_000 : at) }
+          if (old) notify(db, me, 'rider_bank_changed', null, iso(at))
+          return
+        }
         requireShopPermission(db, 'bank')
         const shop = shopId(db)
         const accountName = mockAccountName(bankCode, accountNumber)
@@ -2311,6 +3201,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const problem = deliveryPriceError(priceKobo)
         if (problem) throw new ApiError('invalid_input', problem)
         const [a, b] = areaA <= areaB ? [areaA, areaB] : [areaB, areaA]
+        if (priceKobo < (db.riderPayRates.pays.find((p) => p.areaA === a && p.areaB === b)?.payKobo ?? 0)) throw new ApiError('invalid_input', 'That’s less than the rider is paid for this trip. Lower the rider pay first.')
         const row = db.deliveryPricing.prices.find((p) => p.areaA === a && p.areaB === b)
         if (!row) throw new ApiError('not_found', 'That area doesn’t exist.')
         row.priceKobo = priceKobo
@@ -2320,6 +3211,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       tx((db) => {
         const problem = sizeExtraError(extraKobo)
         if (problem) throw new ApiError('invalid_input', problem)
+        if (extraKobo < db.riderPayRates.sizeExtras[size]) throw new ApiError('invalid_input', 'That’s less than the rider is paid for this size. Lower the rider pay first.')
         db.deliveryPricing.sizeExtras[size] = extraKobo
       }),
 
@@ -2344,7 +3236,8 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const trip = change ? deliveryFeeKobo(db.deliveryPricing, sellerAreaOf(shop), location, packageSizeOf(l)) : 0
         const id = uid('Q')
         o.claim = { id, kind: input.kind, status: change ? 'awaiting_pickup' : 'open', description: input.description.trim(), photos: input.photos, returnFeeKobo: fee, reviewNote: null }
-        db.claimDetails[id] = { riderId: null, address, location, phone, tripKobo: trip, sellerShareKobo: sellerShareOfReturnFee(fee, trip) }
+        db.claimDetails[id] = { riderId: null, openedAt: iso(now()), address, location, phone, tripKobo: trip, sellerShareKobo: sellerShareOfReturnFee(fee, trip) }
+        if (change) alertNewReturn(db, o, null, now())
         notifyShop(db, o.merchantId, 'store_order_claim', o.listingId, iso(now()))
       }),
 
@@ -2379,6 +3272,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (!approve && note.trim().length < 5) throw new ApiError('invalid_input', 'Say why, so they understand.')
         const contest = o.claim.kind === 'contest'
         o.claim.status = !approve ? 'declined' : contest ? 'upheld' : 'awaiting_pickup'
+        if (o.claim.status === 'awaiting_pickup') alertNewReturn(db, o, null, now())
         o.claim.reviewNote = note.trim() || null
         if (contest) {
           if (approve) {
@@ -2403,7 +3297,11 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           const l = getListingOr404(db, o.listingId)
           const shop = db.merchants.find((m) => m.id === o.merchantId)!
           return [{
-            id: o.claim.id, kind: o.claim.kind, status: o.claim.status, mine: !!d.riderId, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, quantity: o.quantity, category: l.category,
+            id: o.claim.id, kind: o.claim.kind, status: o.claim.status, mine: !!d.riderId,
+            collectBy: d.riderId === me && o.claim.status === 'awaiting_pickup' && d.takenAt ? collectBy(d.takenAt) : null,
+            ...poolPay(db, o, nearestArea(d.location, DELIVERY_AREAS), sellerArea(db, o), d.openedAt ?? null),
+            locked: !d.riderId && !!riderLimit(db, me, o),
+            productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, quantity: o.quantity, category: l.category,
             returnTo: { name: shop.name, area: shop.area, ...(d.riderId === me && o.claim.status === 'returning' ? db.shopPickups[o.merchantId] : {}) },
             pickupFrom: d.riderId === me && o.claim.status === 'awaiting_pickup' ? { buyerName: db.users.find((u) => u.id === o.buyerId)?.displayName ?? 'Buyer', address: d.address, location: d.location, contactPhone: d.phone } : null,
           }]
@@ -2413,15 +3311,20 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     takeReturn: (claimId) =>
       tx((db) => {
         const o = db.orders.find((x) => x.claim?.id === claimId && x.claim.status === 'awaiting_pickup')
+        const full = takeJobError(riderJobsHeld(db, rider()))
+        if (full) throw new ApiError('invalid_input', full)
+        const limit = o && riderLimit(db, rider(), o)
+        if (limit) throw new ApiError('invalid_input', limit)
         if (!o || db.claimDetails[claimId].riderId) throw new ApiError('invalid_input', 'Another rider has taken this return.')
-        db.claimDetails[claimId].riderId = rider()
+        Object.assign(db.claimDetails[claimId], { riderId: rider(), takenAt: iso(now()) })
       }),
 
     releaseReturn: (claimId) =>
       tx((db) => {
         const o = db.orders.find((x) => x.claim?.id === claimId && x.claim.status === 'awaiting_pickup')
         if (!o || db.claimDetails[claimId].riderId !== rider()) throw new ApiError('invalid_input', 'Only returns you haven’t collected can be handed back.')
-        db.claimDetails[claimId].riderId = null
+        Object.assign(db.claimDetails[claimId], { riderId: null, takenAt: null })
+        alertNewReturn(db, o, rider(), now())
       }),
 
     passReturnPickup: (claimId, photos) =>
@@ -2432,6 +3335,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (!o?.claim || db.claimDetails[claimId].riderId !== rider()) throw new ApiError('invalid_input', 'Only returns you’re collecting can be checked.')
         const at = iso(now())
         o.claim.status = 'returning'
+        db.claimDetails[claimId].pickedUpAt = at
         o.refundedAt = at
         db.payouts = db.payouts.filter((p) => !(p.orderId === o.id && p.kind === 'sale' && p.status === 'waiting'))
         const title = getListingOr404(db, o.listingId).title
@@ -2463,6 +3367,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (!o?.claim || db.claimDetails[claimId].riderId !== rider()) throw new ApiError('invalid_input', 'Only returns you’re carrying can be finished.')
         const at = iso(now())
         o.claim.status = 'returned'
+        earn(db, rider(), 'return', claimId, o, nearestArea(db.claimDetails[claimId].location, DELIVERY_AREAS), sellerArea(db, o), now())
         if (o.claim.kind === 'change_of_mind') {
           const l = getListingOr404(db, o.listingId)
           l.stock += o.quantity
@@ -2809,6 +3714,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     refuseDelivery: (orderId, pin, reason, note, photo) =>
       tx((db) => {
         const me = rider()
+        if (db.orders.some((x) => x.id === orderId && x.riderId === me && x.fulfilment === 'pickup')) throw new ApiError('invalid_input', 'Hand pickup orders to the counter staff. They complete them with the buyer.')
         const o = db.orders.find((x) => x.id === orderId && x.status === 'dispatched' && x.riderId === me && x.collectedAt)
         if (!o) throw new ApiError('invalid_input', 'Only deliveries you’re carrying can be refused.')
         if (o.isPrize) throw new ApiError('invalid_input', 'Won items can’t be refused here. Contact DrawMart.')
@@ -2823,6 +3729,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           o.refusalPhoto = photo
           o.returnState = 'returning'
           penaliseSeller(db, o, now())
+          earn(db, me, 'delivery', o.id, o, sellerArea(db, o), buyerArea(o), now())
         }
         return result
       }),
@@ -2832,10 +3739,11 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const problem = photosError([photo])
         if (problem) throw new ApiError('invalid_input', problem)
         const me = rider()
-        const o = db.orders.find((x) => x.id === orderId && x.riderId === me && x.returnState === 'returning')
+        const o = db.orders.find((x) => x.id === orderId && x.riderId === me && x.returnState === 'returning' && !waitingAtCounter(x))
         if (!o) throw new ApiError('invalid_input', 'Only items you’re taking back can be returned.')
         o.returnState = 'returned'
         o.returnedAt = iso(now())
+        earn(db, me, 'return', o.id, o, o.atCounterAt ? pointArea(o) : buyerArea(o), sellerArea(db, o), now())
       }),
 
     liftSuspension: (merchantId) =>
@@ -2875,7 +3783,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         return db.merchants.flatMap((m) => {
           const mine = recent.filter((o) => o.merchantId === m.id)
           const failed = mine.filter((o) => o.cancelReason === 'failed_check' || o.cancelReason === 'refused_wrong' || o.cancelReason === 'refused_damaged').length
-          return mine.length || m.suspendedAt ? [{ merchantId: m.id, merchantName: m.name, orders: mine.length, cancelled: mine.filter((o) => o.status === 'cancelled').length, failed, suspended: !!m.suspendedAt }] : []
+          return mine.length || m.suspendedAt ? [{ merchantId: m.id, merchantName: m.name, orders: mine.length, cancelled: mine.filter((o) => o.status === 'cancelled' && o.cancelReason !== 'not_collected' && o.cancelReason !== 'not_delivered' && o.cancelReason !== 'incident').length, failed, suspended: !!m.suspendedAt }] : []
         })
       }),
 
@@ -2888,6 +3796,14 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (o.handledBy === 'store' && !db.shopPickups[o.merchantId]) throw new ApiError('invalid_input', 'Add where riders collect from first.')
         o.status = 'dispatched'
         o.dispatchedAt = iso(now())
+        // feeGroups.ts: joins the rider taking the rest of its group, if they haven't collected yet (private.join_rider_on_ready).
+        const s = o.isPrize ? undefined : db.orders.filter((x) => x.id !== o.id && feeGroup(x) === feeGroup(o) && x.status === 'dispatched' && x.riderId && !x.atCounterAt).sort((a, b) => (a.riderTakenAt ?? '').localeCompare(b.riderTakenAt ?? ''))[0]
+        if (s?.riderId && !db.orders.some((x) => onTripWith(x, s) && x.collectedAt)) {
+          Object.assign(o, { riderId: s.riderId, riderTakenAt: s.riderTakenAt })
+          notify(db, s.riderId, 'rider_job_added', o.listingId, iso(now()))
+          return
+        }
+        alertNewJob(db, o, null, now())
       }),
 
     sendFirstMessage: (listingId, body) =>

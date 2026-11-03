@@ -19,7 +19,7 @@ import { AccountPage } from '@/pages/AccountPage'
 import { PracticePage } from '@/pages/PracticePage'
 import { WinnersPage } from '@/pages/WinnersPage'
 import { SavedPage } from '@/pages/SavedPage'
-import { DeliveryJobPage, DeliveryPage } from '@/pages/delivery/DeliveryPage'
+import { DeliveryHome, DeliveryJobPage } from '@/pages/delivery/DeliveryPage'
 import { AdminProductsPage } from '@/pages/admin/AdminProductsPage'
 import { AdminBoostsPage } from '@/pages/admin/AdminBoostsPage'
 import { AdminDrawsPage } from '@/pages/admin/AdminDrawsPage'
@@ -39,6 +39,11 @@ import { ResultPage } from '@/pages/ResultPage'
 import { ConversationPage, MessagesPage, NewConversationPage } from '@/pages/MessagesPage'
 import { NotificationsPage } from '@/pages/NotificationsPage'
 import { ReturnJobPage } from '@/pages/delivery/ReturnJobs'
+import { EarningsPage } from '@/pages/delivery/EarningsPage'
+import { AdminRiderPayPage } from '@/pages/admin/AdminRiderPayPage'
+import { AdminDispatchPage } from '@/pages/admin/AdminDispatchPage'
+import { AdminRidersPage } from '@/pages/admin/AdminRidersPage'
+import { RiderApplicationPage } from '@/pages/RiderApplicationPage'
 import { AdminClaimsPage } from '@/pages/admin/AdminClaimsPage'
 import { AdminReviewsPage } from '@/pages/admin/AdminReviewsPage'
 import { StoreReviewsPage } from '@/pages/merchant/SellerReviews'
@@ -169,6 +174,7 @@ const router = createBrowserRouter([
       { path: 'sell', element: <RequireSignIn role="buyer"><SellPage /></RequireSignIn> },
       { path: 'sell/help', element: <RequireSignIn role="buyer"><HelpPage app="sell" /></RequireSignIn> },
       { path: 'sell/business', element: <RequireSignIn role="buyer"><StoreApplicationPage /></RequireSignIn> },
+      { path: 'ride', element: <RequireSignIn role="buyer"><RiderApplicationPage /></RequireSignIn> },
       { path: 'cart', element: <RequireSignIn role="buyer"><CartPage /></RequireSignIn> },
       { path: 'checkout', element: <RequireSignIn role="buyer"><CheckoutPage /></RequireSignIn> },
       { path: 'notifications', element: <RequireSignIn role="buyer"><NotificationsPage /></RequireSignIn> },
@@ -214,6 +220,9 @@ const router = createBrowserRouter([
       { path: 'claims', element: <AdminClaimsPage /> },
       { path: 'reviews', element: <AdminReviewsPage /> },
       { path: 'delivery', element: <AdminDeliveryPage /> },
+      { path: 'rider-pay', element: <AdminRiderPayPage /> },
+      { path: 'dispatch', element: <AdminDispatchPage /> },
+      { path: 'riders', element: <AdminRidersPage /> },
       { path: 'prizes', element: <AdminPrizesPage /> },
       { path: 'stories', element: <AdminStoriesPage /> },
       { path: 'sellers', element: <AdminSellersPage /> },
@@ -227,7 +236,9 @@ const router = createBrowserRouter([
     element: <RequireSignIn role="delivery"><BackOfficeLayout app="delivery" /></RequireSignIn>,
     errorElement: <RouteError />,
     children: [
-      { index: true, element: <DeliveryPage /> },
+      { index: true, element: <DeliveryHome /> },
+      { path: 'notifications', element: <NotificationsPage /> },
+      { path: 'earnings', element: <EarningsPage /> },
       { path: 'returns/:id', element: <ReturnJobPage /> },
       { path: ':id', element: <DeliveryJobPage /> },
     ],

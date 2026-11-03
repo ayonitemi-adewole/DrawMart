@@ -1,4 +1,9 @@
 import type { NewProductInput } from './types'
+import { redeliveryWindows } from '@/domain/deliveryAttempts'
+import { poolTrips } from '@/domain/trips'
+import { offeredWindows, windowOpens, windowTimes } from '@/domain/deliveryWindows'
+import { areaPairPay, tripPay } from '@/domain/riderPay'
+import { RIDER_QUIZ, type RiderApplicationInput } from '@/domain/riderApplications'
 import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO } from '@/domain/deliveryChecks'
 import { returnFeeKobo, sellerShareOfReturnFee } from '@/domain/claims'
 import { areaPairPrice, deliveryFeeKobo, placeholderPricing } from '@/domain/deliveryFees'
@@ -9,7 +14,7 @@ import { addDays, cautionFeeFor, localDate } from '@/domain/listing'
 import { nairaToKobo as k } from '@/domain/money'
 import type { Delivery } from '@/domain/types'
 import { createMockApi, memoryStore } from './mock'
-import { ApiError, type NewListingInput } from './types'
+import { ApiError, type NewListingInput, type OrderView } from './types'
 
 // Proof on stores' first listings and spot checks are off, except where a test turns them on.
 const make = (now = () => Date.now(), listingChecks = { firstListings: 0, spotPercent: 0 }) => createMockApi({ store: memoryStore(), latencyMs: 0, now, listingChecks })
@@ -769,6 +774,870 @@ describe('mock api', () => {
       await api.reviewClaim(c.id, true, '')
       await as(api, 'store')
       expect((await api.listPayouts()).filter((l) => l.orderId === order.id)).toEqual([])
+    })
+  })
+
+  describe('rider sign-up', () => {
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const application = (): RiderApplicationInput => ({
+      fullName: 'Emeka Nwosu', nin: '12345678901', phone: '0803 222 3333', address: '12 Allen Avenue, Ikeja', area: 'ikeja', vehicle: 'motorcycle', plate: 'LND 123 AB',
+      guarantorName: 'Ada Nwosu', guarantorPhone: '0805 765 4321', guarantorRelationship: 'Sister', idPhoto: 'data:image/png;base64,a', selfiePhoto: 'data:image/png;base64,b',
+      quizAnswers: RIDER_QUIZ.map((q) => q.answer),
+    })
+
+    it('takes applications only while open, and approval makes a new rider who starts on smaller jobs', async () => {
+      const api = make()
+      await as(api, 'emeka')
+      expect(await api.getRiderSignupsOpen()).toBe(false)
+      await expect(api.submitRiderApplication(application())).rejects.toThrow('isn’t open')
+      await as(api, 'admin')
+      await api.setRiderSignupsOpen(true)
+
+      await as(api, 'emeka')
+      await expect(api.submitRiderApplication({ ...application(), quizAnswers: [0, 0, 0, 0, 0, 0] })).rejects.toThrow('quiz')
+      expect(await api.submitRiderApplication(application())).toMatchObject({ status: 'pending', plate: 'LND123AB' })
+      await expect(api.submitRiderApplication(application())).rejects.toThrow('already being reviewed')
+
+      await as(api, 'admin')
+      const [a] = await api.listRiderApplications()
+      await expect(api.rejectRiderApplication(a.id, 'no')).rejects.toThrow('what to fix')
+      await api.rejectRiderApplication(a.id, 'The selfie is blurry.')
+      await as(api, 'emeka')
+      expect(await api.getMyRiderApplication()).toMatchObject({ status: 'rejected', reviewNote: 'The selfie is blurry.' })
+      await api.submitRiderApplication(application())
+      await as(api, 'store')
+      await expect(api.approveRiderApplication(a.id)).rejects.toMatchObject({ code: 'forbidden' })
+      await as(api, 'admin')
+      await api.approveRiderApplication(a.id)
+
+      // The same account now opens the delivery app.
+      await as(api, 'emeka')
+      expect(await api.auth.getSession()).toMatchObject({ role: 'delivery' })
+      expect(await api.getRiderLevel()).toMatchObject({ completed: 0, trusted: false })
+      expect((await api.listNotifications()).some((n) => n.kind === 'rider_approved')).toBe(true)
+
+      // New riders: up to ₦50,000, until 20 deliveries or a trusted fleet.
+      await as(api, 'store')
+      const cheap = await api.createProduct({ title: 'Cheap lamp', description: '', category: 'Home', priceKobo: k(20_000), stock: 1 })
+      const dear = await api.createProduct({ title: 'Dear lamp', description: '', category: 'Home', priceKobo: k(60_000), stock: 1 })
+      await api.approveListing(cheap.id)
+      await api.approveListing(dear.id)
+      await as(api, 'funke')
+      await api.topUp(k(200_000))
+      const [small] = await api.checkout({ listingIds: [cheap.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      const [big] = await api.checkout({ listingIds: [dear.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      // An account that has bought can't become a rider's.
+      await expect(api.submitRiderApplication(application())).rejects.toThrow('already bought')
+      await as(api, 'store')
+      for (const o of [small, big]) {
+        await api.sellerConfirmOrder(o.id, '/assets/c.jpg')
+        await api.dispatchOrder(o.id)
+      }
+      await as(api, 'emeka')
+      const pool = await api.listDeliveryJobs()
+      expect(pool.find((j) => j.id === small.id)?.locked).toBe(false)
+      expect(pool.find((j) => j.id === big.id)?.locked).toBe(true)
+      await expect(api.takeDelivery(big.id)).rejects.toThrow('20 completed')
+      await api.takeDelivery(small.id)
+
+      await as(api, 'admin')
+      await api.createRiderFleet('Partner Riders', '0803 444 5555')
+      const [fleet] = await api.listRiderFleets()
+      await api.setRiderFleet('u-emeka', fleet.id)
+      await api.setFleetTrusted(fleet.id, true)
+      expect((await api.listRiders()).find((r) => r.id === 'u-emeka')).toMatchObject({ name: 'Emeka Nwosu', fleetId: fleet.id, holding: 1 })
+      await as(api, 'emeka')
+      expect((await api.listDeliveryJobs()).find((j) => j.id === big.id)?.locked).toBe(false)
+      await api.takeDelivery(big.id)
+    })
+  })
+
+  describe('clearer job pool', () => {
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('shows each job’s areas, size and pay, and pays what it showed', async () => {
+      const api = make()
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Pool lamp', description: '', category: 'Home', priceKobo: k(20_000), stock: 2 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const lekki = { address: '5 Admiralty Way, Lekki', location: { lat: 6.45, lng: 3.49 }, contactPhone: '0803 123 4567' }
+      const [o] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery: lekki, pickupPointId: null })
+      const [toCounter] = await api.checkout({ listingIds: [p.id], fulfilment: 'pickup', delivery: { address: '', location: null, contactPhone: '0803 123 4567' }, pickupPointId: 'yaba' })
+      await as(api, 'store')
+      for (const x of [o, toCounter]) {
+        await api.sellerConfirmOrder(x.id, '/assets/c.jpg')
+        await api.dispatchOrder(x.id)
+      }
+      await as(api, 'rider')
+      const pool = await api.listDeliveryJobs()
+      const job = pool.find((j) => j.id === o.id)!
+      expect(job).toMatchObject({ mine: false, fromArea: 'ikeja', toArea: 'lekki', size: 'large', dropOff: null })
+      expect(JSON.stringify(job)).not.toContain('Admiralty')
+      expect(pool.find((j) => j.id === toCounter.id)).toMatchObject({ fromArea: 'ikeja', toArea: 'yaba' })
+
+      await api.takeDelivery(o.id)
+      await api.passCollection(o.id, ['/assets/a.jpg'])
+      await api.confirmDelivery(o.id, o.deliveryPin!)
+      expect((await api.listMyEarnings())[0].amountKobo).toBe(job.payKobo)
+    })
+  })
+
+  describe('rider shown to the buyer', () => {
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+
+    it('shows the rider’s first name and photo once collected, with a chat that closes on delivery', async () => {
+      const api = make()
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Chat lamp', description: '', category: 'Home', priceKobo: k(20_000), stock: 1 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const [o] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await as(api, 'store')
+      await api.sellerConfirmOrder(o.id, '/assets/c.jpg')
+      await api.dispatchOrder(o.id)
+      await as(api, 'rider')
+      await api.takeDelivery(o.id)
+      await api.setRiderPhoto('/assets/bayo.jpg')
+      expect(await api.getRiderProfile()).toEqual({ firstName: 'Bayo', photo: '/assets/bayo.jpg' })
+
+      // Not before it's collected.
+      await as(api, 'funke')
+      expect((await api.listMyOrders()).find((x) => x.id === o.id)?.rider).toBeNull()
+      expect(await api.getDeliveryChat(o.id)).toMatchObject({ open: false, messages: [] })
+      await expect(api.sendDeliveryMessage(o.id, 'Hello')).rejects.toThrow('closed')
+
+      await as(api, 'rider')
+      await api.passCollection(o.id, ['/assets/a.jpg'])
+      await as(api, 'funke')
+      const mine = (await api.listMyOrders()).find((x) => x.id === o.id)!
+      expect(mine.rider).toEqual({ firstName: 'Bayo', photo: '/assets/bayo.jpg' })
+      expect(JSON.stringify(mine.rider)).not.toMatch(/\d{4}/) // never a phone number
+      await expect(api.sendDeliveryMessage(o.id, 'Call me on 0803 999 8888')).rejects.toThrow('phone numbers')
+      await api.sendDeliveryMessage(o.id, 'Blue gate, ring twice')
+
+      // Only the buyer and the rider carrying it.
+      for (const who of ['chidi', 'store']) {
+        await as(api, who)
+        await expect(api.getDeliveryChat(o.id)).rejects.toMatchObject({ code: 'not_found' })
+      }
+      await as(api, 'rider')
+      expect(await api.getDeliveryChat(o.id)).toMatchObject({ open: true, me: 'rider', messages: [{ sender: 'buyer', body: 'Blue gate, ring twice' }] })
+      await api.sendDeliveryMessage(o.id, 'At the gate now')
+      await api.markArrived(o.id)
+      await as(api, 'funke')
+      const chat = await api.getDeliveryChat(o.id)
+      expect(chat.messages.map((m) => m.sender)).toEqual(['buyer', 'rider'])
+      expect((await api.listMyOrders()).find((x) => x.id === o.id)?.arrivedAt).toBeTruthy()
+
+      await as(api, 'rider')
+      await api.confirmDelivery(o.id, o.deliveryPin!)
+      await expect(api.sendDeliveryMessage(o.id, 'Thanks')).rejects.toThrow('closed')
+      await as(api, 'funke')
+      expect(await api.getDeliveryChat(o.id)).toMatchObject({ open: false, rider: null, messages: [] })
+      expect((await api.listMyOrders()).find((x) => x.id === o.id)?.rider).toBeNull()
+    })
+  })
+
+  describe('rider pay', () => {
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+
+    it('pays each job from the rate table, weekly, into a confirmed account', async () => {
+      // A Monday morning in Lagos.
+      const c = { t: Date.parse('2026-11-02T10:00:00+01:00') }
+      const api = make(() => c.t)
+
+      // Rates stay within what the buyer pays, both ways round.
+      await as(api, 'admin')
+      const rates = await api.getRiderPayRates()
+      const pricing = await api.getDeliveryPricing()
+      await expect(api.setRiderPay('ikeja', 'vi', 600_000)).rejects.toThrow('can’t be more')
+      const far = areaPairPrice(pricing, 'ikeja', 'epe')
+      await api.setRiderPay('ikeja', 'epe', far)
+      await expect(api.setDeliveryPrice('ikeja', 'epe', far - 10_000)).rejects.toThrow('Lower the rider pay first')
+      await api.setRiderPay('epe', 'ikeja', areaPairPay(rates, 'ikeja', 'epe'))
+      await expect(api.setRiderSizeExtra('large', pricing.sizeExtras.large + 1)).rejects.toThrow('can’t be more')
+      await api.setRiderAttemptPay(k(400))
+      await as(api, 'rider')
+      await expect(api.setRiderAttemptPay(k(400))).rejects.toMatchObject({ code: 'forbidden' })
+
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Paid lamp', description: '', category: 'Home', priceKobo: k(20_000), stock: 2 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const [missed] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      const [made] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await as(api, 'store')
+      for (const o of [missed, made]) {
+        await api.sellerConfirmOrder(o.id, '/assets/c.jpg')
+        await api.dispatchOrder(o.id)
+      }
+      await as(api, 'rider')
+      for (const o of [missed, made]) {
+        await api.takeDelivery(o.id)
+        await api.passCollection(o.id, ['/assets/a.jpg'])
+      }
+      await api.confirmDelivery(made.id, made.deliveryPin!)
+      await api.markArrived(missed.id)
+      c.t += 10 * 60_000
+      await api.failDeliveryAttempt(missed.id, '/assets/door.jpg', delivery.location)
+
+      const lines = await api.listMyEarnings()
+      const trip = lines.find((l) => l.kind === 'delivery')!
+      expect(trip).toMatchObject({ productCode: p.productCode, fromArea: 'ikeja', paidAt: null })
+      expect(trip.amountKobo).toBe(tripPay(rates, trip.fromArea!, trip.toArea!, 'large'))
+      expect(lines.find((l) => l.kind === 'failed_attempt')?.amountKobo).toBe(k(400))
+      // Never more than the buyer paid for the trip.
+      expect(trip.amountKobo).toBeLessThanOrEqual(made.deliveryFeeKobo)
+
+      // Paid once the week is over, into an account the bank confirmed.
+      await as(api, 'admin')
+      expect(await api.listRiderPayDue()).toEqual([])
+      c.t += 7 * 86_400_000
+      const [due] = await api.listRiderPayDue()
+      expect(due).toMatchObject({ riderId: 'u-rider', account: null })
+      expect(due.lines).toHaveLength(2)
+      await expect(api.markRiderPaid('u-rider', 'TRF-123')).rejects.toThrow('bank account')
+      await as(api, 'counter')
+      await expect(api.savePayoutAccount('044', '0690000032')).rejects.toMatchObject({ code: 'forbidden' })
+      await as(api, 'rider')
+      await api.savePayoutAccount('044', '0690000032')
+      expect(await api.getPayoutAccount()).toMatchObject({ bankName: 'Access Bank', accountNumber: '0690000032' })
+      await as(api, 'admin')
+      await expect(api.markRiderPaid('u-rider', 'x')).rejects.toThrow('reference')
+      await api.markRiderPaid('u-rider', 'TRF-123')
+      expect(await api.listRiderPayDue()).toEqual([])
+
+      await as(api, 'rider')
+      expect((await api.listMyEarnings()).every((l) => l.reference === 'TRF-123' && l.paidTo?.includes('0032'))).toBe(true)
+      expect((await api.listNotifications()).some((n) => n.kind === 'rider_paid')).toBe(true)
+
+      // The buyer never chose a new time, so the rider takes it back: a return, to the seller's area.
+      await api.completeReturn(missed.id, '/assets/b.jpg')
+      c.t += 7 * 86_400_000
+      // A changed account holds pay, and the rider is told.
+      await api.savePayoutAccount('058', '0123456789')
+      expect((await api.listNotifications()).some((n) => n.kind === 'rider_bank_changed')).toBe(true)
+      await as(api, 'admin')
+      const [again] = await api.listRiderPayDue()
+      expect(again.lines.map((l) => l.kind)).toEqual(['return'])
+      expect(again.lines[0]).toMatchObject({ fromArea: trip.toArea, toArea: 'ikeja' })
+      await expect(api.markRiderPaid('u-rider', 'TRF-456')).rejects.toThrow('on hold')
+    })
+  })
+
+  describe('buyer not available', () => {
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    /** n orders, each in its own checkout, with the rider carrying them. Leaves the rider signed in. */
+    const carrying = async (api: ReturnType<typeof make>, n: number) => {
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Missed lamp', description: '', category: 'Home', priceKobo: k(20_000), stock: n })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(200_000))
+      const orders: OrderView[] = []
+      for (let i = 0; i < n; i++) orders.push((await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null }))[0])
+      await as(api, 'store')
+      for (const o of orders) {
+        await api.sellerConfirmOrder(o.id, '/assets/c.jpg')
+        await api.dispatchOrder(o.id)
+      }
+      await as(api, 'rider')
+      for (const o of orders) {
+        await api.takeDelivery(o.id)
+        await api.passCollection(o.id, ['/assets/a.jpg'])
+      }
+      return orders
+    }
+    const total = async (api: ReturnType<typeof make>) => {
+      const b = (await api.getWallet()).balance
+      return b.cashKobo + b.creditKobo
+    }
+
+    it('records a failed attempt after the wait, lets the buyer rebook, and sends it back after a second', async () => {
+      const c = { t: Date.parse('2026-11-02T10:00:00+01:00') }
+      const api = make(() => c.t)
+      const [o] = await carrying(api, 1)
+      const fail = (at = delivery.location) => api.failDeliveryAttempt(o.id, '/assets/door.jpg', at)
+      await expect(fail()).rejects.toThrow('arrived')
+      await api.markArrived(o.id)
+      await expect(fail()).rejects.toThrow('Wait 10 minutes')
+      c.t += 10 * 60_000
+      await expect(fail({ lat: 6.47, lng: 3.43 })).rejects.toThrow('buyer’s address')
+      await fail()
+      expect((await api.listDeliveryJobs()).find((j) => j.id === o.id)).toMatchObject({ mine: true, awaitingBuyer: true, failedAttempts: 1, arrivedAt: null })
+      await expect(api.markArrived(o.id)).rejects.toThrow('hasn’t chosen')
+
+      await as(api, 'funke')
+      expect((await api.listNotifications()).some((n) => n.kind === 'order_delivery_failed')).toBe(true)
+      const mine = (await api.listMyOrders()).find((x) => x.id === o.id)!
+      expect(mine).toMatchObject({ failedAttempts: 1, redeliveryChoice: null })
+      await expect(api.chooseRedelivery(o.id, { windowStart: new Date(c.t + 30 * 60_000).toISOString() })).rejects.toThrow('Pick one')
+      const [window] = redeliveryWindows(mine.lastFailedAt!, c.t)
+      await api.chooseRedelivery(o.id, { windowStart: window })
+      await expect(api.chooseRedelivery(o.id, { windowStart: window })).rejects.toThrow('doesn’t need')
+
+      await as(api, 'rider')
+      expect((await api.listNotifications()).some((n) => n.kind === 'rider_redelivery_chosen')).toBe(true)
+      expect((await api.listDeliveryJobs()).find((j) => j.id === o.id)).toMatchObject({ awaitingBuyer: false, redeliverAt: window })
+      c.t = Date.parse(window)
+      await api.markArrived(o.id)
+      c.t += 10 * 60_000
+      await as(api, 'funke')
+      const before = await total(api)
+      await as(api, 'rider')
+      await fail()
+
+      // Second time: back to the seller, the price refunded but not delivery, and not the seller's cancellation.
+      await as(api, 'funke')
+      expect((await total(api)) - before).toBe(k(20_000))
+      expect((await api.listMyOrders()).find((x) => x.id === o.id)).toMatchObject({ status: 'cancelled', cancelReason: 'not_delivered', failedAttempts: 2 })
+      await as(api, 'store')
+      expect((await api.listNotifications()).some((n) => n.kind === 'store_order_undelivered')).toBe(true)
+      await as(api, 'admin')
+      expect((await api.listCancelRates()).find((r) => r.merchantId === 'm-ikeja')?.cancelled).toBe(0)
+      await as(api, 'rider')
+      expect((await api.listDeliveryJobs()).find((j) => j.id === o.id)).toMatchObject({ mine: true, returning: true })
+      await api.completeReturn(o.id, '/assets/back.jpg')
+    })
+
+    it('sends it back if the buyer doesn’t choose in 24 hours, and can switch to a pickup location', async () => {
+      const c = { t: Date.parse('2026-11-02T10:00:00+01:00') }
+      const api = make(() => c.t)
+      const [silent, switched] = await carrying(api, 2)
+      for (const o of [silent, switched]) await api.markArrived(o.id)
+      c.t += 10 * 60_000
+      for (const o of [silent, switched]) await api.failDeliveryAttempt(o.id, '/assets/door.jpg', delivery.location)
+
+      await as(api, 'funke')
+      await api.chooseRedelivery(switched.id, { pickupPointId: 'ikeja' })
+      expect((await api.listMyOrders()).find((x) => x.id === switched.id)).toMatchObject({ fulfilment: 'pickup', pickupPoint: { id: 'ikeja' }, redeliveryChoice: 'pickup' })
+      c.t += 24 * 3_600_000
+      expect((await api.listMyOrders()).find((x) => x.id === silent.id)).toMatchObject({ status: 'cancelled', cancelReason: 'not_delivered' })
+      expect((await api.listMyOrders()).find((x) => x.id === switched.id)?.status).toBe('dispatched')
+
+      // Now it goes through the counter like any pickup order.
+      await as(api, 'rider')
+      await expect(api.confirmDelivery(switched.id, switched.deliveryPin!)).rejects.toThrow('counter staff')
+      await as(api, 'counter')
+      expect((await api.listCounterItems()).map((i) => i.id)).toContain(switched.id)
+    })
+  })
+
+  describe('pickup counters', () => {
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+    const noAddress = { address: '', location: null, contactPhone: '0803 123 4567' }
+
+    it('takes items in by product ID, hands them over with the PIN, and sends uncollected ones back', async () => {
+      const c = { t: Date.parse('2026-11-02T10:00:00+01:00') }
+      const api = make(() => c.t)
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Counter lamp', description: '', category: 'Home', priceKobo: k(20_000), stock: 2 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      // Separate checkouts, so each order carries its own delivery fee.
+      const [kept] = await api.checkout({ listingIds: [p.id], fulfilment: 'pickup', delivery: noAddress, pickupPointId: 'ikeja' })
+      const [left] = await api.checkout({ listingIds: [p.id], fulfilment: 'pickup', delivery: noAddress, pickupPointId: 'ikeja' })
+      expect(left.deliveryFeeKobo).toBeGreaterThan(0)
+      await as(api, 'store')
+      for (const o of [kept, left]) {
+        await api.sellerConfirmOrder(o.id, '/assets/c.jpg')
+        await api.dispatchOrder(o.id)
+      }
+      await as(api, 'rider')
+      expect(await api.getMyCounter()).toBeNull()
+      for (const o of [kept, left]) {
+        await api.takeDelivery(o.id)
+        await api.passCollection(o.id, ['/assets/a.jpg'])
+      }
+      // The rider can't finish a pickup order: the counter does.
+      await expect(api.confirmDelivery(kept.id, kept.deliveryPin!)).rejects.toThrow('counter staff')
+
+      await as(api, 'counter')
+      expect(await api.getMyCounter()).toMatchObject({ id: 'ikeja' })
+      await expect(api.takeDelivery(kept.id)).rejects.toMatchObject({ code: 'forbidden' })
+      const incoming = await api.listCounterItems()
+      expect(incoming.map((i) => i.stage)).toEqual(['incoming', 'incoming'])
+      expect(incoming[0].buyerName).toBeNull()
+      await expect(api.receiveAtCounter(kept.id, 'PRD-222222')).rejects.toThrow('doesn’t match')
+      await api.receiveAtCounter(kept.id, p.productCode.toLowerCase().replace('-', ' '))
+      await api.receiveAtCounter(left.id, p.productCode)
+      await expect(api.receiveAtCounter(left.id, p.productCode)).rejects.toThrow('Only items a rider has brought')
+      expect((await api.listCounterItems()).find((i) => i.id === kept.id)).toMatchObject({ stage: 'shelf', buyerName: 'Funke Ade' })
+
+      // The rider's job is done, and it no longer counts towards their limit.
+      await as(api, 'rider')
+      const job = (await api.listDeliveryJobs()).find((j) => j.id === kept.id)!
+      expect(job.atCounterAt).toBeTruthy()
+      expect(job.dropOff).toBeNull()
+      await expect(api.releaseDelivery(kept.id)).rejects.toThrow('carrying')
+
+      await as(api, 'funke')
+      expect((await api.listNotifications()).filter((n) => n.kind === 'order_ready_to_collect')).toHaveLength(2)
+      expect((await api.listMyOrders()).find((o) => o.id === kept.id)?.atCounterAt).toBeTruthy()
+
+      // Collected with the buyer's PIN.
+      await as(api, 'counter')
+      const wrong = kept.deliveryPin === '000000' ? '111111' : '000000'
+      expect(await api.counterHandOver(kept.id, wrong)).toMatchObject({ confirmed: false, attemptsLeft: 4 })
+      expect(await api.counterHandOver(kept.id, kept.deliveryPin!)).toMatchObject({ confirmed: true })
+      expect((await api.listCounterItems()).map((i) => i.id)).toEqual([left.id])
+
+      // A week: a reminder. Two: refunded less delivery, and back to the seller.
+      c.t += 7 * 86_400_000
+      await as(api, 'funke')
+      expect((await api.listNotifications()).filter((n) => n.kind === 'order_collect_reminder')).toHaveLength(1)
+      const before = (await api.getWallet()).balance
+      c.t += 7 * 86_400_000
+      const after = (await api.getWallet()).balance
+      expect(after.cashKobo + after.creditKobo - before.cashKobo - before.creditKobo).toBe(k(20_000))
+      expect((await api.listMyOrders()).find((o) => o.id === left.id)).toMatchObject({ status: 'cancelled', cancelReason: 'not_collected' })
+      await as(api, 'store')
+      expect((await api.listNotifications()).some((n) => n.kind === 'store_order_uncollected')).toBe(true)
+      await as(api, 'admin')
+      expect((await api.listCancelRates()).find((r) => r.merchantId === 'm-ikeja')?.cancelled).toBe(0)
+
+      // A rider takes it from the counter, which hands it over, then to the seller.
+      await as(api, 'rider')
+      expect((await api.listDeliveryJobs()).find((j) => j.id === left.id)).toMatchObject({ mine: false, returning: true, waitingAtCounter: true })
+      await api.takeDelivery(left.id)
+      await expect(api.completeReturn(left.id, '/assets/b.jpg')).rejects.toThrow('taking back')
+      await as(api, 'counter')
+      expect((await api.listCounterItems())[0]).toMatchObject({ stage: 'send_back', riderAssigned: true, buyerName: null })
+      await api.releaseToRider(left.id)
+      expect(await api.listCounterItems()).toEqual([])
+      await as(api, 'rider')
+      await api.completeReturn(left.id, '/assets/b.jpg')
+    })
+  })
+
+  describe('rider job limits', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('alerts riders to new jobs in their areas, a few an hour, and reminds them about their own', async () => {
+      const c = { t: Date.parse('2026-11-02T10:00:00+01:00') }
+      const api = make(() => c.t)
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Alert lamp', description: '', category: 'Home', priceKobo: k(5_000), stock: 9 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const orders: OrderView[] = []
+      for (let i = 0; i < 8; i++) orders.push((await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null }))[0])
+      const ids = orders.map((o) => o.id)
+      const ready = async (id: string) => {
+        await as(api, 'store')
+        await api.sellerConfirmOrder(id, '/assets/c.jpg')
+        await api.dispatchOrder(id)
+        await as(api, 'rider')
+      }
+      const alerts = async (kind: string) => (await api.listNotifications()).filter((n) => n.kind === kind)
+
+      await ready(ids[0])
+      const [first] = await alerts('rider_new_job')
+      expect(first).toMatchObject({ listingId: p.id, listingTitle: 'Alert lamp' })
+      expect(first.area).toBeTruthy()
+
+      // Somewhere else: nothing. Back to everywhere: alerts again, up to 4 an hour.
+      await expect(api.setRiderAreas(['mars'])).rejects.toThrow('delivery areas')
+      await api.setRiderAreas([first.area === 'lekki' ? 'ikeja' : 'lekki'])
+      await ready(ids[1])
+      expect(await alerts('rider_new_job')).toHaveLength(1)
+      await api.setRiderAreas([])
+      expect(await api.getRiderAreas()).toEqual([])
+      for (const id of ids.slice(2, 6)) await ready(id)
+      expect(await alerts('rider_new_job')).toHaveLength(4)
+      c.t += 61 * 60_000
+      await ready(ids[6])
+      expect(await alerts('rider_new_job')).toHaveLength(5)
+
+      // Switched off: no more, in the app either.
+      await api.setPushPreference('riderNewJobs', false)
+      await ready(ids[7])
+      expect(await alerts('rider_new_job')).toHaveLength(5)
+
+      // Its own jobs: half an hour before one goes back, then when it has.
+      await api.takeDelivery(ids[0])
+      c.t += 89 * 60_000
+      expect(await alerts('rider_collect_soon')).toHaveLength(0)
+      c.t += 60_000
+      expect(await alerts('rider_collect_soon')).toHaveLength(1)
+      c.t += 30 * 60_000
+      expect(await alerts('rider_collect_soon')).toHaveLength(1)
+      expect(await alerts('rider_job_released')).toHaveLength(1)
+
+      // A PIN paused at the door: told when it can be tried again.
+      await api.takeDelivery(ids[1])
+      await api.passCollection(ids[1], ['/assets/a.jpg'])
+      const wrong = orders[1].deliveryPin === '000000' ? '111111' : '000000'
+      for (let i = 0; i < 5; i++) await api.confirmDelivery(ids[1], wrong)
+      expect(await alerts('rider_pin_unlocked')).toHaveLength(0)
+      c.t += 31 * 60_000
+      expect(await alerts('rider_pin_unlocked')).toHaveLength(1)
+    })
+
+    it('holds at most 5 jobs, and sends ones not collected within 2 hours back to the pool', async () => {
+      const c = { t: Date.parse('2026-11-02T10:00:00+01:00') }
+      const api = make(() => c.t)
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Many lamps', description: '', category: 'Home', priceKobo: k(5_000), stock: 6 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const ids: string[] = []
+      for (let i = 0; i < 6; i++) ids.push((await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null }))[0].id)
+      await as(api, 'store')
+      for (const id of ids) {
+        await api.sellerConfirmOrder(id, '/assets/c.jpg')
+        await api.dispatchOrder(id)
+      }
+      await as(api, 'rider')
+      for (const id of ids.slice(0, 5)) await api.takeDelivery(id)
+      await expect(api.takeDelivery(ids[5])).rejects.toThrow('5 jobs, the most')
+      const job = async (id: string) => (await api.listDeliveryJobs()).find((j) => j.id === id)!
+      expect((await job(ids[0])).collectBy).toBe(new Date(c.t + 2 * 3_600_000).toISOString())
+      expect((await job(ids[5])).collectBy).toBeNull() // not theirs
+
+      // Collected, it's theirs for as long as it takes.
+      await api.passCollection(ids[0], ['/assets/a.jpg'])
+      expect((await job(ids[0])).collectBy).toBeNull()
+      c.t += 119 * 60_000
+      expect((await job(ids[1])).mine).toBe(true)
+      c.t += 60_000
+      expect(await job(ids[0])).toMatchObject({ mine: true, collected: true })
+      for (const id of ids.slice(1, 5)) expect(await job(id)).toMatchObject({ mine: false, collectBy: null })
+      await api.takeDelivery(ids[5])
+    })
+  })
+
+  describe('dispatch board', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('shows admins each job’s stage, flags stuck ones, and moves only uncollected ones', async () => {
+      const c = { t: Date.parse('2026-11-03T10:00:00+01:00') }
+      const api = make(() => c.t)
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Dispatch lamp', description: '', category: 'Home', priceKobo: k(5_000), stock: 2 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(50_000))
+      const [o] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await as(api, 'store')
+      await api.sellerConfirmOrder(o.id, '/assets/c.jpg')
+      await api.dispatchOrder(o.id)
+      await expect(api.getDispatchBoard()).rejects.toThrow('admins')
+      await expect(api.assignJob('delivery', o.id, 'u-rider')).rejects.toThrow('admins')
+
+      await as(api, 'admin')
+      const job = async () => (await api.getDispatchBoard()).jobs.find((j) => j.id === o.id)
+      expect(await job()).toMatchObject({ kind: 'delivery', stage: 'waiting', stuck: false, rider: null, productCode: expect.stringMatching(/^PRD-/) })
+      c.t += 3 * 3_600_000
+      expect((await job())?.stuck).toBe(true)
+
+      await expect(api.assignJob('delivery', o.id, 'u-counter')).rejects.toThrow('doesn’t exist')
+      await api.assignJob('delivery', o.id, 'u-rider')
+      expect(await job()).toMatchObject({ stage: 'taken', stuck: false, rider: { id: 'u-rider', name: 'Bayo Rider' } })
+      await expect(api.assignJob('delivery', o.id, 'u-rider')).rejects.toThrow('waiting in the pool')
+      await api.unassignJob('delivery', o.id)
+      expect(await job()).toMatchObject({ stage: 'waiting', rider: null })
+      await expect(api.unassignJob('delivery', o.id)).rejects.toThrow('hasn’t collected')
+      await api.assignJob('delivery', o.id, 'u-rider')
+
+      await as(api, 'rider')
+      const kinds = (await api.listNotifications()).map((n) => n.kind)
+      expect(kinds).toEqual(expect.arrayContaining(['rider_job_assigned', 'rider_job_taken_back']))
+      expect((await api.listDeliveryJobs()).find((j) => j.id === o.id)?.mine).toBe(true)
+      await api.passCollection(o.id, ['/assets/a.jpg'])
+
+      // Collected: it stays the rider's. Stuck after 6 hours, off the board once delivered.
+      await as(api, 'admin')
+      expect(await job()).toMatchObject({ stage: 'carrying', stuck: false })
+      await expect(api.unassignJob('delivery', o.id)).rejects.toThrow('hasn’t collected')
+      c.t += 6 * 3_600_000
+      expect((await job())?.stuck).toBe(true)
+      await as(api, 'rider')
+      await api.confirmDelivery(o.id, o.deliveryPin!)
+      await as(api, 'admin')
+      expect(await job()).toBeUndefined()
+    })
+  })
+
+  describe('trips', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('offers one seller’s jobs together and takes them all or none', async () => {
+      const api = make()
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Trip lamp', description: '', category: 'Home', priceKobo: k(5_000), stock: 6 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const ids: string[] = []
+      for (let i = 0; i < 6; i++) ids.push((await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null }))[0].id)
+      await as(api, 'store')
+      for (const id of ids) {
+        await api.sellerConfirmOrder(id, '/assets/c.jpg')
+        await api.dispatchOrder(id)
+      }
+
+      await as(api, 'rider')
+      const pool = (await api.listDeliveryJobs()).filter((j) => ids.includes(j.id))
+      expect(new Set(pool.map((j) => j.collectKey))).toEqual(new Set(['shop:m-ikeja']))
+      const [trip] = poolTrips(pool)
+      expect(trip.jobs).toHaveLength(5)
+
+      await expect(api.takeDeliveries([ids[0]])).rejects.toThrow('two or more')
+      await api.takeDelivery(ids[0])
+      // One already yours is skipped.
+      await api.takeDeliveries([ids[0], ids[1]])
+      await expect(api.takeDeliveries(ids.slice(2, 6))).rejects.toThrow('That’s 4 jobs, and you have room for 3 more.')
+      expect((await api.listDeliveryJobs()).find((j) => j.id === ids[2])?.mine).toBe(false) // none taken
+      await api.takeDeliveries(ids.slice(2, 5))
+      const mine = (await api.listDeliveryJobs()).filter((j) => j.mine).map((j) => j.id)
+      expect(mine.sort()).toEqual(ids.slice(0, 5).sort())
+    })
+  })
+
+  describe('pay per delivery fee', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('keeps one seller’s orders in one checkout on one trip, paid once at the largest package', async () => {
+      const c = { t: Date.parse('2026-11-03T10:00:00+01:00') }
+      const api = make(() => c.t)
+      await as(api, 'store')
+      const caseP = await api.createProduct({ title: 'Fee case', description: '', category: 'Phones', priceKobo: k(3_000), stock: 5 })
+      const sofa = await api.createProduct({ title: 'Fee sofa', description: '', category: 'Home', priceKobo: k(4_000), stock: 5 })
+      await as(api, 'admin')
+      for (const p of [caseP, sofa]) await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const [one, two] = await api.checkout({ listingIds: [caseP.id, sofa.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await as(api, 'store')
+      for (const o of [one, two]) await api.sellerConfirmOrder(o.id, '/assets/c.jpg')
+      await api.dispatchOrder(one.id)
+
+      await as(api, 'rider')
+      await api.takeDelivery(one.id)
+      await as(api, 'store')
+      await api.dispatchOrder(two.id)
+      await as(api, 'rider')
+      const mine = (await api.listDeliveryJobs()).filter((j) => j.mine)
+      expect(mine.map((j) => j.id).sort()).toEqual([one.id, two.id].sort())
+      expect(mine[0].feeGroup).toBe(mine[1].feeGroup)
+      expect((await api.listNotifications()).some((n) => n.kind === 'rider_job_added')).toBe(true)
+
+      // Handed back together.
+      await api.releaseDelivery(one.id)
+      expect((await api.listDeliveryJobs()).filter((j) => j.mine)).toEqual([])
+      await api.takeDelivery(two.id)
+      for (const o of [one, two]) await api.passCollection(o.id, ['/assets/a.jpg'])
+      for (const o of [one, two]) await api.confirmDelivery(o.id, o.deliveryPin!)
+      const deliveries = (await api.listMyEarnings()).filter((l) => l.kind === 'delivery' && [caseP.title, sofa.title].includes(l.listingTitle))
+      expect(deliveries).toHaveLength(1)
+      await as(api, 'admin')
+      const rates = await api.getRiderPayRates()
+      expect(deliveries[0].amountKobo).toBe(tripPay(rates, deliveries[0].fromArea!, deliveries[0].toArea!, 'large'))
+    })
+  })
+
+  describe('delivery windows', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('books a time the seller can make, and keeps it from riders until its day', async () => {
+      const c = { t: Date.parse('2026-11-03T10:00:00+01:00') }
+      const api = make(() => c.t)
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Window lamp', description: '', category: 'Home', priceKobo: k(10_000), stock: 5 })
+      await as(api, 'admin')
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const base = { listingIds: [p.id], fulfilment: 'delivery' as const, delivery, pickupPointId: null }
+      await expect(api.checkout({ ...base, window: { day: '2026-11-03', part: 'evening' } })).rejects.toThrow(/Pick one of the times shown/)
+      const w = offeredWindows(c.t)[0]
+      await expect(api.checkout({ ...base, fulfilment: 'pickup', delivery: { ...delivery, address: '', location: null }, pickupPointId: 'yaba', window: w })).rejects.toThrow(/only for delivery/)
+      const [order] = await api.checkout({ ...base, window: w })
+      expect([order.windowStart, order.windowEnd]).toEqual(Object.values(windowTimes(w)))
+
+      // Ready early: shown with its window, but not to be taken or announced before its day.
+      await as(api, 'store')
+      await api.sellerConfirmOrder(order.id, '/assets/c.jpg')
+      await api.dispatchOrder(order.id)
+      await as(api, 'rider')
+      expect((await api.listDeliveryJobs()).find((j) => j.id === order.id)?.windowStart).toBe(order.windowStart)
+      await expect(api.takeDelivery(order.id)).rejects.toThrow(/It can be taken from 7am that day/)
+      const alerts = async () => (await api.listNotifications()).filter((n) => n.kind === 'rider_new_job' && n.listingId === p.id)
+      expect(await alerts()).toHaveLength(0)
+      await as(api, 'admin')
+      const job = (await api.getDispatchBoard()).jobs.find((j) => j.id === order.id)!
+      expect([job.since, job.stuck]).toEqual([windowOpens(order.windowStart!), false])
+
+      // Its day comes: riders hear once, and can take it.
+      c.t = Date.parse(windowOpens(order.windowStart!))
+      await as(api, 'rider')
+      expect(await alerts()).toHaveLength(1)
+      expect(await alerts()).toHaveLength(1)
+      await api.takeDelivery(order.id)
+    })
+  })
+
+  describe('delivery ratings', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('lets the buyer rate each delivery, and shows the rider only totals, from the next day', async () => {
+      const c = { t: Date.parse('2026-11-03T10:00:00+01:00') }
+      const api = make(() => c.t)
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Rated lamp', description: '', category: 'Home', priceKobo: k(5_000), stock: 10 })
+      await as(api, 'admin')
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const orders: OrderView[] = []
+      for (let i = 0; i < 5; i++) orders.push((await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null }))[0])
+      await as(api, 'store')
+      for (const o of orders) {
+        await api.sellerConfirmOrder(o.id, '/assets/c.jpg')
+        await api.dispatchOrder(o.id)
+      }
+      await as(api, 'rider')
+      for (const o of orders) {
+        await api.takeDelivery(o.id)
+        await api.passCollection(o.id, ['/assets/a.jpg'])
+        await api.confirmDelivery(o.id, o.deliveryPin!)
+      }
+
+      await as(api, 'funke')
+      await expect(api.rateDelivery(orders[0].id, true, ['late'])).rejects.toThrow(/only for a thumbs down/)
+      for (let i = 0; i < 5; i++) await api.rateDelivery(orders[i].id, i < 3, i < 3 ? [] : ['late'])
+      await api.rateDelivery(orders[4].id, false, ['rude'])
+      const mine = await api.listMyOrders()
+      expect(mine.find((o) => o.id === orders[4].id)?.deliveryRating).toMatchObject({ good: false, reasons: ['rude'] })
+
+      await as(api, 'rider')
+      expect(await api.getMyRiderStats()).toEqual({ completed: 5, onTimeShare: 1, ratings: null })
+      c.t += 86_400_000
+      expect((await api.getMyRiderStats()).ratings).toEqual({ up: 3, down: 2, reasons: { late: 1, rude: 1 } })
+      await expect(api.getRiderPerformance()).rejects.toThrow()
+
+      await as(api, 'admin')
+      const row = (await api.getRiderPerformance()).find((r) => r.rider.id === 'u-rider')!
+      expect([row.completed, row.up, row.down, row.recentDowns.map((d) => d.orderId).sort()]).toEqual([5, 3, 2, [orders[3].id, orders[4].id].sort()])
+
+      // A week on, it can't be changed.
+      c.t += 7 * 86_400_000
+      await as(api, 'funke')
+      await expect(api.rateDelivery(orders[0].id, false, [])).rejects.toThrow(/7 days/)
+    })
+  })
+
+  describe('incident reports', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('pauses the job in one tap, and an admin can refund the buyer while the seller is still paid', async () => {
+      const c = { t: Date.parse('2026-11-03T10:00:00+01:00') }
+      const api = make(() => c.t)
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Incident lamp', description: '', category: 'Home', priceKobo: k(10_000), stock: 5 })
+      await as(api, 'admin')
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const [order] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await as(api, 'store')
+      await api.sellerConfirmOrder(order.id, '/assets/c.jpg')
+      await api.dispatchOrder(order.id)
+      await as(api, 'rider')
+      await api.takeDelivery(order.id)
+
+      // Before collecting: the collection deadline stops.
+      const id = await api.reportIncident('delivery', order.id, 'threat', null)
+      expect(await api.reportIncident('delivery', order.id, 'threat', null)).toBe(id)
+      c.t += 3 * 3_600_000
+      expect((await api.listDeliveryJobs()).find((j) => j.id === order.id)?.mine).toBe(true)
+      expect(await api.getMyOpenIncidents()).toEqual({ [order.id]: expect.objectContaining({ id, type: 'threat' }) })
+      await api.addIncidentDetails(id, { note: 'Men at the gate', at: { lat: 6.5, lng: 3.4 } })
+      await as(api, 'funke')
+      expect((await api.listMyOrders()).find((o) => o.id === order.id)?.pausedAt).toBeTruthy()
+
+      await as(api, 'admin')
+      const [open] = await api.listOpenIncidents()
+      expect(open).toMatchObject({ id, type: 'threat', note: 'Men at the gate', location: { lat: 6.5, lng: 3.4 }, collected: false })
+      await api.resolveIncident(id, 'carry_on', 'Rider is safe')
+      expect(await api.listOpenIncidents()).toEqual([])
+
+      // Stolen after collecting: buyer refunded in full, seller still paid.
+      await as(api, 'rider')
+      await api.passCollection(order.id, ['/assets/a.jpg'])
+      const theft = await api.reportIncident('delivery', order.id, 'theft', null)
+      await as(api, 'funke')
+      const before = (await api.getWallet()).balance
+      await as(api, 'admin')
+      await api.resolveIncident(theft, 'refund', 'Stolen')
+      await as(api, 'funke')
+      const after = (await api.getWallet()).balance
+      expect(after.cashKobo + after.creditKobo - before.cashKobo - before.creditKobo).toBe(order.priceKobo + order.deliveryFeeKobo)
+      expect((await api.listMyOrders()).find((o) => o.id === order.id)).toMatchObject({ status: 'cancelled', cancelReason: 'incident', pausedAt: null })
+      await as(api, 'store')
+      const lines = (await api.listPayouts()).filter((l) => l.orderId === order.id)
+      expect(lines.map((l) => [l.kind, l.status])).toEqual([['sale', 'due']])
+    })
+  })
+
+  describe('live rider location', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('shows the buyer an opted-in rider on the last leg only, and forgets it after', async () => {
+      const c = { t: Date.parse('2026-11-03T10:00:00+01:00') }
+      const api = make(() => c.t)
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Location lamp', description: '', category: 'Home', priceKobo: k(10_000), stock: 5 })
+      await as(api, 'admin')
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const [order] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await as(api, 'store')
+      await api.sellerConfirmOrder(order.id, '/assets/c.jpg')
+      await api.dispatchOrder(order.id)
+      await as(api, 'rider')
+      await api.takeDelivery(order.id)
+      const here = { lat: 6.5, lng: 3.4 }
+
+      expect(await api.shareLocation(here)).toBe(false) // not opted in
+      await api.setLocationSharing(true)
+      expect(await api.getLocationSharing()).toBe(true)
+      expect(await api.shareLocation(here)).toBe(false) // not collected yet
+      await api.passCollection(order.id, ['/assets/a.jpg'])
+      expect(await api.shareLocation(here)).toBe(true)
+
+      await as(api, 'funke')
+      expect((await api.getRiderLocation(order.id))?.location).toEqual(here)
+      c.t += 6 * 60_000
+      expect(await api.getRiderLocation(order.id)).toBeNull() // gone stale
+
+      await as(api, 'rider')
+      expect(await api.shareLocation(here)).toBe(true)
+      await api.confirmDelivery(order.id, order.deliveryPin!)
+      expect(await api.shareLocation(here)).toBe(false)
+      await as(api, 'funke')
+      expect(await api.getRiderLocation(order.id)).toBeNull()
     })
   })
 
@@ -1618,7 +2487,7 @@ describe('mock api', () => {
       expect((await api.getPushPreferences()).orders).toBe(true)
     })
 
-    it('only takes real push services, and not from riders', async () => {
+    it('only takes real push services, and not from admins', async () => {
       const api = make()
       await api.auth.signInWithPassword('funke@drawmart.test', 'drawmart-demo')
       await api.savePushSubscription(device)
@@ -1629,6 +2498,8 @@ describe('mock api', () => {
       await expect(api.setPushPreference('nonsense' as 'wins', false)).rejects.toMatchObject({ code: 'invalid_input' })
       await api.auth.signOut()
       await api.auth.signInWithPassword('rider@drawmart.test', 'drawmart-demo')
+      await api.savePushSubscription(device)
+      await api.auth.signInWithPassword('admin@drawmart.test', 'drawmart-demo')
       await expect(api.savePushSubscription(device)).rejects.toMatchObject({ code: 'forbidden' })
     })
 
@@ -1930,7 +2801,7 @@ describe('mock api', () => {
 
     it('shows a shop’s rating from 5 reviews, first names only, and admins can hide one', async () => {
       const { api } = clock()
-      const orders = []
+      const orders: OrderView[] = []
       for (const [i, rating] of [5, 4, 4, 4, 5].entries()) {
         const { order } = await delivered(api, `Lamp ${i}`)
         await api.submitReview(order.id, { ...input, rating })

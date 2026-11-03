@@ -1,14 +1,18 @@
+import { useEffect } from 'react'
+import { keepAppForOffline } from '@/lib/appShell'
 import { NavLink, Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router'
 import { canDo } from '@/domain/team'
 import { api } from '@/api'
 import { cancelRateFlagged } from '@/domain/orderCancel'
-import { useStoreRole, useSupportInbox, useSupportUnread, useStoreApplications, useOpenClaims, useAccess, useCancelRates, useDuePayouts, useMerchant, usePendingListings, usePendingWinnerStories, usePriceReviews, usePrizeOrders, useSellerApplications, useSignOut, useUnreadMessages, useUnreadNotifications } from '@/api/hooks'
-import { UsersIcon, GiftIcon, InfoIcon, StarIcon, StoreIcon, AlertIcon, XIcon, BellIcon, NairaIcon, HeartIcon, ChartIcon, ChatIcon, TrendingUpIcon, TrophyIcon, TruckIcon, CheckIcon, ClipboardIcon, DiceIcon, HashIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
+import { useStoreRole, useSupportInbox, useSupportUnread, useStoreApplications, useOpenClaims, useAccess, useCancelRates, useDispatchBoard, useOpenIncidents, useDuePayouts, useMerchant, useMyCounter, useRiderApplications, useRiderPayDue, usePendingListings, usePendingWinnerStories, usePriceReviews, usePrizeOrders, useSellerApplications, useSignOut, useUnreadMessages, useUnreadNotifications } from '@/api/hooks'
+import { UsersIcon, GiftIcon, InfoIcon, StarIcon, StoreIcon, AlertIcon, XIcon, BellIcon, NairaIcon, HeartIcon, ChartIcon, ChatIcon, TrendingUpIcon, TrophyIcon, TruckIcon, CheckIcon, ClipboardIcon, DiceIcon, GaugeIcon, HashIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
 import { NavMenu } from '@/components/NavMenu'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { cx } from '@/components/ui'
 import { APP_HOME } from '@/lib/apps'
 import { Logo, TestModeBanner } from './BuyerLayout'
+import { OfflineBanner } from '@/components/Offline'
+import { LocationSharingBar } from '@/pages/delivery/ShareLocation'
 
 type BackOfficeApp = 'store' | 'admin' | 'delivery'
 
@@ -27,6 +31,10 @@ interface NavItem {
 
 /** Desktop-first shell shared by the store, admin and delivery apps. Each only links to its own pages. */
 export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
+  // Riders' saved jobs open without signal only if the app itself is on the phone.
+  useEffect(() => {
+    if (app === 'delivery') keepAppForOffline()
+  }, [app])
   const { pathname } = useLocation()
   const navigate = useNavigate()
   const merchant = useMerchant()
@@ -45,11 +53,21 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
   const access = useAccess()
   const unreadNotifications = useUnreadNotifications()
   const duePayouts = useDuePayouts()
+  const riderPayDue = useRiderPayDue()
+  const riderApplications = useRiderApplications()
+  const dispatch = useDispatchBoard()
+  const incidents = useOpenIncidents()
+  const counter = useMyCounter()
   const signOut = useSignOut()
 
   const nav: NavItem[] =
     app === 'delivery'
-      ? [{ to: '/delivery', label: 'Deliveries', icon: TruckIcon }]
+      ? [
+          { to: '/delivery', label: counter.data ? 'Counter' : 'Deliveries', icon: TruckIcon },
+          // Counter staff aren't paid per job.
+          ...(counter.data ? [] : [{ to: '/delivery/earnings', label: 'Earnings', icon: NairaIcon }]),
+          { to: '/delivery/notifications', label: 'Notifications', icon: BellIcon, count: unreadNotifications },
+        ]
       : app === 'store'
       ? [
           { to: '/store', label: 'Dashboard', icon: LayoutIcon },
@@ -79,6 +97,9 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
           { to: '/admin/claims', label: 'Claims', icon: AlertIcon, count: claims.data?.length ?? 0 },
           { to: '/admin/reviews', label: 'Reviews', icon: StarIcon },
           { to: '/admin/cancellations', label: 'Cancellations', icon: XIcon, count: cancelRates.data?.filter((r) => cancelRateFlagged(r.orders, r.cancelled)).length ?? 0 },
+          { to: '/admin/dispatch', label: 'Dispatch', icon: GaugeIcon, count: (dispatch.data?.jobs.filter((j) => j.stuck).length ?? 0) + (incidents.data?.length ?? 0) },
+          { to: '/admin/riders', label: 'Riders', icon: TruckIcon, count: riderApplications.data?.length ?? 0 },
+          { to: '/admin/rider-pay', label: 'Rider pay', icon: NairaIcon, count: riderPayDue.data?.length ?? 0 },
           { to: '/admin/delivery', label: 'Delivery prices', icon: TruckIcon },
           { to: '/admin/boosts', label: 'Boosts', icon: TrendingUpIcon },
           { to: '/admin/draws', label: api.testMode ? 'Live draws & demo' : 'Live draws', icon: DiceIcon },
@@ -161,6 +182,12 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
           </div>
         </aside>
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 lg:px-10 lg:py-10">
+          {app === 'delivery' ? (
+            <div className="mb-5 flex flex-col gap-3 empty:hidden">
+              <OfflineBanner />
+              <LocationSharingBar />
+            </div>
+          ) : null}
           <div key={pathname} className="animate-fade-in">
             <Outlet />
           </div>

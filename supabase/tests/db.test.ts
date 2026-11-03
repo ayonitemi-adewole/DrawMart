@@ -22,6 +22,8 @@ import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO } from '@/domain/deliveryCheck
 import { imeiValid } from '@/domain/listingChecks'
 import { returnFeeKobo, sellerShareOfReturnFee } from '@/domain/claims'
 import { addConfirmTime, confirmDeadline } from '@/domain/orderConfirm'
+import { lagosDay, offeredWindows, windowOpens, windowTimes } from '@/domain/deliveryWindows'
+import { followUpReasons, type RiderPerformance } from '@/domain/deliveryRatings'
 import { addDays, cautionFeeFor, localDate } from '@/domain/listing'
 import { DEMO_ACCOUNTS } from '@/api/demoAccounts'
 
@@ -233,8 +235,8 @@ describe('schema and seed', () => {
     await db.exec(sql('seed-local-accounts.sql'))
     await db.exec(sql('seed-local-accounts.sql')) // safe to re-run
     await db.exec(sql('seed.sql'))
-    const rows = await admin<{ email: string; role: string; display_name: string; merchant_id: string | null; seller: boolean; identities: number; cash: string }>(
-      `select u.email, p.role, p.display_name, p.merchant_id, p.seller_id is not null seller,
+    const rows = await admin<{ email: string; role: string; display_name: string; merchant_id: string | null; pickup_point_id: string | null; seller: boolean; identities: number; cash: string }>(
+      `select u.email, p.role, p.display_name, p.merchant_id, p.pickup_point_id, p.seller_id is not null seller,
               (select count(*)::int from auth.identities i where i.user_id = u.id) identities,
               (select coalesce(sum(cash_kobo), 0) from public.ledger_entries e where e.user_id = u.id) cash
          from auth.users u join public.profiles p on p.id = u.id where u.email like '%@drawmart.test' order by u.email`,
@@ -247,6 +249,7 @@ describe('schema and seed', () => {
       if (a.role !== 'admin') expect(r.display_name).toBe(a.name)
       if (a.role === 'buyer') expect(Number(r.cash)).toBe(2_500_000) // the starting balance, once
       if (a.role === 'store') expect(r.merchant_id).not.toBeNull()
+      expect(r.pickup_point_id).toBe(a.pickupPointId ?? null)
     }
     expect(rows.find((r) => r.email === 'seller@drawmart.test')?.seller).toBe(true)
     expect(rows.find((r) => r.email === 'store@drawmart.test')?.merchant_id).toBe(IKEJA)
@@ -2420,6 +2423,7 @@ describe('cart and checkout', () => {
     await expectFail(asUser(store, `select public.dispatch_order($1)`, [row.id]), 'invalid_input')
     await asUser(staff, `select public.dispatch_order($1)`, [row.id])
     const prizeRider = await newUser('prizerider@example.com', { role: 'delivery' })
+    await admin(`update public.profiles set rider_trusted = true where id = $1`, [prizeRider]) // new riders can't carry won items
     await asUser(prizeRider, `select public.take_delivery($1)`, [row.id])
     const [{ pins }] = await asUser<{ pins: Record<string, string> }>(winner, `select public.my_delivery_pins() pins`)
     await asUser(prizeRider, `select public.confirm_delivery($1, $2)`, [row.id, pins[row.id]])
@@ -2534,6 +2538,739 @@ describe('cart and checkout', () => {
       const [o] = await admin<{ status: string; delivered_at: string | null; rider_id: string }>(`select status, delivered_at, rider_id from public.orders where id = $1`, [id])
       expect(o).toMatchObject({ status: 'delivered', rider_id: otherRider })
       expect(o.delivered_at).not.toBeNull()
+    })
+
+    it('holds a rider to 5 jobs, and sends uncollected ones back after 2 hours', async () => {
+      const busy = await newUser('busy-rider@example.com', { role: 'delivery' })
+      const ids: string[] = []
+      for (let i = 0; i < 6; i++) ids.push((await readyOrder(`limit${i}@example.com`)).id)
+      for (const id of ids.slice(0, 5)) await asUser(busy, `select public.take_delivery($1)`, [id])
+      expect((await expectFail(asUser(busy, `select public.take_delivery($1)`, [ids[5]]), 'invalid_input')).detail).toContain('5 jobs, the most')
+      const mine = async () => (await asUser<{ j: (Job & { collectBy: string | null; collected: boolean })[] }>(busy, `select public.delivery_jobs() j`))[0].j
+      expect((await mine()).find((j) => j.id === ids[0])?.collectBy).toBeTruthy()
+
+      // One collected, the rest taken over 2 hours ago.
+      await asUser(busy, `select public.pass_collection($1, array['/assets/check.jpg'])`, [ids[0]])
+      await admin(`update public.orders set rider_assigned_at = now() - interval '121 minutes' where id = any($1)`, [ids.slice(0, 4)])
+      await admin(`select private.process_deadlines()`)
+      const after = await mine()
+      expect(after.find((j) => j.id === ids[0])).toMatchObject({ mine: true, collected: true, collectBy: null })
+      for (const id of ids.slice(1, 4)) expect(after.find((j) => j.id === id)).toMatchObject({ mine: false, collectBy: null })
+      expect(after.find((j) => j.id === ids[4])?.mine).toBe(true) // still within its time
+      const why = await admin<{ order_id: string; reason: string }>(`select order_id, reason from private.job_releases where rider_id = $1`, [busy])
+      expect(why.map((r) => r.reason)).toEqual(['not_collected', 'not_collected', 'not_collected'])
+
+      // Room again, and admins can change the limit.
+      await asUser(busy, `select public.take_delivery($1)`, [ids[5]])
+      await admin(`update public.app_settings set rider_max_jobs = 3`)
+      expect((await expectFail(asUser(busy, `select public.take_delivery($1)`, [ids[1]]), 'invalid_input')).detail).toContain('3 jobs, the most')
+      await admin(`update public.app_settings set rider_max_jobs = 5`)
+      await asUser(busy, `select public.release_delivery($1)`, [ids[5]])
+      expect((await admin<{ reason: string }>(`select reason from private.job_releases where order_id = $1`, [ids[5]])).map((r) => r.reason)).toEqual(['handed_back'])
+    })
+
+    it('takes several jobs on one trip, all or none, within the limit', async () => {
+      const tripper = await newUser('trip-rider@example.com', { role: 'delivery' })
+      const ids: string[] = []
+      for (let i = 0; i < 4; i++) ids.push((await readyOrder(`trip${i}@example.com`)).id)
+      const pool = (await asUser<{ j: { id: string; collectKey: string }[] }>(tripper, `select public.delivery_jobs() j`))[0].j
+      const [{ shop }] = await admin<{ shop: string }>(`select merchant_id shop from public.orders where id = $1`, [ids[0]])
+      for (const id of ids) expect(pool.find((j) => j.id === id)?.collectKey).toBe(`shop:${shop}`)
+
+      const takeAll = (who: string, list: string[]) => asUser(who, `select public.take_deliveries($1)`, [list])
+      await expectFail(takeAll(store, ids.slice(0, 2)), 'forbidden')
+      await expectFail(takeAll(tripper, [ids[0]]), 'invalid_input')
+      await expectFail(takeAll(tripper, [ids[0], ids[0]]), 'invalid_input')
+      // One already gone: none are taken.
+      await asUser(otherRider, `select public.take_delivery($1)`, [ids[3]])
+      await expectFail(takeAll(tripper, [ids[2], ids[3]]), 'invalid_input')
+      expect(await admin(`select rider_id from public.orders where id = $1`, [ids[2]])).toEqual([{ rider_id: null }])
+
+      await admin(`update public.app_settings set rider_max_jobs = 2`)
+      await asUser(tripper, `select public.take_delivery($1)`, [ids[2]])
+      expect((await expectFail(takeAll(tripper, ids.slice(0, 2)), 'invalid_input')).detail).toBe('That’s 2 jobs, and you have room for 1 more.')
+      await admin(`update public.app_settings set rider_max_jobs = 5`)
+      await takeAll(tripper, ids.slice(0, 2))
+      expect(await admin(`select count(*)::int n from public.orders where rider_id = $1 and id = any($2)`, [tripper, ids])).toEqual([{ n: 3 }])
+      await asUser(otherRider, `select public.release_delivery($1)`, [ids[3]])
+    })
+
+    it('keeps orders sharing one delivery fee on one trip, paid once', async () => {
+      const carrier = await newUser('fee-rider@example.com', { role: 'delivery' })
+      const b = await newUser('fee-buyer@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const small = await newProduct('Fee phone case', 300_000, 'Phones')
+      const big = await newProduct('Fee sofa', 400_000, 'Home')
+      await add(b, small)
+      await add(b, big)
+      const ids = await checkout(b, details([small, big]))
+      // Orders come back in listing-id order, which is random: pick each by its listing.
+      const byListing = async (listing: string) => (await admin<{ id: string }>(`select id from public.orders where id = any($1) and listing_id = $2`, [ids, listing]))[0].id
+      const one = await byListing(small)
+      const two = await byListing(big)
+      for (const id of [one, two]) await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+      const held = async () => (await admin<{ n: number }>(`select private.rider_jobs_held($1) n`, [carrier]))[0].n
+      const riderOf = async (id: string) => (await admin<{ rider_id: string | null }>(`select rider_id from public.orders where id = $1`, [id]))[0].rider_id
+
+      // The second, made ready after the first was taken, joins the same rider; it's one job.
+      await asUser(store, `select public.dispatch_order($1)`, [one])
+      const pool = (await asUser<{ j: { id: string; feeGroup: string; payKobo: number }[] }>(carrier, `select public.delivery_jobs() j`))[0].j
+      await asUser(carrier, `select public.take_delivery($1)`, [one])
+      await asUser(store, `select public.dispatch_order($1)`, [two])
+      expect(await riderOf(two)).toBe(carrier)
+      expect(await held()).toBe(1)
+      expect(await asUser(carrier, `select 1 from public.notifications where kind = 'rider_job_added'`)).toHaveLength(1)
+      const mine = (await asUser<{ j: { id: string; feeGroup: string; payKobo: number }[] }>(carrier, `select public.delivery_jobs() j`))[0].j
+      expect(mine.find((j) => j.id === one)?.feeGroup).toBe(mine.find((j) => j.id === two)?.feeGroup)
+      // Pays at the sofa's size now, not the case's alone as the pool showed.
+      const payAt = async (size: string) => Number((await admin<{ p: string }>(
+        `select private.rider_pay(m.delivery_area, private.buyer_area(o), $2) p from public.orders o join public.merchants m on m.id = o.merchant_id where o.id = $1`, [one, size]))[0].p)
+      expect(pool.find((j) => j.id === one)!.payKobo).toBe(await payAt('small'))
+      expect(mine.find((j) => j.id === one)!.payKobo).toBe(await payAt('large'))
+
+      // Handed back together, and taken together.
+      await asUser(carrier, `select public.release_delivery($1)`, [one])
+      expect([await riderOf(one), await riderOf(two)]).toEqual([null, null])
+      await asUser(carrier, `select public.take_delivery($1)`, [two])
+      expect([await riderOf(one), await riderOf(two)]).toEqual([carrier, carrier])
+
+      // One failed visit for both pays once.
+      for (const id of [one, two]) {
+        await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+        await asUser(carrier, `select public.mark_arrived($1)`, [id])
+      }
+      await admin(`update public.orders set arrived_at = now() - interval '11 minutes' where id = any($1)`, [[one, two]])
+      for (const id of [one, two]) await asUser(carrier, `select public.fail_delivery_attempt($1, '/assets/door.jpg', 6.45, 3.43)`, [id])
+      const earned = async (kind: string) => admin<{ amount_kobo: string }>(`select amount_kobo from public.rider_earnings where rider_id = $1 and kind = $2`, [carrier, kind])
+      expect(await earned('failed_attempt')).toHaveLength(1)
+
+      // Delivered: one trip, one pay, at the largest package.
+      await admin(`update public.orders set failed_attempts = 0, redelivery_choice = null where id = any($1)`, [[one, two]])
+      const pins = await pinsOf(b)
+      for (const id of [one, two]) expect((await tryPin(carrier, id, pins[id])).confirmed).toBe(true)
+      const pay = await earned('delivery')
+      expect(pay).toHaveLength(1)
+      const [{ expected }] = await admin<{ expected: string }>(
+        `select private.rider_pay(m.delivery_area, private.buyer_area(o), 'large') expected from public.orders o join public.merchants m on m.id = o.merchant_id where o.id = $1`, [one])
+      expect(pay[0].amount_kobo).toBe(expected)
+    }, 60_000)
+
+    it('shows the buyer where an opted-in rider is on the last leg only, and forgets it after', async () => {
+      const carrier = await newUser('location-rider@example.com', { role: 'delivery' })
+      const b = await newUser('location-buyer@example.com')
+      const nosy = await newUser('location-nosy@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const item = await newProduct('Location lamp')
+      await add(b, item)
+      const [id] = await checkout(b, details([item]))
+      await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+      await asUser(store, `select public.dispatch_order($1)`, [id])
+      await asUser(carrier, `select public.take_delivery($1)`, [id])
+      const share = async () => (await asUser<{ ok: boolean }>(carrier, `select public.share_location(6.5, 3.4) ok`))[0].ok
+      const seen = async (who: string) => (await asUser<{ l: { location: { lat: number; lng: number } } | null }>(who, `select public.rider_location($1) l`, [id]))[0].l
+      const kept = async () => admin(`select 1 from private.rider_positions where rider_id = $1`, [carrier])
+
+      // Not without opting in, and not before collecting.
+      expect(await share()).toBe(false)
+      await asUser(carrier, `select public.set_location_sharing(true)`)
+      expect((await asUser<{ sharing: boolean }>(carrier, `select public.my_location_sharing() sharing`))[0].sharing).toBe(true)
+      expect(await share()).toBe(false)
+      await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+      expect(await share()).toBe(true)
+
+      // Only this order's buyer sees it, only while it's fresh, and nobody reads the table.
+      expect((await seen(b))?.location).toEqual({ lat: 6.5, lng: 3.4 })
+      expect(await seen(nosy)).toBeNull()
+      await expect(asUser(carrier, `select * from private.rider_positions`)).rejects.toThrow(/permission denied/)
+      await admin(`update private.rider_positions set updated_at = now() - interval '6 minutes'`)
+      expect(await seen(b)).toBeNull()
+
+      // Stopping forgets it; so does delivering.
+      await asUser(carrier, `select public.set_location_sharing(false)`)
+      expect(await kept()).toHaveLength(0)
+      await asUser(carrier, `select public.set_location_sharing(true)`)
+      expect(await share()).toBe(true)
+      const pins = await pinsOf(b)
+      await tryPin(carrier, id, pins[id])
+      expect(await kept()).toHaveLength(0)
+      expect(await share()).toBe(false)
+      await expectFail(asUser(b, `select public.share_location(6.5, 3.4)`), 'forbidden')
+    }, 60_000)
+
+    it('lets a rider report an incident in one tap, pauses the job and spares the seller', async () => {
+      const carrier = await newUser('incident-rider@example.com', { role: 'delivery' })
+      const boss = await newUser('incident-admin@example.com', { role: 'admin' })
+      await admin(`insert into public.push_subscriptions (endpoint, user_id, p256dh, auth) values ('https://fcm.googleapis.com/x/boss', $1, 'k', 'a')`, [boss])
+      const b = await newUser('incident-buyer@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const ready = async (title: string) => {
+        const item = await newProduct(title)
+        await add(b, item)
+        const [id] = await checkout(b, details([item]))
+        await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+        await asUser(store, `select public.dispatch_order($1)`, [id])
+        await asUser(carrier, `select public.take_delivery($1)`, [id])
+        return id
+      }
+      const report = (who: string, id: string, type = 'damaged') => asUser<{ id: string }>(who, `select public.report_incident('delivery', $1, $2, 6.5, 3.4) id`, [id, type])
+
+      // Before collecting: a threat at the seller's. Its collection deadline stops.
+      const waiting = await ready('Incident lamp A')
+      await expectFail(report(await newUser('other-rider@example.com', { role: 'delivery' }), waiting), 'invalid_input')
+      const [{ id: first }] = await report(carrier, waiting, 'threat')
+      expect((await report(carrier, waiting, 'threat'))[0].id).toBe(first) // a second tap
+      const [push] = await admin<{ title: string; body: string; url: string }>(`select title, body, url from private.push_outbox where user_id = $1`, [boss])
+      expect(push).toEqual({ title: 'Rider incident: Threat', body: 'A rider reported a problem on a job. Open the dispatch board.', url: '/admin/dispatch' })
+      await admin(`update public.orders set rider_assigned_at = now() - interval '3 hours' where id = $1`, [waiting])
+      await admin(`select private.release_late_jobs()`)
+      expect(await admin(`select rider_id from public.orders where id = $1`, [waiting])).toEqual([{ rider_id: carrier }])
+      expect(Object.keys((await asUser<{ m: Record<string, unknown> }>(carrier, `select public.my_open_incidents() m`))[0].m)).toEqual([waiting])
+
+      // Details follow; only admins see the list.
+      await asUser(carrier, `select public.add_incident_details($1, 'Two men at the gate', '/assets/gate.jpg', null, null)`, [first])
+      await expectFail(asUser(carrier, `select public.open_incidents()`), 'forbidden')
+      const open = (await asUser<{ o: { id: string; note: string; photo: string; location: unknown; type: string }[] }>(boss, `select public.open_incidents() o`))[0].o
+      expect(open.find((x) => x.id === first)).toMatchObject({ type: 'threat', note: 'Two men at the gate', photo: '/assets/gate.jpg', location: { lat: 6.5, lng: 3.4 } })
+      await asUser(boss, `select public.resolve_incident($1, 'carry_on', 'Rider is safe')`, [first])
+      expect(await admin(`select paused_at from public.orders where id = $1`, [waiting])).toEqual([{ paused_at: null }])
+      // A fresh window to collect, so the deadline doesn't take it straight away.
+      await admin(`select private.release_late_jobs()`)
+      expect(await admin(`select rider_id from public.orders where id = $1`, [waiting])).toEqual([{ rider_id: carrier }])
+      await expectFail(asUser(carrier, `select public.add_incident_details($1, 'more', null, null, null)`, [first]), 'invalid_input')
+
+      // Damaged on the way, then refused at the door as damaged: the seller isn't charged.
+      const damaged = await ready('Incident lamp B')
+      await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [damaged])
+      await report(carrier, damaged)
+      const pins = await pinsOf(b)
+      await asUser(carrier, `select public.refuse_delivery($1, $2, 'refused_damaged', 'Crushed', '/assets/x.jpg')`, [damaged, pins[damaged]])
+      expect(await admin(`select 1 from public.payouts where order_id = $1 and kind = 'charge'`, [damaged])).toHaveLength(0)
+      expect(await admin(`select failure_excused from public.orders where id = $1`, [damaged])).toEqual([{ failure_excused: true }])
+
+      // Stolen after collecting: the buyer gets everything back and the seller is still paid.
+      const stolen = await ready('Incident lamp C')
+      await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [stolen])
+      const [{ id: theft }] = await report(carrier, stolen, 'theft')
+      await expectFail(asUser(carrier, `select public.resolve_incident($1, 'refund', '')`, [theft]), 'forbidden')
+      await asUser(boss, `select public.resolve_incident($1, 'refund', 'Stolen at Ojota')`, [theft])
+      expect(await admin(`select status, cancel_reason, paused_at from public.orders where id = $1`, [stolen])).toEqual([{ status: 'cancelled', cancel_reason: 'incident', paused_at: null }])
+      const refunds = await admin<{ memo: string }>(`select memo from public.ledger_entries where user_id = $1 and kind = 'order_refund' and listing_id = (select listing_id from public.orders where id = $2) order by memo`, [b, stolen])
+      expect(refunds.map((r) => r.memo)).toEqual(['Delivery refund · Incident lamp C', 'Refund · Incident lamp C'])
+      expect(await admin(`select status from public.payouts where order_id = $1 and kind = 'sale'`, [stolen])).toEqual([{ status: 'due' }])
+      await expectFail(asUser(boss, `select public.resolve_incident($1, 'carry_on', '')`, [theft]), 'not_found')
+    }, 60_000)
+
+    it('lets a buyer rate the delivery, and shows the rider only totals', async () => {
+      const carrier = await newUser('rated-rider@example.com', { role: 'delivery' })
+      const boss = await newUser('rated-admin@example.com', { role: 'admin' })
+      const b = await newUser('rating-buyer@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const ids: string[] = []
+      for (let i = 0; i < 5; i++) {
+        const item = await newProduct(`Rated lamp ${i}`)
+        await add(b, item)
+        const [id] = await checkout(b, details([item]))
+        await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+        await asUser(store, `select public.dispatch_order($1)`, [id])
+        await asUser(carrier, `select public.take_delivery($1)`, [id])
+        await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+        ids.push(id)
+      }
+      const rate = (who: string, id: string, good: boolean, reasons: string[] = []) => asUser(who, `select public.rate_delivery($1, $2, $3)`, [id, good, reasons])
+      // Not before it arrives.
+      await expectFail(rate(b, ids[0], true), 'invalid_input')
+      const pins = await pinsOf(b)
+      for (const id of ids) await tryPin(carrier, id, pins[id])
+
+      // Only the buyer, reasons only with a thumbs down, and nobody reads the table.
+      await expectFail(rate(b, ids[0], true, ['late']), 'invalid_input')
+      await expectFail(rate(b, ids[0], false, ['slow']), 'invalid_input')
+      await expectFail(rate(await newUser('nosy-buyer@example.com'), ids[0], true), 'invalid_input')
+      for (let i = 0; i < 5; i++) await rate(b, ids[i], i < 3, i < 3 ? [] : ['late'])
+      await rate(b, ids[4], false, ['rude'])
+      for (const who of [carrier, b, boss]) await expect(asUser(who, `select * from private.delivery_ratings`)).rejects.toThrow(/permission denied/)
+      const mine = (await asUser<{ r: Record<string, { good: boolean; reasons: string[] }> }>(b, `select public.my_delivery_ratings() r`))[0].r
+      expect(mine[ids[4]]).toMatchObject({ good: false, reasons: ['rude'] })
+
+      // The rider sees totals, and ratings only from the next day.
+      const stats = async () => (await asUser<{ s: { completed: number; onTimeShare: number; ratings: unknown } }>(carrier, `select public.my_rider_stats() s`))[0].s
+      expect(await stats()).toEqual({ completed: 5, onTimeShare: 1, ratings: null })
+      await admin(`update private.delivery_ratings set rated_at = now() - interval '1 day'`)
+      expect((await stats()).ratings).toEqual({ up: 3, down: 2, reasons: { late: 1, rude: 1 } })
+      await expectFail(asUser(b, `select public.my_rider_stats()`), 'forbidden')
+
+      // Admins see who needs a call, and the latest thumbs down.
+      await expectFail(asUser(carrier, `select public.rider_performance()`), 'forbidden')
+      const perf = (await asUser<{ p: (RiderPerformance & { rider: { id: string }; recentDowns: { orderId: string }[] })[] }>(boss, `select public.rider_performance() p`))[0].p.find((x) => x.rider.id === carrier)!
+      expect([perf.completed, perf.up, perf.down, perf.recentDowns.length]).toEqual([5, 3, 2, 2])
+      expect(followUpReasons(perf)).toEqual(['1 buyer said rude or unsafe', '2 of 5 thumbs down'])
+
+      // A week on, it can't be rated or changed.
+      await admin(`update public.orders set delivered_at = now() - interval '8 days' where id = $1`, [ids[0]])
+      await expectFail(rate(b, ids[0], false), 'invalid_input')
+    }, 60_000)
+
+    it('offers the same delivery windows as the app, from the latest the seller can be ready', async () => {
+      // Every half hour across a week, including nights and weekends.
+      const from = Date.parse('2026-11-02T00:10:00Z')
+      for (let t = from; t < from + 7 * 86_400_000; t += 1_800_000) {
+        const rows = await admin<{ day: string; part: string }>(`select to_char(day, 'YYYY-MM-DD') as day, part from private.offered_windows($1)`, [new Date(t).toISOString()])
+        expect(rows, new Date(t).toISOString()).toEqual(offeredWindows(t))
+      }
+      const [w] = await admin<{ w_start: Date; w_end: Date }>(`select w_start, w_end from private.window_times('2026-11-05', 'evening')`)
+      expect([w.w_start.toISOString(), w.w_end.toISOString()]).toEqual(Object.values(windowTimes({ day: '2026-11-05', part: 'evening' })))
+      const [o] = await admin<{ t: Date }>(`select private.window_opens('2026-11-05T15:00:00Z') t`)
+      expect(o.t.toISOString()).toBe(windowOpens('2026-11-05T15:00:00Z'))
+    }, 60_000)
+
+    it('keeps a chosen delivery window from riders until its day, then tells them', async () => {
+      const carrier = await newUser('window-rider@example.com', { role: 'delivery' })
+      const boss = await newUser('window-admin@example.com', { role: 'admin' })
+      const b = await newUser('window-buyer@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const item = await newProduct('Window lamp')
+      await add(b, item)
+
+      // Too soon for the seller, and pickups, are refused.
+      const now = Date.now()
+      await expectFail(checkout(b, details([item], { window: { day: lagosDay(now), part: 'evening' } })), 'invalid_input')
+      const w = offeredWindows(now)[0]
+      const [id] = await checkout(b, details([item], { window: w }))
+      const [row] = await admin<{ window_start: Date; window_end: Date }>(`select window_start, window_end from public.orders where id = $1`, [id])
+      expect([row.window_start.toISOString(), row.window_end.toISOString()]).toEqual(Object.values(windowTimes(w)))
+
+      // Ready early: in the pool with its window, but not to be taken, or announced, before its day.
+      await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+      await asUser(store, `select public.dispatch_order($1)`, [id])
+      const job = (await asUser<{ j: { id: string; windowStart: string; windowEnd: string }[] }>(carrier, `select public.delivery_jobs() j`))[0].j.find((j) => j.id === id)!
+      expect(new Date(job.windowStart).toISOString()).toBe(windowTimes(w).start)
+      expect((await expectFail(asUser(carrier, `select public.take_delivery($1)`, [id]), 'invalid_input')).detail).toContain('It can be taken from 7am that day.')
+      const alerts = () => asUser(carrier, `select 1 from public.notifications where kind = 'rider_new_job' and listing_id = $1`, [item])
+      expect(await alerts()).toHaveLength(0)
+      const boardJob = async () => (await asUser<{ b: { jobs: { id: string; since: string; windowStart: string | null }[] } }>(boss, `select public.dispatch_board() b`))[0].b.jobs.find((j) => j.id === id)!
+      expect(new Date((await boardJob()).since).toISOString()).toBe(windowOpens(windowTimes(w).start))
+
+      // Its day comes: riders hear about it once, and can take it.
+      await admin(`update public.orders set window_start = now() - interval '1 day', window_end = now() - interval '21 hours', dispatched_at = now() - interval '2 days' where id = $1`, [id])
+      await admin(`select private.rider_reminders()`)
+      await admin(`select private.rider_reminders()`)
+      expect(await alerts()).toHaveLength(1)
+      await asUser(carrier, `select public.take_delivery($1)`, [id])
+    }, 60_000)
+
+    it('makes an order readied after the rest were collected its own trip, paid on its own', async () => {
+      const carrier = await newUser('fee-rider2@example.com', { role: 'delivery' })
+      const b = await newUser('fee-buyer2@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const first = await newProduct('Fee lamp A')
+      const second = await newProduct('Fee lamp B')
+      await add(b, first)
+      await add(b, second)
+      const [one, two] = await checkout(b, details([first, second]))
+      for (const id of [one, two]) await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+      await asUser(store, `select public.dispatch_order($1)`, [one])
+      await asUser(carrier, `select public.take_delivery($1)`, [one])
+      await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [one])
+      await asUser(store, `select public.dispatch_order($1)`, [two])
+      expect(await admin(`select rider_id from public.orders where id = $1`, [two])).toEqual([{ rider_id: null }])
+      await asUser(carrier, `select public.take_delivery($1)`, [two])
+      await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [two])
+      const pins = await pinsOf(b)
+      for (const id of [one, two]) await tryPin(carrier, id, pins[id])
+      expect(await admin(`select 1 from public.rider_earnings where rider_id = $1 and kind = 'delivery'`, [carrier])).toHaveLength(2)
+    })
+
+    it('alerts riders to jobs in their areas, a few an hour, without details on the lock screen', async () => {
+      const near = await newUser('near-rider@example.com', { role: 'delivery' })
+      const far = await newUser('far-rider@example.com', { role: 'delivery' })
+      const alerts = async (who: string, kind: string) => asUser<{ listing_id: string; area: string | null }>(who, `select listing_id, area from public.notifications where kind = $1`, [kind])
+      await admin(`insert into public.push_subscriptions (endpoint, user_id, p256dh, auth) values ('https://fcm.googleapis.com/x/near', $1, 'k', 'a')`, [near])
+
+      // Only riders choose areas, and only ours.
+      await expectFail(asUser(store, `select public.set_rider_areas(array['ikeja'])`), 'forbidden')
+      await expectFail(asUser(far, `select public.set_rider_areas(array['mars'])`), 'invalid_input')
+      const [{ area }] = await admin<{ area: string }>(`select m.delivery_area area from public.merchants m join public.profiles p on p.merchant_id = m.id where p.id = $1`, [store])
+      await asUser(far, `select public.set_rider_areas($1)`, [[area === 'lekki' ? 'ikeja' : 'lekki']])
+      const { id } = await readyOrder('alert1@example.com')
+      expect(await alerts(near, 'rider_new_job')).toEqual([expect.objectContaining({ area })])
+      expect(await asUser(far, `select area from public.rider_areas`)).toHaveLength(1)
+      expect(await asUser(near, `select area from public.rider_areas`)).toEqual([])
+
+      // The lock screen: the item type and area, never the title, an address or a name.
+      const [push] = await admin<{ title: string; body: string; url: string }>(`select title, body, url from private.push_outbox where user_id = $1`, [near])
+      const [{ title, name }] = await admin<{ title: string; name: string }>(`select l.title, a.name from public.orders o join public.listings l on l.id = o.listing_id join public.delivery_areas a on a.id = $2 where o.id = $1`, [id, area])
+      expect(push).toMatchObject({ title: 'New delivery job', url: '/delivery?tab=available' })
+      expect(push.body).toContain(name)
+      expect(push.body).not.toContain(title)
+
+      // At most 4 an hour; none to a rider in other areas.
+      for (let i = 2; i <= 5; i++) await readyOrder(`alert${i}@example.com`)
+      expect(await alerts(near, 'rider_new_job')).toHaveLength(4)
+      expect(await alerts(far, 'rider_new_job')).toHaveLength(0)
+      await asUser(far, `select public.set_rider_areas('{}')`)
+
+      // Their own: a reminder half an hour before it goes back, once, then word that it has.
+      await asUser(near, `select public.take_delivery($1)`, [id])
+      await admin(`update public.orders set rider_assigned_at = now() - interval '89 minutes' where id = $1`, [id])
+      await admin(`select private.process_deadlines()`)
+      expect(await alerts(near, 'rider_collect_soon')).toHaveLength(0)
+      await admin(`update public.orders set rider_assigned_at = now() - interval '91 minutes' where id = $1`, [id])
+      await admin(`select private.process_deadlines()`)
+      await admin(`select private.process_deadlines()`)
+      expect(await alerts(near, 'rider_collect_soon')).toHaveLength(1)
+      await admin(`update public.orders set rider_assigned_at = now() - interval '121 minutes' where id = $1`, [id])
+      await admin(`select private.process_deadlines()`)
+      expect(await alerts(near, 'rider_job_released')).toHaveLength(1)
+      // Back in the pool, so the other rider hears, not the one who let it go.
+      expect(await alerts(far, 'rider_new_job')).toHaveLength(1)
+
+      // A paused PIN that's ready to try again.
+      await asUser(near, `select public.take_delivery($1)`, [id])
+      await asUser(near, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+      await admin(`update private.order_pins set attempts = 5, locked_until = now() - interval '1 minute' where order_id = $1`, [id])
+      await admin(`select private.process_deadlines()`)
+      await admin(`select private.process_deadlines()`)
+      expect(await alerts(near, 'rider_pin_unlocked')).toHaveLength(1)
+      const pushes = await admin<{ body: string }>(`select body from private.push_outbox where user_id = $1`, [near])
+      expect(pushes.map((p) => p.body).join(' ')).not.toMatch(/Awolowo|[0-9]{6}/)
+    })
+
+    it('signs riders up only while open, approves them into delivery accounts, and starts them on smaller jobs', async () => {
+      const applicant = await newUser('new-rider@example.com')
+      const app = (patch: Record<string, unknown> = {}) => ({
+        fullName: 'Emeka Nwosu', nin: '12345678901', phone: '0803 222 3333', address: '12 Allen Avenue, Ikeja', area: 'ikeja', vehicle: 'motorcycle', plate: 'LND 123 AB',
+        guarantorName: 'Ada Nwosu', guarantorPhone: '0805 765 4321', guarantorRelationship: 'Sister',
+        idPhoto: `${applicant}/rider-id.jpg`, selfiePhoto: `${applicant}/rider-selfie.jpg`, quizAnswers: [1, 1, 0, 2, 1, 1], ...patch,
+      })
+      const submit = (patch: Record<string, unknown> = {}) => asUser(applicant, `select public.submit_rider_application($1)`, [app(patch)])
+      const fail = async (patch: Record<string, unknown>, text: string) => expect((await expectFail(submit(patch), 'invalid_input')).detail).toContain(text)
+
+      await fail({}, 'isn’t open')
+      await expectFail(asUser(applicant, `select public.set_rider_signups_open(true)`), 'forbidden')
+      await asUser(staff, `select public.set_rider_signups_open(true)`)
+      await fail({ quizAnswers: [0, 0, 0, 0, 0, 0] }, 'quiz')
+      await fail({ nin: '123' }, '11-digit NIN')
+      await fail({ guarantorPhone: '+234 803 222 3333' }, 'own phone number')
+      await fail({ idPhoto: `${staff}/someone-else.jpg` }, 'photo of your ID')
+      await submit()
+      await expectFail(submit(), 'invalid_input') // already being reviewed
+      // Only the applicant and admins see it.
+      expect(await asUser(rider, `select id from public.rider_applications`)).toEqual([])
+      const [{ id: appId, plate }] = await asUser<{ id: string; plate: string }>(applicant, `select id, plate from public.rider_applications`)
+      expect(plate).toBe('LND123AB')
+      // Someone who has bought can't apply, and an account applying to ride can't become a store.
+      expect(await admin(`select private.rider_account_blocker($1) b`, [(await readyOrder('rider-shopper@example.com')).b])).toEqual([{ b: 'This account has already bought on DrawMart. Sign up with a new account to ride.' }])
+      expect(await admin(`select private.store_account_blocker($1) b`, [applicant])).toEqual([{ b: 'This account has applied to ride. Sign up with a new account for your business.' }])
+
+      await expectFail(asUser(staff, `select public.reject_rider_application($1, 'no')`, [appId]), 'invalid_input')
+      await asUser(staff, `select public.reject_rider_application($1, 'The selfie is blurry.')`, [appId])
+      await submit()
+      await expectFail(asUser(store, `select public.approve_rider_application($1)`, [appId]), 'forbidden')
+      await asUser(staff, `select public.approve_rider_application($1)`, [appId])
+      expect(await admin(`select role, display_name from public.profiles where id = $1`, [applicant])).toEqual([{ role: 'delivery', display_name: 'Emeka Nwosu' }])
+      expect(await asUser(applicant, `select kind from public.notifications where kind = 'rider_approved'`)).toHaveLength(1)
+      expect(await asUser(applicant, `select public.my_rider_level() l`)).toEqual([{ l: { completed: 0, trusted: false, jobsToUnlock: 20, maxKobo: 5000000 } }])
+
+      // A new rider can't take an order worth more than ₦50,000, or a won item.
+      const { id: small } = await readyOrder('rider-small@example.com') // ₦5,000
+      const [{ id: dearListing }] = await asUser<{ id: string }>(store, `select public.create_product($1) id`, [{ title: 'Dear lamp', category: 'Home', priceKobo: 6_000_000 }])
+      await asUser(staff, `select public.approve_listing($1)`, [dearListing])
+      const buyerOfDear = await newUser('rider-dear@example.com')
+      await asUser(buyerOfDear, `select public.top_up(9000000)`)
+      await add(buyerOfDear, dearListing)
+      const [big] = await checkout(buyerOfDear, details([dearListing]))
+      await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [big])
+      await asUser(store, `select public.dispatch_order($1)`, [big])
+      const pool = (await asUser<{ j: { id: string; locked: boolean }[] }>(applicant, `select public.delivery_jobs() j`))[0].j
+      expect(pool.find((j) => j.id === small)?.locked).toBe(false)
+      expect(pool.find((j) => j.id === big)?.locked).toBe(true)
+      expect((await expectFail(asUser(applicant, `select public.take_delivery($1)`, [big]), 'invalid_input')).detail).toContain('20 completed')
+
+      // A trusted fleet vouches for its riders.
+      const [{ fleet }] = await asUser<{ fleet: string }>(staff, `select public.create_rider_fleet('Partner Riders', '0803 444 5555') fleet`)
+      expect(await asUser(applicant, `select id from public.rider_fleets`)).toEqual([])
+      await asUser(staff, `select public.set_rider_fleet($1, $2)`, [applicant, fleet])
+      await asUser(staff, `select public.set_fleet_trusted($1, true)`, [fleet])
+      await asUser(applicant, `select public.take_delivery($1)`, [big])
+      const [{ riders }] = await asUser<{ riders: { id: string; fleetId: string; holding: number }[] }>(staff, `select public.admin_riders() riders`)
+      expect(riders.find((r) => r.id === applicant)).toMatchObject({ fleetId: fleet, holding: 1 })
+      await asUser(staff, `select public.set_rider_signups_open(false)`)
+    })
+
+    it('shows pool jobs by area, size and pay, never an address, and pays what it showed', async () => {
+      const poolRider = await newUser('pool-rider@example.com', { role: 'delivery' })
+      const { id } = await readyOrder('pool-buyer@example.com')
+      type PoolRow = { id: string; fromArea: string | null; toArea: string | null; size: string; payKobo: number; postedAt: string | null; dropOff: unknown }
+      const row = (await asUser<{ j: PoolRow[] }>(poolRider, `select public.delivery_jobs() j`))[0].j.find((j) => j.id === id)!
+      const [{ seller, buyer }] = await admin<{ seller: string; buyer: string }>(
+        `select m.delivery_area seller, private.nearest_area(o.delivery_lat, o.delivery_lng) buyer from public.orders o join public.merchants m on m.id = o.merchant_id where o.id = $1`, [id])
+      expect(row).toMatchObject({ fromArea: seller, toArea: buyer, size: 'large', dropOff: null })
+      expect(row.postedAt).toBeTruthy()
+      const [{ address }] = await admin<{ address: string }>(`select delivery_address address from public.orders where id = $1`, [id])
+      expect(JSON.stringify(row)).not.toContain(address)
+
+      await asUser(poolRider, `select public.take_delivery($1)`, [id])
+      await asUser(poolRider, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+      const [{ user_id: b }] = await admin<{ user_id: string }>(`select user_id from public.orders where id = $1`, [id])
+      await tryPin(poolRider, id, (await pinsOf(b))[id])
+      expect(await asUser(poolRider, `select amount_kobo from public.rider_earnings`)).toEqual([{ amount_kobo: row.payKobo }])
+    })
+
+    it('shows the buyer their rider once collected, with a chat only the two of them can read', async () => {
+      const carrier = await newUser('chat-rider@example.com', { role: 'delivery' })
+      await admin(`update public.profiles set display_name = 'Bayo Adeyemi' where id = $1`, [carrier])
+      await asUser(carrier, `select public.set_rider_photo('/assets/bayo.jpg')`)
+      await expectFail(asUser(carrier, `select public.set_rider_photo('data:image/png;base64,x')`), 'invalid_input')
+      expect(await asUser(carrier, `select public.my_rider_profile() p`)).toEqual([{ p: { firstName: 'Bayo', photo: '/assets/bayo.jpg' } }])
+
+      const { b, id } = await readyOrder('chat-buyer@example.com')
+      const riders = async () => (await asUser<{ r: Record<string, unknown> }>(b, `select public.my_order_riders() r`))[0].r
+      const chat = async (who: string) => (await asUser<{ c: { open: boolean; me: string; rider: unknown; messages: { sender: string; body: string }[] } }>(who, `select public.delivery_chat($1) c`, [id]))[0].c
+      const send = (who: string, body: string) => asUser(who, `select public.send_delivery_message($1, $2)`, [id, body])
+
+      await asUser(carrier, `select public.take_delivery($1)`, [id])
+      expect((await riders())[id]).toBeUndefined()
+      await expectFail(send(b, 'Hello'), 'invalid_input')
+      await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+      expect((await riders())[id]).toEqual({ firstName: 'Bayo', photo: '/assets/bayo.jpg' })
+
+      await expectFail(send(b, 'Call 0803 999 8888'), 'invalid_input')
+      await expectFail(send(b, '+2348039998888 please'), 'invalid_input')
+      await send(b, 'Blue gate, ring twice')
+      await send(carrier, 'At the gate now')
+      expect((await chat(b)).messages.map((m) => m.sender)).toEqual(['buyer', 'rider'])
+      expect(await chat(carrier)).toMatchObject({ open: true, me: 'rider' })
+      // Nobody else: not the shop, another rider, or another buyer, and not the table itself.
+      for (const who of [store, staff, rider]) await expectFail(asUser(who, `select public.delivery_chat($1)`, [id]), 'not_found')
+      await expectFail(send(store, 'Hi'), 'not_found')
+      await expect(asUser(b, `select * from public.delivery_messages`)).rejects.toThrow(/permission denied/)
+
+      // A rider who takes over starts afresh; the one who let go loses it.
+      await asUser(carrier, `select public.release_delivery($1)`, [id])
+      await expectFail(asUser(carrier, `select public.delivery_chat($1)`, [id]), 'not_found')
+      await asUser(otherRider, `select public.take_delivery($1)`, [id])
+      await asUser(otherRider, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+      expect((await chat(otherRider)).messages).toEqual([])
+
+      // Closed on delivery, with nothing left to read.
+      expect((await tryPin(otherRider, id, (await pinsOf(b))[id])).confirmed).toBe(true)
+      expect(await chat(b)).toMatchObject({ open: false, rider: null, messages: [] })
+      await expectFail(send(b, 'Thanks'), 'invalid_input')
+      expect((await riders())[id]).toBeUndefined()
+    })
+
+    it('pays riders per job from rates within the delivery price, weekly, into a held account', async () => {
+      const payee = await newUser('paid-rider@example.com', { role: 'delivery' })
+      // Rates: never more than the buyer pays, from either side.
+      await expectFail(asUser(payee, `select public.set_rider_pay('ikeja', 'epe', 10000)`), 'forbidden')
+      const [{ price }] = await admin<{ price: string }>(`select price_kobo price from public.delivery_prices where area_a = 'epe' and area_b = 'ikeja'`)
+      await expectFail(asUser(staff, `select public.set_rider_pay('ikeja', 'epe', $1)`, [Number(price) + 1]), 'invalid_input')
+      await asUser(staff, `select public.set_rider_pay('ikeja', 'epe', $1)`, [Number(price)])
+      await expectFail(asUser(staff, `select public.set_delivery_price('epe', 'ikeja', $1)`, [Number(price) - 10_000]), 'invalid_input')
+      await asUser(staff, `select public.set_rider_pay('ikeja', 'epe', $1)`, [Math.floor((Number(price) * 0.7) / 5000) * 5000])
+      await expectFail(asUser(staff, `select public.set_rider_size_extra('large', 10000000)`), 'invalid_input')
+      await asUser(staff, `select public.set_rider_attempt_pay(40000)`)
+      expect(await admin(`select count(*)::int n from public.rider_pay_rates r join public.delivery_prices d using (area_a, area_b) where r.pay_kobo > d.price_kobo`)).toEqual([{ n: 0 }])
+
+      // A delivery and a failed attempt earn, once each, at today's rates.
+      const { b, id } = await readyOrder('paid-buyer@example.com')
+      await asUser(payee, `select public.take_delivery($1)`, [id])
+      await asUser(payee, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+      await asUser(payee, `select public.mark_arrived($1)`, [id])
+      await admin(`update public.orders set arrived_at = now() - interval '11 minutes' where id = $1`, [id])
+      await asUser(payee, `select public.fail_delivery_attempt($1, '/assets/door.jpg', 6.45, 3.43)`, [id])
+      await asUser(b, `select public.choose_redelivery($1, null, 'ikeja')`, [id])
+      const counter = await newUser('paid-counter@example.com', { role: 'delivery' })
+      await admin(`update public.profiles set pickup_point_id = 'ikeja' where id = $1`, [counter])
+      const [{ code }] = await admin<{ code: string }>(`select l.product_code code from public.orders o join public.listings l on l.id = o.listing_id where o.id = $1`, [id])
+      await asUser(counter, `select public.receive_at_counter($1, $2)`, [id, code])
+      await asUser(counter, `select public.counter_hand_over($1, $2)`, [id, (await pinsOf(b))[id]])
+      const earned = await asUser<{ kind: string; amount_kobo: number; from_area: string | null; to_area: string | null }>(payee, `select kind, amount_kobo, from_area, to_area from public.rider_earnings order by kind`)
+      const [{ expected }] = await admin<{ expected: number }>(`select private.rider_pay('ikeja', 'ikeja', 'large') expected`)
+      expect(earned).toEqual([
+        { kind: 'delivery', amount_kobo: expected, from_area: 'ikeja', to_area: 'ikeja' },
+        { kind: 'failed_attempt', amount_kobo: 40000, from_area: null, to_area: null },
+      ])
+      // Nobody else sees them, and riders can't write them.
+      expect(await asUser(rider, `select id from public.rider_earnings`)).toEqual([])
+      await expect(asUser(payee, `update public.rider_earnings set amount_kobo = 1`)).rejects.toThrow(/permission denied/)
+
+      // Only finished weeks, only into a confirmed account, held after a change.
+      const due = async () => (await asUser<{ d: { riderId: string; lines: unknown[] }[] }>(staff, `select public.rider_pay_due() d`))[0].d.filter((x) => x.riderId === payee)
+      expect(await due()).toEqual([])
+      await admin(`update public.rider_earnings set earned_at = earned_at - interval '7 days' where rider_id = $1`, [payee])
+      expect((await due())[0].lines).toHaveLength(2)
+      await expectFail(asUser(staff, `select public.mark_rider_paid($1, 'TRF-1')`, [payee]), 'invalid_input') // no account
+      expect(await admin(`select public.note_bank_lookup($1) r`, [counter])).toEqual([{ r: 'not_seller' }])
+      expect(await admin(`select public.note_bank_lookup($1) r`, [payee])).toEqual([{ r: 'ok' }])
+      await admin(`select public.save_payout_account($1, '044', 'Access Bank', '0690000032', 'BAYO RIDER')`, [payee])
+      expect(await asUser(payee, `select account_name from public.rider_payout_accounts`)).toEqual([{ account_name: 'BAYO RIDER' }])
+      expect(await asUser(rider, `select account_name from public.rider_payout_accounts`)).toEqual([])
+      await expectFail(asUser(payee, `select public.mark_rider_paid($1, 'TRF-1')`, [payee]), 'forbidden')
+      await expectFail(asUser(staff, `select public.mark_rider_paid($1, 'x')`, [payee]), 'invalid_input')
+      await asUser(staff, `select public.mark_rider_paid($1, 'TRF-1')`, [payee])
+      expect(await due()).toEqual([])
+      expect(await asUser(payee, `select reference, paid_to from public.rider_earnings`)).toEqual([
+        { reference: 'TRF-1', paid_to: 'Access Bank •••• 0032' },
+        { reference: 'TRF-1', paid_to: 'Access Bank •••• 0032' },
+      ])
+      expect(await asUser(payee, `select kind from public.notifications where kind = 'rider_paid'`)).toHaveLength(1)
+
+      await admin(`select public.save_payout_account($1, '058', 'GTBank', '0123456789', 'BAYO RIDER')`, [payee])
+      expect(await asUser(payee, `select kind from public.notifications where kind = 'rider_bank_changed'`)).toHaveLength(1)
+      await admin(`insert into public.rider_earnings (rider_id, kind, source_id, amount_kobo, earned_at) values ($1, 'failed_attempt', gen_random_uuid(), 40000, now() - interval '8 days')`, [payee])
+      await expectFail(asUser(staff, `select public.mark_rider_paid($1, 'TRF-2')`, [payee]), 'invalid_input') // on hold
+    })
+
+    it('records a missed buyer after the wait, rebooks once, then sends it back less delivery', async () => {
+      const carrier = await newUser('missed-rider@example.com', { role: 'delivery' })
+      const b = await newUser('missed-buyer@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const [{ id: listing }] = await asUser<{ id: string }>(store, `select public.create_product($1) id`, [{ title: 'Missed lamp', category: 'Home', priceKobo: 500_000, stock: 3 }])
+      await asUser(staff, `select public.approve_listing($1)`, [listing])
+      const order = async () => {
+        await add(b, listing)
+        const [id] = await checkout(b, details([listing]))
+        await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+        await asUser(store, `select public.dispatch_order($1)`, [id])
+        await asUser(carrier, `select public.take_delivery($1)`, [id])
+        await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+        return id
+      }
+      const fail = (id: string, lat = 6.45, lng = 3.43) => asUser(carrier, `select public.fail_delivery_attempt($1, '/assets/door.jpg', $2, $3)`, [id, lat, lng])
+      const arrive = (id: string) => asUser(carrier, `select public.mark_arrived($1)`, [id])
+      const waited = (id: string) => admin(`update public.orders set arrived_at = now() - interval '11 minutes' where id = $1`, [id])
+      const row = async (id: string) => (await admin<{ status: string; cancel_reason: string | null; failed_attempts: number; return_state: string | null; fulfilment: string; delivery_address: string | null; price_kobo: string }>(
+        `select status, cancel_reason, failed_attempts, return_state, fulfilment, delivery_address, price_kobo from public.orders where id = $1`, [id]))[0]
+      const total = async () => Object.values(await balance(b)).reduce((n, v) => n + Number(v), 0)
+      const choose = (id: string, start: string | null, point: string | null) => asUser(b, `select public.choose_redelivery($1, $2, $3)`, [id, start, point])
+
+      const id = await order()
+      await expectFail(fail(id), 'invalid_input') // not arrived
+      await arrive(id)
+      await expectFail(fail(id), 'invalid_input') // not waited
+      await waited(id)
+      await expectFail(fail(id, 6.47), 'invalid_input') // not there
+      await expectFail(asUser(store, `select public.fail_delivery_attempt($1, '/assets/door.jpg', 6.45, 3.43)`, [id]), 'forbidden')
+      await fail(id)
+      expect(await row(id)).toMatchObject({ status: 'dispatched', failed_attempts: 1 })
+      expect(await admin(`select count(*)::int n from private.delivery_attempts where order_id = $1`, [id])).toEqual([{ n: 1 }])
+      expect(await asUser(b, `select kind from public.notifications where kind = 'order_delivery_failed'`)).toHaveLength(1)
+      await expectFail(arrive(id), 'invalid_input') // waiting for the buyer
+      expect((await jobs(carrier)).find((j) => j.id === id)).toMatchObject({ awaitingBuyer: true })
+
+      // A window: an odd hour, too soon or too late are refused.
+      await expectFail(choose(id, null, null), 'invalid_input')
+      const [{ ok, odd, late }] = await admin<{ ok: string; odd: string; late: string }>(`
+        select (date_trunc('day', now() at time zone 'Africa/Lagos') + interval '1 day 11 hours') at time zone 'Africa/Lagos' ok,
+               (date_trunc('day', now() at time zone 'Africa/Lagos') + interval '1 day 12 hours') at time zone 'Africa/Lagos' odd,
+               (date_trunc('day', now() at time zone 'Africa/Lagos') + interval '3 days 11 hours') at time zone 'Africa/Lagos' late`)
+      await expectFail(choose(id, odd, null), 'invalid_input')
+      await expectFail(choose(id, late, null), 'invalid_input')
+      await expectFail(asUser(store, `select public.choose_redelivery($1, $2, null)`, [id, ok]), 'not_found')
+      await choose(id, ok, null)
+      await expectFail(choose(id, ok, null), 'invalid_input')
+      expect(await asUser(carrier, `select kind from public.notifications where kind = 'rider_redelivery_chosen'`)).toHaveLength(1)
+
+      // Second miss: refunded the price, not delivery, and not the seller's cancellation.
+      const cancelled = async () => (await asUser<{ r: { merchantId: string; cancelled: number }[] }>(staff, `select public.merchant_cancel_rates() r`))[0].r.find((x) => x.merchantId === IKEJA)?.cancelled ?? 0
+      const [start, cancelledBefore] = [await total(), await cancelled()]
+      await arrive(id)
+      await waited(id)
+      await fail(id)
+      expect(await row(id)).toMatchObject({ status: 'cancelled', cancel_reason: 'not_delivered', failed_attempts: 2, return_state: 'returning' })
+      expect((await total()) - start).toBe(Number((await row(id)).price_kobo))
+      expect(await cancelled()).toBe(cancelledBefore)
+      await asUser(carrier, `select public.complete_return($1, '/assets/back.jpg')`, [id])
+
+      // No choice within 24 hours: the same. Or a pickup location instead.
+      const silent = await order()
+      const switched = await order()
+      for (const x of [silent, switched]) {
+        await arrive(x)
+        await waited(x)
+        await fail(x)
+      }
+      await choose(switched, null, 'ikeja')
+      expect(await row(switched)).toMatchObject({ fulfilment: 'pickup', delivery_address: null })
+      await admin(`update public.orders set last_failed_at = now() - interval '25 hours' where id = any($1)`, [[silent, switched]])
+      await admin(`select private.process_deadlines()`)
+      expect(await row(silent)).toMatchObject({ status: 'cancelled', cancel_reason: 'not_delivered' })
+      expect(await row(switched)).toMatchObject({ status: 'dispatched' })
+      await expectFail(tryPin(carrier, switched, (await pinsOf(b))[switched]), 'invalid_input')
+    })
+
+    it('closes pickup orders at the counter, and sends uncollected ones back less delivery', async () => {
+      const counter = await newUser('counter-ikeja@example.com', { role: 'delivery' })
+      await admin(`update public.profiles set pickup_point_id = 'ikeja' where id = $1`, [counter])
+      await expect(admin(`update public.profiles set pickup_point_id = 'ikeja' where id = $1`, [store])).rejects.toThrow(/profiles_counter_is_delivery/)
+      const carrier = await newUser('counter-rider@example.com', { role: 'delivery' })
+      const b = await newUser('counter-buyer@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const [{ id: listing }] = await asUser<{ id: string }>(store, `select public.create_product($1) id`, [{ title: 'Counter lamp', category: 'Home', priceKobo: 500_000, stock: 2 }])
+      await asUser(staff, `select public.approve_listing($1)`, [listing])
+      const [{ code }] = await admin<{ code: string }>(`select product_code code from public.listings where id = $1`, [listing])
+      const order = async () => {
+        await add(b, listing)
+        const [id] = await checkout(b, details([listing], { fulfilment: 'pickup', pickupPointId: 'ikeja', address: null, lat: null, lng: null }))
+        await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+        await asUser(store, `select public.dispatch_order($1)`, [id])
+        await asUser(carrier, `select public.take_delivery($1)`, [id])
+        await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+        return id
+      }
+      const kept = await order()
+      const left = await order()
+      const items = async () => (await asUser<{ i: { id: string; stage: string; buyerName: string | null }[] }>(counter, `select public.counter_items() i`))[0].i
+
+      // Only counter staff, and only at their own counter.
+      expect(await asUser(carrier, `select public.my_counter() c`)).toEqual([{ c: null }])
+      await expectFail(asUser(carrier, `select public.counter_items()`), 'forbidden')
+      await expectFail(asUser(counter, `select public.take_delivery($1)`, [kept]), 'forbidden')
+      await expectFail(tryPin(carrier, kept, (await pinsOf(b))[kept]), 'invalid_input')
+      expect((await items()).filter((i) => [kept, left].includes(i.id)).map((i) => [i.stage, i.buyerName])).toEqual([['incoming', null], ['incoming', null]])
+
+      await expectFail(asUser(counter, `select public.receive_at_counter($1, 'PRD-222222')`, [kept]), 'invalid_input')
+      await asUser(counter, `select public.receive_at_counter($1, $2)`, [kept, code.toLowerCase().replace('-', ' ')])
+      await asUser(counter, `select public.receive_at_counter($1, $2)`, [left, code])
+      expect((await items()).find((i) => i.id === kept)).toMatchObject({ stage: 'shelf', buyerName: expect.any(String) })
+      expect(await asUser(b, `select kind from public.notifications where kind = 'order_ready_to_collect'`)).toHaveLength(2)
+      // The rider's job is done there.
+      expect((await jobs(carrier)).find((j) => j.id === kept)).toMatchObject({ dropOff: null })
+      expect(await admin(`select private.rider_jobs_held($1) n`, [carrier])).toEqual([{ n: 0 }])
+
+      // The buyer's PIN, at the counter.
+      const pin = (await pinsOf(b))[kept]
+      expect((await asUser<{ r: { confirmed: boolean } }>(counter, `select public.counter_hand_over($1, '000000') r`, [kept]))[0].r.confirmed).toBe(pin === '000000')
+      expect((await asUser<{ r: { confirmed: boolean } }>(counter, `select public.counter_hand_over($1, $2) r`, [kept, pin]))[0].r.confirmed).toBe(true)
+      expect(await admin(`select status from public.orders where id = $1`, [kept])).toEqual([{ status: 'delivered' }])
+
+      // A week: a reminder, once. Two: refunded the price but not delivery, and not the seller's cancellation.
+      await admin(`update public.orders set counter_at = now() - interval '8 days' where id = $1`, [left])
+      await admin(`select private.process_deadlines()`)
+      await admin(`select private.process_deadlines()`)
+      expect(await asUser(b, `select kind from public.notifications where kind = 'order_collect_reminder'`)).toHaveLength(1)
+      const total = async () => Object.values(await balance(b)).reduce((n, v) => n + Number(v), 0)
+      const cancelled = async () => (await asUser<{ r: { merchantId: string; cancelled: number }[] }>(staff, `select public.merchant_cancel_rates() r`))[0].r.find((x) => x.merchantId === IKEJA)?.cancelled ?? 0
+      const start = await total()
+      const cancelledBefore = await cancelled()
+      await admin(`update public.orders set counter_at = now() - interval '15 days' where id = $1`, [left])
+      await admin(`select private.process_deadlines()`)
+      const [row] = await admin<{ status: string; cancel_reason: string; return_state: string; rider_id: string | null; price_kobo: string; delivery_fee_kobo: string }>(
+        `select status, cancel_reason, return_state, rider_id, price_kobo, delivery_fee_kobo from public.orders where id = $1`, [left])
+      expect(row).toMatchObject({ status: 'cancelled', cancel_reason: 'not_collected', return_state: 'returning', rider_id: null })
+      expect(Number(row.delivery_fee_kobo)).toBeGreaterThan(0)
+      expect((await total()) - start).toBe(Number(row.price_kobo))
+      expect(await cancelled()).toBe(cancelledBefore)
+
+      // From the counter back to the seller: staff hand it over before it can be finished.
+      expect((await jobs(carrier)).find((j) => j.id === left)).toMatchObject({ mine: false })
+      await asUser(carrier, `select public.take_delivery($1)`, [left])
+      await expectFail(asUser(carrier, `select public.complete_return($1, '/assets/b.jpg')`, [left]), 'invalid_input')
+      expect((await items()).find((i) => i.id === left)).toMatchObject({ stage: 'send_back', buyerName: null })
+      await asUser(counter, `select public.release_to_rider($1)`, [left])
+      await asUser(carrier, `select public.complete_return($1, '/assets/b.jpg')`, [left])
+      expect((await items()).find((i) => i.id === left)).toBeUndefined()
     })
 
     describe('checks', () => {
@@ -2843,6 +3580,75 @@ describe('cart and checkout', () => {
         expect(await admin(`select kind from public.payouts where order_id = $1`, [id])).toEqual([])
         expect(await admin(`select failure_excused from public.orders where id = $1`, [id])).toEqual([{ failure_excused: true }])
         expect(await asUser(seller, `select status from public.order_claims where id = $1`, [c])).toEqual([{ status: 'upheld' }])
+      })
+
+      it('shows admins every active job by stage, flags stuck ones, and moves only uncollected ones', async () => {
+        type Board = { waitingHours: number; carryingHours: number; maxJobs: number; jobs: { kind: string; id: string; orderId: string; stage: string; stuck: boolean; rider: { id: string; name: string } | null }[] }
+        const board = async () => (await asUser<{ b: Board }>(staffUser, `select public.dispatch_board() b`))[0].b
+        const find = async (id: string) => (await board()).jobs.find((j) => j.id === id)
+        const assign = (kind: string, id: string, who: string) => asUser(staffUser, `select public.assign_job($1, $2, $3)`, [kind, id, who])
+        const takeBack = (kind: string, id: string) => asUser(staffUser, `select public.unassign_job($1, $2)`, [kind, id])
+        const told = async (who: string, kind: string) => (await asUser(who, `select 1 from public.notifications where kind = $1`, [kind])).length
+        const helper = await newUser('dispatch-rider@example.com', { role: 'delivery' })
+        const { b, id } = await readyOrder('dispatch1@example.com')
+
+        for (const who of [rider, seller]) {
+          await expectFail(asUser(who, `select public.dispatch_board()`), 'forbidden')
+          await expectFail(asUser(who, `select public.assign_job('delivery', $1, $2)`, [id, helper]), 'forbidden')
+          await expectFail(asUser(who, `select public.unassign_job('delivery', $1)`, [id]), 'forbidden')
+        }
+        expect(await board()).toMatchObject({ waitingHours: 3, carryingHours: 6, maxJobs: 5 })
+        expect(await find(id)).toMatchObject({ kind: 'delivery', orderId: id, stage: 'waiting', stuck: false, rider: null })
+        await admin(`update public.orders set dispatched_at = now() - interval '181 minutes' where id = $1`, [id])
+        expect((await find(id))?.stuck).toBe(true)
+
+        // Given to a rider, who hears about it. Only riders, and nobody else can take it now.
+        await expectFail(assign('delivery', id, seller), 'not_found')
+        await expectFail(assign('parcel', id, helper), 'invalid_input')
+        await assign('delivery', id, helper)
+        expect(await find(id)).toMatchObject({ stage: 'taken', stuck: false, rider: { id: helper, name: expect.any(String) } })
+        expect(await told(helper, 'rider_job_assigned')).toBe(1)
+        expect((await jobs(helper)).find((j) => j.id === id)?.mine).toBe(true)
+        await expectFail(assign('delivery', id, otherRider), 'invalid_input')
+        await expectFail(asUser(otherRider, `select public.take_delivery($1)`, [id]), 'invalid_input')
+
+        // Taken back before collection: in the pool again, recorded, and the rider told.
+        await takeBack('delivery', id)
+        expect(await find(id)).toMatchObject({ stage: 'waiting', rider: null })
+        expect(await admin(`select reason, released_by from private.job_releases where order_id = $1`, [id])).toEqual([{ reason: 'taken_back', released_by: staffUser }])
+        expect(await told(helper, 'rider_job_taken_back')).toBe(1)
+        await expectFail(takeBack('delivery', id), 'invalid_input')
+
+        // Within the rider's limit.
+        await admin(`update public.app_settings set rider_max_jobs = 1`)
+        await assign('delivery', id, helper)
+        const { id: second } = await readyOrder('dispatch2@example.com')
+        expect((await expectFail(assign('delivery', second, helper), 'invalid_input')).detail).toContain('the most they can hold')
+        await admin(`update public.app_settings set rider_max_jobs = 5`)
+
+        // Collected: in the rider's hands, so it stays theirs. Stuck after 6 hours, gone once delivered.
+        await asUser(helper, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+        expect(await find(id)).toMatchObject({ stage: 'carrying', stuck: false })
+        await expectFail(takeBack('delivery', id), 'invalid_input')
+        await admin(`update public.orders set collected_at = now() - interval '361 minutes' where id = $1`, [id])
+        expect((await find(id))?.stuck).toBe(true)
+        expect((await tryPin(helper, id, (await pinsOf(b))[id])).confirmed).toBe(true)
+        expect(await find(id)).toBeUndefined()
+
+        // Buyers' returns too.
+        const { shopper, id: orderId } = await delivered('dispatch-return@example.com')
+        await open(shopper, orderId, 'change_of_mind')
+        const [{ c }] = await admin<{ c: string }>(`select id c from public.order_claims where order_id = $1`, [orderId])
+        expect(await find(c)).toMatchObject({ kind: 'return', orderId, stage: 'waiting', rider: null })
+        await assign('return', c, helper)
+        expect(await find(c)).toMatchObject({ stage: 'taken', rider: { id: helper } })
+        await takeBack('return', c)
+        expect(await find(c)).toMatchObject({ stage: 'waiting', rider: null })
+        await assign('return', c, helper)
+        await asUser(helper, `select public.pass_return_pickup($1, array['/assets/x.jpg'])`, [c])
+        expect(await find(c)).toMatchObject({ stage: 'returning', stuck: false })
+        await expectFail(takeBack('return', c), 'invalid_input')
+        expect(await admin(`select count(*)::int n from private.job_assignments where rider_id = $1`, [helper])).toEqual([{ n: 4 }])
       })
     })
 
@@ -3431,7 +4237,7 @@ describe('store notifications', () => {
     expect(texts).not.toMatch(/ticket|@|won/i)
   })
 
-  it('respects the store’s own switches, and is closed to riders', async () => {
+  it('respects the store’s own switches, and is open to riders', async () => {
     const [{ id }] = await asUser<{ id: string }>(store, `select public.create_listing($1) id`, [listingInput()])
     await asUser(store, `select public.set_push_preference('storeListings', false)`)
     await asUser(staff, `select public.approve_listing($1)`, [id])
@@ -3439,8 +4245,8 @@ describe('store notifications', () => {
     expect(await queued(store)).toEqual([])
     await asUser(store, `select public.set_push_preference('storeListings', true)`)
     const rider = await newUser('noticerider@example.com', { role: 'delivery' })
-    await expectFail(subscribe(rider, device('noticerider')), 'forbidden')
-    await expectFail(asUser(rider, `select public.set_push_preference('messages', false)`), 'forbidden')
+    await subscribe(rider, device('noticerider'))
+    await asUser(rider, `select public.set_push_preference('riderJobs', false)`)
   })
 
   it('tells the store once about a chat, and never quotes it on a lock screen', async () => {
@@ -3592,7 +4398,7 @@ describe('push notifications', () => {
     expect(await queued(quiet)).toEqual([])
   })
 
-  it('only signs up real push services, not for riders', async () => {
+  it('only signs up real push services, not for admins', async () => {
     for (const endpoint of ['https://evil.example/abc', 'http://fcm.googleapis.com/abc', 'https://fcm.googleapis.com.evil.example/abc', 'https://169.254.169.254/x', '']) {
       expect(pushSubscriptionValid({ ...device('x'), endpoint })).toBe(false)
       await expectFail(subscribe(other, { ...device('x'), endpoint }), 'invalid_input')
@@ -3602,7 +4408,6 @@ describe('push notifications', () => {
       await subscribe(other, { ...device('x'), endpoint })
       await asUser(other, `select public.delete_push_subscription($1)`, [endpoint])
     }
-    await expectFail(subscribe(await newUser('pushrider@example.com', { role: 'delivery' }), device('s')), 'forbidden')
     await expectFail(subscribe(staff, device('a')), 'forbidden')
     await expect(asUser(null, `select public.save_push_subscription('a', 'b', 'c')`)).rejects.toThrow(/permission denied/)
   })

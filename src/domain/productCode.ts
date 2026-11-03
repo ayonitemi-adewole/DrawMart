@@ -29,6 +29,9 @@ export function matchesProductCode(code: string, query: string): boolean {
   return q.length >= MIN_PARTIAL_LENGTH && codeCharacters(code).includes(q)
 }
 
+/** The whole ID, however it's typed: what counter staff check against the label. */
+export const sameProductCode = (code: string, typed: string) => codeCharacters(typed).length > 0 && codeCharacters(typed) === codeCharacters(code)
+
 /** Search for a list of products: by ID, or by any of the words shown for it. An empty search matches everything. */
 export function matchesProductSearch(query: string, code: string, ...text: string[]): boolean {
   const q = query.trim().toLowerCase()

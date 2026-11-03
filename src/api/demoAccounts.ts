@@ -26,5 +26,6 @@ export const DEMO_ACCOUNTS: readonly DemoAccount[] = [
   { email: 'yaba@drawmart.test', password: DEMO_PASSWORD, role: 'store', name: 'Yaba Partner Store', mockId: 'm-yaba' },
   { email: 'vi@drawmart.test', password: DEMO_PASSWORD, role: 'store', name: 'Victoria Island Partner Dealer', mockId: 'm-vi' },
   { email: 'rider@drawmart.test', password: DEMO_PASSWORD, role: 'delivery', name: 'Bayo Rider', mockId: 'u-rider' },
+  { email: 'counter@drawmart.test', password: DEMO_PASSWORD, role: 'delivery', name: 'Kemi Counter', mockId: 'u-counter', note: 'Pickup counter, DrawMart Ikeja', pickupPointId: 'ikeja' },
   { email: 'admin@drawmart.test', password: DEMO_PASSWORD, role: 'admin', name: 'DrawMart Admin', mockId: 'u-admin' },
 ]

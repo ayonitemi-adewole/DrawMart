@@ -6,12 +6,48 @@ import { AlertIcon, BellIcon, CalendarIcon, ChatIcon, CheckIcon, ClockIcon, Hear
 import { DrawRevealToggle, PushToggle, StorePushSettings } from '@/components/PushSettings'
 import { Card, EmptyState, ErrorState, PageTitle, Skeleton, cx } from '@/components/ui'
 import { handoverMethodFor } from '@/domain/listing'
+import { areaName } from '@/domain/riderAlerts'
+import { RiderAlertSettings } from './delivery/RiderAlertSettings'
 import { dateTime, ticketNo } from '@/lib/time'
 
 /** `store` says which app a seller works from: the store app, or /sell in the buyer app. */
 function describe(n: NotificationView, store: boolean): { icon: IconComponent; title: string; body: string; to: string } {
   const home = store ? '/store' : '/sell'
   switch (n.kind) {
+    case 'rider_approved':
+      return { icon: TruckIcon, title: 'You’re approved to ride', body: 'Add your photo and bank account, then take your first job.', to: '/delivery' }
+    case 'rider_job_assigned':
+      return { icon: TruckIcon, title: `A job for you: ${n.listingTitle}`, body: 'DrawMart gave you this job. Collect it within the time shown.', to: '/delivery?tab=mine' }
+    case 'rider_job_added':
+      return { icon: TruckIcon, title: `One more for the same buyer: ${n.listingTitle}`, body: 'It’s from the same seller and order. Collect it with the rest: the trip pays once.', to: '/delivery?tab=mine' }
+    case 'rider_job_taken_back':
+      return { icon: XIcon, title: `Taken back: ${n.listingTitle}`, body: 'DrawMart moved this job. You don’t need to collect it.', to: '/delivery?tab=mine' }
+    case 'rider_paid':
+      return { icon: NairaIcon, title: 'Pay sent', body: 'We’ve sent your pay to your bank account. See which jobs it covered.', to: '/delivery/earnings' }
+    case 'rider_bank_changed':
+      return { icon: LockIcon, title: 'Bank account changed', body: 'If this wasn’t you, contact DrawMart now. Pay is on hold for now.', to: '/delivery/earnings' }
+    case 'order_delivery_failed':
+      return { icon: AlertIcon, title: `We missed you: ${n.listingTitle}`, body: 'Your rider couldn’t reach you. Choose a new time or a pickup location within 24 hours.', to: '/tickets?view=orders' }
+    case 'store_order_undelivered':
+      return { icon: TruckIcon, title: `Not delivered: ${n.listingTitle}`, body: 'The rider couldn’t reach the buyer, so it’s coming back to you. Add it to your stock again once you have it.', to: `${home}?tab=orders` }
+    case 'rider_redelivery_chosen':
+      return { icon: ClockIcon, title: `Rebooked: ${n.listingTitle}`, body: 'The buyer you missed chose a new time or a pickup location.', to: '/delivery?tab=mine' }
+    case 'order_ready_to_collect':
+      return { icon: StoreIcon, title: `Ready to collect: ${n.listingTitle}`, body: 'It’s at the pickup location. Bring your PIN.', to: '/tickets?view=orders' }
+    case 'order_collect_reminder':
+      return { icon: ClockIcon, title: `Still waiting for you: ${n.listingTitle}`, body: 'Collect it within 7 days, or it goes back to the seller and you’re refunded, less delivery.', to: '/tickets?view=orders' }
+    case 'store_order_uncollected':
+      return { icon: TruckIcon, title: `Not collected: ${n.listingTitle}`, body: 'The buyer didn’t collect it from the pickup location, so a rider is bringing it back to you. Add it to your stock again once you have it.', to: `${home}?tab=orders` }
+    case 'rider_new_job':
+      return { icon: TruckIcon, title: `New job: ${n.listingTitle}`, body: `Collect it in ${areaName(n.area)}.`, to: '/delivery?tab=available' }
+    case 'rider_new_return':
+      return { icon: TruckIcon, title: `Return to collect: ${n.listingTitle}`, body: `From a buyer in ${areaName(n.area)}.`, to: '/delivery?tab=returns' }
+    case 'rider_collect_soon':
+      return { icon: ClockIcon, title: `Collect soon: ${n.listingTitle}`, body: 'If you don’t collect it in time, it goes back on the list for another rider.', to: '/delivery?tab=mine' }
+    case 'rider_job_released':
+      return { icon: XIcon, title: `Back on the list: ${n.listingTitle}`, body: 'You didn’t collect it in time, so another rider can take it.', to: '/delivery?tab=available' }
+    case 'rider_pin_unlocked':
+      return { icon: LockIcon, title: `Try the PIN again: ${n.listingTitle}`, body: 'The pause on this delivery’s PIN is over.', to: '/delivery?tab=mine' }
     case 'store_payout_sent':
       return { icon: NairaIcon, title: 'Payout sent', body: 'We’ve sent money to your bank account. See what it covered.', to: store ? '/store/payouts' : '/sell?tab=payouts' }
     case 'store_bank_changed':
@@ -99,7 +135,9 @@ function describe(n: NotificationView, store: boolean): { icon: IconComponent; t
 
 /** /notifications: updates on the draws a buyer is in. Opening it marks them read. */
 export function NotificationsPage() {
-  const store = useAccess().role === 'store'
+  const role = useAccess().role
+  const store = role === 'store'
+  const rider = role === 'delivery'
   const q = useNotifications()
   const markRead = useMarkNotificationsRead()
   const unread = q.data?.some((n) => !n.read) ?? false
@@ -113,10 +151,12 @@ export function NotificationsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <PageTitle eyebrow="Notifications" sub={store ? 'New orders, listing reviews, draws, pickups and messages.' : 'Updates on the draws you’re in and the items you’ve saved.'}>
+      <PageTitle eyebrow="Notifications" sub={rider ? 'New jobs and returns, and reminders about the jobs you’ve taken.' : store ? 'New orders, listing reviews, draws, pickups and messages.' : 'Updates on the draws you’re in and the items you’ve saved.'}>
         What’s new
       </PageTitle>
-      {store ? (
+      {rider ? (
+        <RiderAlertSettings />
+      ) : store ? (
         <StorePushSettings />
       ) : (
         <>
@@ -129,7 +169,7 @@ export function NotificationsPage() {
       ) : q.isError ? (
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
       ) : q.data.length === 0 ? (
-        <EmptyState icon={BellIcon} title="Nothing yet" body={store ? 'We’ll let you know here when someone buys from you, and how your listings and draws are doing.' : 'We’ll let you know here when a draw you’re in sells out, and when its winner is announced.'} />
+        <EmptyState icon={BellIcon} title="Nothing yet" body={rider ? 'We’ll let you know here when there’s a job for you, and before one you’ve taken goes back on the list.' : store ? 'We’ll let you know here when someone buys from you, and how your listings and draws are doing.' : 'We’ll let you know here when a draw you’re in sells out, and when its winner is announced.'} />
       ) : (
         <Card className="divide-y divide-line overflow-hidden">
           {q.data.map((n) => {

@@ -1,6 +1,6 @@
 /** Push notifications. Mirrored in public.save_push_subscription and public.set_push_preference. */
 
-export type PushCategory = 'wins' | 'drawResults' | 'orders' | 'messages' | 'savedItems' | 'storeOrders' | 'storeListings' | 'storeDraws' | 'storePickups' | 'storePayouts'
+export type PushCategory = 'wins' | 'drawResults' | 'orders' | 'messages' | 'savedItems' | 'storeOrders' | 'storeListings' | 'storeDraws' | 'storePickups' | 'storePayouts' | 'riderNewJobs' | 'riderReturns' | 'riderJobs'
 /** The result pop-up when the app opens. Kept with the others, though it isn't a push. */
 export type NotificationPreference = PushCategory | 'drawReveal'
 export type PushPreferences = Record<NotificationPreference, boolean>
@@ -27,7 +27,14 @@ export const STORE_PUSH_CATEGORIES: typeof PUSH_CATEGORIES = [
 /** Individual sellers only list regular products, so draws and pickups don't apply. Added to a buyer's own. */
 export const SELLER_PUSH_CATEGORIES: typeof PUSH_CATEGORIES = STORE_PUSH_CATEGORIES.filter((c) => c.value === 'storeOrders' || c.value === 'storeListings' || c.value === 'storePayouts')
 
-export const DEFAULT_PUSH_PREFERENCES: PushPreferences = { storeOrders: true, storeListings: true, storeDraws: true, storePickups: true, storePayouts: true, wins: true, drawResults: true, orders: true, messages: true, savedItems: true, drawReveal: true }
+/** What a rider can switch on and off. New jobs and returns also go from the app when off (riderAlerts.ts). */
+export const RIDER_PUSH_CATEGORIES: typeof PUSH_CATEGORIES = [
+  { value: 'riderNewJobs', label: 'New jobs', sub: 'In the areas you chose. Also turns these off in the app' },
+  { value: 'riderReturns', label: 'Returns', sub: 'An item to collect from a buyer. Also turns these off in the app' },
+  { value: 'riderJobs', label: 'Your jobs', sub: 'Before one goes back to the list, when DrawMart gives you one or takes one back, and when you can try a PIN again' },
+]
+
+export const DEFAULT_PUSH_PREFERENCES: PushPreferences = { riderNewJobs: true, riderReturns: true, riderJobs: true, storeOrders: true, storeListings: true, storeDraws: true, storePickups: true, storePayouts: true, wins: true, drawResults: true, orders: true, messages: true, savedItems: true, drawReveal: true }
 
 export interface PushSubscriptionKeys {
   endpoint: string

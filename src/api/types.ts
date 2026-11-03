@@ -9,14 +9,19 @@ import type { HandoverDetails } from '@/domain/listing'
 import type { PinResult } from '@/domain/delivery'
 import type { SavedAddress, SavedAddressInput } from '@/domain/addresses'
 import type { CheckoutDetails } from '@/domain/cart'
+import type { DeliveryWindow } from '@/domain/deliveryWindows'
+import type { IncidentOutcome, IncidentType } from '@/domain/incidents'
+import type { DeliveryRating, DeliveryRatingReason, RiderPerformance, RiderStats } from '@/domain/deliveryRatings'
 import type { DeliveryPricing } from '@/domain/deliveryFees'
 import type { ShopPickup } from '@/domain/shopPickup'
 import type { ShopProfileInput } from '@/domain/shopProfile'
 import type { ReviewInput } from '@/domain/reviews'
 import type { PricingStats } from '@/domain/drawPricing'
+import type { DispatchStage } from '@/domain/dispatch'
 import type { CodeCheck, Discount, DiscountInput, ListingSale } from '@/domain/discounts'
 import type { StoreRole } from '@/domain/team'
 import type { PayoutAccount, PayoutLine } from '@/domain/payouts'
+import type { RiderEarning, RiderPayRates } from '@/domain/riderPay'
 import type { NotificationPreference, PushPreferences, PushSubscriptionKeys } from '@/domain/push'
 import type { OrderError } from '@/domain/orders'
 import type { PurchaseError } from '@/domain/rules'
@@ -24,6 +29,7 @@ import type { BoostPackage, BoostWindow } from '@/domain/boosts'
 import type { DayMetrics, ListingMetricsInput, MetricRange } from '@/domain/metrics'
 import type { SellerApplicationInput, SellerApplicationStatus } from '@/domain/sellers'
 import type { StoreApplicationInput, StoreApplicationStatus } from '@/domain/storeApplications'
+import type { RiderApplicationInput, RiderApplicationStatus, VehicleType } from '@/domain/riderApplications'
 import type {
   CancelReason,
   Category,
@@ -293,6 +299,31 @@ export interface OrderView extends Order {
   merchantName: string
   /** What the buyer gives the rider on delivery. Only ever sent to the buyer, until it's delivered. */
   deliveryPin: string | null
+  /** Who's bringing it: only to the buyer, only while a rider has it on the way (deliveryChat.ts). */
+  rider?: RiderCard | null
+  /** The buyer's own rating of the delivery (deliveryRatings.ts). Only the buyer gets it. */
+  deliveryRating?: DeliveryRating | null
+}
+
+/** All a buyer learns about their rider. Never a phone number. */
+export interface RiderCard {
+  firstName: string
+  photo: string | null
+}
+
+export interface DeliveryChatMessage {
+  id: string
+  sender: 'buyer' | 'rider'
+  body: string
+  createdAt: string
+}
+
+/** A chat between a buyer and the rider carrying their order, open until it arrives. */
+export interface DeliveryChatView {
+  open: boolean
+  me: 'buyer' | 'rider'
+  rider: RiderCard | null
+  messages: DeliveryChatMessage[]
 }
 
 /** An order as a delivery account sees it. */
@@ -315,12 +346,201 @@ export interface DeliveryJob {
   deliveredAt: string | null
   /** This rider has taken it. The rest are in the pool for anyone to take. */
   mine: boolean
+  /** Where it's collected, so jobs from one place can go on one trip (trips.ts): 'shop:<id>', 'point:<id>' or 'drawmart'. */
+  collectKey: string
+  /** Orders sharing one delivery fee travel together and pay once (feeGroups.ts). payKobo is for the whole trip. */
+  feeGroup: string
+  /** Areas only, never an address (jobPool.ts). Null where it isn't known, e.g. DrawMart's escrow. */
+  fromArea: string | null
+  toArea: string | null
+  size: PackageSize
+  /** What it pays at today's rates, as the earning will be worked out. */
+  payKobo: Kobo
+  postedAt: string | null
+  /** A new rider can't take this yet (riderApplications.ts newRiderLimitError). */
+  locked: boolean
+  /** A pickup order counter staff have taken in: the rider's job is done. */
+  atCounterAt: string | null
+  /** An uncollected item going back to the seller, still at the counter until staff hand it over. */
+  waitingAtCounter: boolean
+  /** The rider said they're at the door: the wait before a failed attempt (deliveryAttempts.ts). */
+  arrivedAt: string | null
+  failedAttempts: number
+  /** Failed once: the rider keeps it while the buyer picks a new time or a pickup location. */
+  awaitingBuyer: boolean
+  /** The new window's start, once the buyer has picked one. */
+  redeliverAt: string | null
+  /** The buyer's delivery window. It can't be taken before 7am that day (deliveryWindows.ts canTakeYet). */
+  windowStart: string | null
+  windowEnd: string | null
+  /** Taken but not yet collected: back to the pool at this time (riderLimits.ts). */
+  collectBy: string | null
   /** The address and number only reach the rider on the way there, or taking a refused item back. */
   collectFrom: { name: string; area: string; address?: string; location?: GeoPoint; contactPhone?: string }
   pickupPoint: PickupPoint | null
   /** Only for the rider carrying it, once it's passed the check. Never in the pool, and gone once delivered. */
   dropOff: { buyerName: string; address: string; location: GeoPoint | null; contactPhone: string } | null
   pinLockedUntil: string | null
+}
+
+/** A rider with pay due from finished weeks, for admins (riderPay.ts). */
+export interface RiderPayDue {
+  riderId: string
+  riderName: string
+  account: PayoutAccount | null
+  lines: RiderEarning[]
+}
+
+/** An order as counter staff see it (counter.ts). The buyer's name only once it's on the shelf. */
+export interface CounterItem {
+  id: string
+  productCode: string
+  listingTitle: string
+  listingImage: string | null
+  category: Category
+  quantity: number
+  /** On its way with a rider, waiting for its buyer, or going back to the seller. */
+  stage: 'incoming' | 'shelf' | 'send_back'
+  atCounterAt: string | null
+  buyerName: string | null
+  /** Won items stay until they're collected. */
+  isPrize: boolean
+  /** Send back: a rider has taken the job. */
+  riderAssigned: boolean
+  pinLockedUntil: string | null
+}
+
+/** Someone's request to ride. Only the applicant and admins ever see it. */
+export interface RiderApplicationView {
+  id: string
+  status: RiderApplicationStatus
+  fullName: string
+  nin: string
+  phone: string
+  address: string
+  area: string
+  vehicle: VehicleType
+  plate: string | null
+  guarantorName: string
+  guarantorPhone: string
+  guarantorRelationship: string
+  /** Short-lived signed URLs on Supabase. */
+  idPhotoUrl: string | null
+  selfieUrl: string | null
+  reviewNote: string | null
+  createdAt: string
+  updatedAt: string
+  reviewedAt: string | null
+}
+
+/** A group of riders, e.g. a partner company's. Admins only. */
+export interface RiderFleet {
+  id: string
+  name: string
+  contactPhone: string
+  /** Its riders skip the new-rider limits. */
+  trusted: boolean
+}
+
+export interface AdminRider {
+  id: string
+  name: string
+  photo: string | null
+  fleetId: string | null
+  trusted: boolean
+  completed: number
+  holding: number
+  joinedAt: string
+}
+
+/** One active job on the admin dispatch board (dispatch.ts). Areas only, never an address. */
+export interface DispatchJob {
+  /** An order going to a buyer, a pickup location, or back to its seller; or a buyer's return. */
+  kind: DispatchJobKind
+  /** The order's id for a delivery, the claim's for a return. */
+  id: string
+  orderId: string
+  stage: DispatchStage
+  /** When it reached this stage. */
+  since: string | null
+  stuck: boolean
+  productCode: string
+  listingTitle: string
+  listingImage: string | null
+  shopName: string
+  fromArea: string | null
+  toArea: string | null
+  isPrize: boolean
+  fulfilment: Fulfilment
+  pickupPointName: string | null
+  failedAttempts: number
+  /** Failed once: waiting for the buyer to choose a new time or a pickup location. */
+  awaitingBuyer: boolean
+  redeliverAt: string | null
+  /** The buyer's delivery window, if they chose one. */
+  windowStart: string | null
+  windowEnd: string | null
+  /** Who has it, with a number admins can call. */
+  rider: { id: string; name: string; phone: string | null } | null
+}
+
+export type DispatchJobKind = 'delivery' | 'return'
+
+/** An incident a rider reported, still open, for admins (incidents.ts). */
+export interface OpenIncident {
+  id: string
+  kind: DispatchJobKind
+  orderId: string
+  type: IncidentType
+  createdAt: string
+  note: string | null
+  photo: string | null
+  location: GeoPoint | null
+  productCode: string
+  listingTitle: string
+  isPrize: boolean
+  orderStatus: OrderStatus
+  collected: boolean
+  rider: { id: string; name: string; phone: string | null } | null
+}
+
+/** Where the rider bringing an order was, a moment ago (riderLocation.ts). */
+export interface RiderLocation {
+  location: GeoPoint
+  updatedAt: string
+}
+
+/** A rider's own open report on a job. */
+export interface MyIncident {
+  id: string
+  type: IncidentType
+  createdAt: string
+}
+
+/** A rider's last STATS_DAYS, for admins (deliveryRatings.ts). Ratings never say who gave them. */
+export interface RiderPerformanceRow extends RiderPerformance {
+  name: string
+  rider: { id: string; name: string; phone: string | null }
+  /** The latest thumbs down, to look into. */
+  recentDowns: { orderId: string; productCode: string; ratedAt: string; reasons: DeliveryRatingReason[] }[]
+}
+
+export interface DispatchBoard {
+  /** app_settings: when a job counts as stuck (dispatch.ts). */
+  waitingHours: number
+  carryingHours: number
+  /** The most jobs a rider can hold. */
+  maxJobs: number
+  /** Stuck first, then the longest waiting. */
+  jobs: DispatchJob[]
+}
+
+/** A rider's own standing: what's still locked for a new rider. */
+export interface RiderLevel {
+  completed: number
+  trusted: boolean
+  jobsToUnlock: number
+  maxKobo: Kobo
 }
 
 /** A business's request for a store. Only the applicant and admins ever see it. */
@@ -486,6 +706,8 @@ export interface NotificationView {
   /** When a sold-out draw's winner is announced. */
   drawAt: string | null
   winningNumber: number | null
+  /** A rider's alert: the delivery area it's collected in. Never an address. */
+  area: string | null
   createdAt: string
   read: boolean
   /** A win the buyer has been greeted with. Separate from read: opening the bell isn't the pop-up. */
@@ -592,6 +814,17 @@ export interface ReturnJob {
   kind: ClaimKind
   status: ClaimStatus
   mine: boolean
+  /** Areas only, never an address (jobPool.ts). Null where it isn't known, e.g. DrawMart's escrow. */
+  fromArea: string | null
+  toArea: string | null
+  size: PackageSize
+  /** What it pays at today's rates, as the earning will be worked out. */
+  payKobo: Kobo
+  postedAt: string | null
+  /** A new rider can't take this yet (riderApplications.ts newRiderLimitError). */
+  locked: boolean
+  /** Taken but not yet collected from the buyer: back to the pool at this time (riderLimits.ts). */
+  collectBy: string | null
   productCode: string
   listingTitle: string
   listingImage: string | null
@@ -627,6 +860,8 @@ export interface CheckoutInput extends CheckoutDetails {
   expectedTotalKobo?: Kobo
   /** A store's discount code (discounts.ts). */
   code?: string
+  /** A delivery window (deliveryWindows.ts). None: as soon as it's ready. Delivery only. */
+  window?: DeliveryWindow | null
 }
 
 export interface ListingFilter {
@@ -665,6 +900,8 @@ export interface DemoAccount {
   mockId: string
   /** Shown under the name, e.g. "ID-verified seller". */
   note?: string
+  /** Counter staff: the pickup location they work at. */
+  pickupPointId?: string
 }
 
 export interface AuthAdapter {
@@ -790,6 +1027,10 @@ export interface DrawMartApi {
   // Individual sellers (buyer accounts that sell regular products)
   getMySellerApplication(): Promise<SellerApplicationView | null>
   /** A business applying for a store, from the account that will become the store's. */
+  /** Whether rider sign-up is open. Anyone can ask. */
+  getRiderSignupsOpen(): Promise<boolean>
+  getMyRiderApplication(): Promise<RiderApplicationView | null>
+  submitRiderApplication(input: RiderApplicationInput): Promise<RiderApplicationView>
   getMyStoreApplication(): Promise<StoreApplicationView | null>
   submitStoreApplication(input: StoreApplicationInput): Promise<StoreApplicationView>
   /** Uploads the ID photos and queues the application for an admin. Also used to resubmit after a rejection. */
@@ -841,6 +1082,7 @@ export interface DrawMartApi {
   /** Orders for this store's items, with delivery details. */
   listMerchantOrders(): Promise<OrderView[]>
   listPayouts(): Promise<PayoutLineView[]>
+  /** The seller's account, or a rider's own. */
   getPayoutAccount(): Promise<PayoutAccount | null>
   listBanks(): Promise<BankOption[]>
   /** Asks the bank whose account this is. Saves nothing. */
@@ -868,6 +1110,8 @@ export interface DrawMartApi {
   liftSuspension(merchantId: string): Promise<void>
   /** A fault report or a return, within 48 hours of delivery. Only needs an address if it was collected from a pickup location. */
   openClaim(orderId: string, input: ClaimInput): Promise<void>
+  /** After a failed attempt: a new two-hour window, or a pickup location instead. */
+  chooseRedelivery(orderId: string, choice: { windowStart: string } | { pickupPointId: string }): Promise<void>
   /** A seller who thinks a failed check or refusal was wrong. */
   contestFailure(orderId: string, note: string): Promise<void>
   /** Fault reports and contests waiting for an admin. */
@@ -941,6 +1185,16 @@ export interface DrawMartApi {
   /** What delivery costs, for checkout and the admin page. Public, since it's only prices. */
   getDeliveryPricing(): Promise<DeliveryPricing>
   setDeliveryPrice(areaA: string, areaB: string, priceKobo: Kobo): Promise<void>
+  /** What riders are paid per trip, beside the delivery prices (riderPay.ts). */
+  getRiderPayRates(): Promise<RiderPayRates>
+  setRiderPay(areaA: string, areaB: string, payKobo: Kobo): Promise<void>
+  setRiderSizeExtra(size: PackageSize, extraKobo: Kobo): Promise<void>
+  setRiderAttemptPay(payKobo: Kobo): Promise<void>
+  /** The signed-in rider's earnings, newest first. */
+  listMyEarnings(): Promise<RiderEarning[]>
+  listRiderPayDue(): Promise<RiderPayDue[]>
+  /** Everything from finished weeks, sent by hand with this transfer reference. */
+  markRiderPaid(riderId: string, reference: string): Promise<void>
   setDeliverySizeExtra(size: PackageSize, extraKobo: Kobo): Promise<void>
   /** Where this seller's items leave from. */
   setShopDeliveryArea(area: string): Promise<void>
@@ -957,16 +1211,82 @@ export interface DrawMartApi {
   listPrizeOrders(): Promise<OrderView[]>
 
   // Delivery accounts
+  /** Areas this rider wants new jobs from. Empty means all of Lagos (riderAlerts.ts). */
+  getRiderAreas(): Promise<string[]>
+  setRiderAreas(areas: string[]): Promise<void>
   /** Orders ready to be taken, and this rider's own. */
   listDeliveryJobs(): Promise<DeliveryJob[]>
   takeDelivery(orderId: string): Promise<void>
+  /** Several on one trip: all or none, within the job limit (trips.ts). */
+  takeDeliveries(orderIds: string[]): Promise<void>
   /** Back in the pool. */
   releaseDelivery(orderId: string): Promise<void>
   /** The only way an order becomes delivered. A wrong PIN isn't an error: see the result. */
   confirmDelivery(orderId: string, pin: string): Promise<PinResult>
+  getRiderLevel(): Promise<RiderLevel>
+  /** The rider's own first name and photo, as buyers see them. */
+  getRiderProfile(): Promise<RiderCard>
+  /** A photo of the rider, from the camera. */
+  setRiderPhoto(photo: string): Promise<void>
+  /** For the buyer, or the rider carrying it. Empty once it's closed. */
+  getDeliveryChat(orderId: string): Promise<DeliveryChatView>
+  sendDeliveryMessage(orderId: string, body: string): Promise<void>
+  /** The rider is at the door: starts the wait. Returns when it started. */
+  markArrived(orderId: string): Promise<string>
+  /** The buyer couldn't be reached, with a photo and where the rider is. */
+  failDeliveryAttempt(orderId: string, photo: string, at: GeoPoint): Promise<void>
+  /** The pickup location this account works at, or null for a rider. */
+  getMyCounter(): Promise<PickupPoint | null>
+  listCounterItems(): Promise<CounterItem[]>
+  /** Counter staff take in a rider's item, checking its product ID. */
+  receiveAtCounter(orderId: string, productCode: string): Promise<void>
+  /** The buyer collects with their PIN. A wrong PIN isn't an error: see the result. */
+  counterHandOver(orderId: string, pin: string): Promise<PinResult>
+  /** An uncollected item leaves with the rider taking it back. */
+  releaseToRider(orderId: string): Promise<void>
   /** Applications waiting for an ID check, oldest first. */
   listSellerApplications(): Promise<SellerApplicationView[]>
   listStoreApplications(): Promise<StoreApplicationView[]>
+  /** Rider sign-up, for admins (riderApplications.ts). */
+  setRiderSignupsOpen(open: boolean): Promise<void>
+  listRiderApplications(): Promise<RiderApplicationView[]>
+  /** Turns the applicant's account into a delivery account. */
+  approveRiderApplication(applicationId: string): Promise<void>
+  rejectRiderApplication(applicationId: string, note: string): Promise<void>
+  listRiderFleets(): Promise<RiderFleet[]>
+  createRiderFleet(name: string, contactPhone: string): Promise<void>
+  setFleetTrusted(fleetId: string, trusted: boolean): Promise<void>
+  listRiders(): Promise<AdminRider[]>
+  setRiderFleet(riderId: string, fleetId: string | null): Promise<void>
+  setRiderTrusted(riderId: string, trusted: boolean): Promise<void>
+  /** Every active delivery and return, for admins (dispatch.ts). */
+  getDispatchBoard(): Promise<DispatchBoard>
+  /** The rider's choice to share their location on the last leg, kept for later trips (riderLocation.ts). */
+  getLocationSharing(): Promise<boolean>
+  setLocationSharing(on: boolean): Promise<void>
+  /** The phone's position, every 30 seconds on the last leg. False: not sharing now, so stop. */
+  shareLocation(at: GeoPoint): Promise<boolean>
+  /** For the buyer of this order, on the last leg, while it's recent. Null otherwise. */
+  getRiderLocation(orderId: string): Promise<RiderLocation | null>
+  /** One tap: the rider reports a problem on a job they have (incidents.ts). Pauses the job and tells admins. Returns the report's id. */
+  reportIncident(kind: DispatchJobKind, id: string, type: IncidentType, at: GeoPoint | null): Promise<string>
+  /** What can follow: a note, a photo (data URL or path) and where they are. */
+  addIncidentDetails(incidentId: string, details: { note?: string; photo?: string; at?: GeoPoint | null }): Promise<void>
+  /** The rider's open reports, by order or claim id. */
+  getMyOpenIncidents(): Promise<Record<string, MyIncident>>
+  /** Admins: open reports, oldest first. */
+  listOpenIncidents(): Promise<OpenIncident[]>
+  resolveIncident(incidentId: string, outcome: IncidentOutcome, note: string): Promise<void>
+  /** The buyer rates a delivery to their door: thumbs up, or down with optional reasons (deliveryRatings.ts). Changeable for a week. */
+  rateDelivery(orderId: string, good: boolean, reasons: DeliveryRatingReason[]): Promise<void>
+  /** A rider's own last 30 days: totals only. */
+  getMyRiderStats(): Promise<RiderStats>
+  /** Every rider's last 30 days, for admins. */
+  getRiderPerformance(): Promise<RiderPerformanceRow[]>
+  /** A job waiting in the pool, to this rider, within their limits. */
+  assignJob(kind: DispatchJobKind, id: string, riderId: string): Promise<void>
+  /** Back in the pool. Only before the rider has collected it. */
+  unassignJob(kind: DispatchJobKind, id: string): Promise<void>
   /** Creates the store and turns the applicant's account into its account. */
   approveStoreApplication(applicationId: string): Promise<void>
   rejectStoreApplication(applicationId: string, note: string): Promise<void>

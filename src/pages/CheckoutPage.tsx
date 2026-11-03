@@ -5,12 +5,14 @@ import { DeliveryPin } from '@/components/DeliveryPin'
 import { useCheckDiscountCode, useDeliveryPricing, useAddressActions, useAddresses, useCart, useCheckout, useListing, useMe, usePickupPoints, useWallet } from '@/api/hooks'
 import type { ListingView, OrderView } from '@/api/types'
 import { AddressPicker } from '@/components/AddressPicker'
-import { CheckCircleIcon, MapPinIcon, PhoneIcon, ShieldIcon, StoreIcon, TruckIcon } from '@/components/icons'
+import { CheckCircleIcon, ClockIcon, MapPinIcon, PhoneIcon, ShieldIcon, StoreIcon, TruckIcon } from '@/components/icons'
 import { useToast } from '@/components/toast'
 import { Button, Card, EmptyState, ErrorState, Field, Notice, PageTitle, ProductImage, Segmented, Skeleton, buttonClass, cx, errorMessage, inputCls } from '@/components/ui'
 import { MAX_ADDRESS_LABEL, MAX_SAVED_ADDRESSES, SAVED_ADDRESS_ERROR_TEXT, preferredAddress, suggestedPhone, type SavedAddress } from '@/domain/addresses'
 import { clampQuantity } from '@/domain/orders'
 import { checkoutDeliveryFees } from '@/domain/deliveryFees'
+import { windowText, windowTimes, type DeliveryWindow } from '@/domain/deliveryWindows'
+import { WindowPicker } from '@/components/WindowPicker'
 import { CHECKOUT_ERROR_TEXT, checkoutTotalKobo, isCar, isWonPrize, lineAmountKobo, validateCheckout } from '@/domain/cart'
 import { directionsUrl } from '@/domain/location'
 import { formatNaira } from '@/domain/money'
@@ -69,6 +71,8 @@ function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: L
   const [newLabel, setNewLabel] = useState(addresses.length ? '' : 'Home')
   const [fulfilment, setFulfilment] = useState<Fulfilment>('delivery')
   const [pickupPointId, setPickupPointId] = useState<string | null>(null)
+  // null: as soon as it's ready.
+  const [slot, setSlot] = useState<DeliveryWindow | null>(null)
   const [showErrors, setShowErrors] = useState(false)
   const hasCar = items.some(isCar)
   const chosen = addresses.find((a) => a.id === addressId) ?? null
@@ -77,6 +81,7 @@ function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: L
   const details = { fulfilment, delivery, pickupPointId }
   const problems = validateCheckout(details, hasCar)
   const savingNew = fulfilment === 'delivery' && !chosen && saveNew
+  const canChooseWindow = fulfilment === 'delivery' && !hasCar
   const labelMissing = savingNew && !newLabel.trim()
   // With a saved address, buyers land on the review, ready to change it.
   const [step, setStep] = useState<Step>(problems.length ? 'where' : 'review')
@@ -130,7 +135,7 @@ function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: L
     }
     if (short || !available || !feesKnown) return
     checkout.mutate(
-      { listingIds: items.map((l) => l.id), quantities, expectedTotalKobo: total, code: applied?.code, ...details },
+      { listingIds: items.map((l) => l.id), quantities, expectedTotalKobo: total, code: applied?.code, window: canChooseWindow ? slot : null, ...details },
       {
         onSuccess: (orders) => {
           setPlaced(orders)
@@ -260,6 +265,7 @@ function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: L
                     ) : null}
                   </div>
                 ) : null}
+                {canChooseWindow ? <WindowPicker value={slot} onChange={setSlot} /> : null}
               </Card>
               <Button type="submit" size="lg">
                 Continue to review
@@ -275,6 +281,11 @@ function CheckoutForm({ items, quantities, addresses, accountPhone }: { items: L
                   <span className="text-xs text-subtle">
                     {fulfilment === 'delivery' ? `Pinned on the map · rider calls ${delivery.contactPhone.trim()}` : `${point?.hours ?? ''} · we’ll call ${delivery.contactPhone.trim()} when it’s ready`}
                   </span>
+                  {canChooseWindow ? (
+                    <span className="flex items-center gap-1 text-xs font-bold">
+                      <ClockIcon size={12} /> {slot ? windowText(windowTimes(slot), Date.now()) : 'As soon as it’s ready'}
+                    </span>
+                  ) : null}
                 </div>
                 <Button type="button" variant="ghost" size="sm" className="min-h-11 shrink-0" disabled={checkout.isPending} onClick={() => setStep('where')}>
                   Change

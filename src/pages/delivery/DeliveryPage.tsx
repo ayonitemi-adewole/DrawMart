@@ -1,8 +1,8 @@
 import { Suspense, lazy, useState, type FormEvent } from 'react'
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router'
-import { useDeliveryActions, useDeliveryJobs, useReturnJobs } from '@/api/hooks'
+import { useDeliveryActions, useDeliveryJobs, useMyCounter, useReturnJobs } from '@/api/hooks'
 import type { DeliveryJob } from '@/api/types'
-import { AlertIcon, BackIcon, CheckCircleIcon, ChevronRightIcon, LockIcon, MapPinIcon, PhoneIcon, StoreIcon, TruckIcon, UserIcon } from '@/components/icons'
+import { AlertIcon, BackIcon, ChatIcon, CheckCircleIcon, ChevronRightIcon, LockIcon, MapPinIcon, PhoneIcon, StoreIcon, TruckIcon, UserIcon } from '@/components/icons'
 import { NoProductMatch, ProductId, ProductSearch } from '@/components/ProductId'
 import { Sheet } from '@/components/Sheet'
 import { useToast } from '@/components/toast'
@@ -11,9 +11,26 @@ import { DELIVERY_PIN_LENGTH, MAX_PIN_ATTEMPTS, PIN_LOCK_MINUTES, isDeliveryPin 
 import { COLLECTION_CHECKS, COLLECTION_PROBLEMS, COLLECTION_PROBLEM_TEXT, REFUSAL_REASONS, REFUSAL_TEXT, collectionFailError, photosError } from '@/domain/deliveryChecks'
 import type { CollectionProblem, RefusalReason } from '@/domain/types'
 import { RiderPhotos } from '@/components/RiderPhotos'
+import { CollectByLine, CollectByNotice } from './CollectBy'
+import { CounterPage } from './CounterPage'
+import { NotHome } from './NotHome'
+import { RiderPhoto } from './RiderPhoto'
+import { LockedText, NewRiderProgress } from './NewRider'
+import { JobFacts, PoolControls, WindowLine, usePoolView } from './PoolControls'
+import { DeliveryChatSheet } from '@/components/DeliveryChat'
+import { firstName } from '@/domain/deliveryChat'
 import { ReturnJobList } from './ReturnJobs'
+import { RouteStops, TripList } from './Trips'
+import { RiderStatsCard } from './RiderStats'
+import { WaitingForSignal } from '@/components/Offline'
+import { ReportProblem } from './ReportProblem'
+import { ShareLocationPrompt } from './ShareLocation'
+import { carryingToBuyer } from '@/domain/riderLocation'
 import { directionsUrl } from '@/domain/location'
 import { matchesProductSearch } from '@/domain/productCode'
+import { takeJobError } from '@/domain/riderLimits'
+import { mergeFeeGroups } from '@/domain/feeGroups'
+import { takeTooSoonError } from '@/domain/deliveryWindows'
 import { dateTime, timeOfDay } from '@/lib/time'
 
 const RouteMap = lazy(() => import('@/components/RouteMap'))
@@ -21,9 +38,21 @@ const RouteMap = lazy(() => import('@/components/RouteMap'))
 type Tab = 'mine' | 'available' | 'returns' | 'done'
 const TABS: Tab[] = ['mine', 'available', 'returns', 'done']
 
-const inTab = (j: DeliveryJob, t: Tab) => (t === 'done' ? j.status === 'delivered' : t === 'mine' ? j.mine && j.status !== 'delivered' : !j.mine)
+/** Done once delivered, or once a pickup order is with the counter. */
+const finished = (j: DeliveryJob) => j.status === 'delivered' || !!j.atCounterAt
+const inTab = (j: DeliveryJob, t: Tab) => (t === 'done' ? finished(j) : t === 'mine' ? j.mine && !finished(j) : !j.mine)
 
 const destination = (j: DeliveryJob) => (j.fulfilment === 'pickup' ? (j.pickupPoint?.name ?? 'Pickup location') : 'Buyer’s address')
+/** Where it goes from, and to. An uncollected item goes from the counter back to the seller. */
+const route = (j: DeliveryJob) => (j.returning ? `${j.pickupPoint?.name ?? 'Pickup location'} → ${j.collectFrom.name}` : `${j.collectFrom.name} → ${destination(j)}`)
+
+/** /delivery: counter staff get their counter; riders get the job pool. */
+export function DeliveryHome() {
+  const counter = useMyCounter()
+  if (counter.isPending) return <Skeleton className="h-96" />
+  if (counter.isError) return <ErrorState error={counter.error} onRetry={() => counter.refetch()} />
+  return counter.data ? <CounterPage point={counter.data} /> : <DeliveryPage />
+}
 
 /** /delivery: orders ready to go, the ones this rider has taken, and what they've finished. */
 export function DeliveryPage() {
@@ -33,14 +62,25 @@ export function DeliveryPage() {
   const [search, setSearch] = useState('')
   const jobs = q.data ?? []
   const mineCount = jobs.filter((j) => inTab(j, 'mine')).length
+  // Orders sharing one delivery fee count as one job.
+  const held = new Set(jobs.filter((j) => inTab(j, 'mine')).map((j) => j.feeGroup)).size + (returns.data ?? []).filter((r) => r.mine).length
+  // The server has the final say: admins can change the limit.
+  const full = takeJobError(held)
   const tab = TABS.find((t) => t === params.get('tab')) ?? (q.data && !mineCount ? 'available' : 'mine')
-  const shown = jobs.filter((j) => inTab(j, tab) && matchesProductSearch(search, j.productCode, j.listingTitle, j.collectFrom.name, destination(j)))
+  const pool = usePoolView()
+  const matching = jobs.filter((j) => inTab(j, tab) && matchesProductSearch(search, j.productCode, j.listingTitle, j.collectFrom.name, destination(j)))
+  // Only the pool is filtered and sorted: your own jobs are always all there.
+  const shown = tab === 'available' ? pool.view.apply(matching) : matching
+  // In the pool, orders sharing one delivery fee are one job: one card, one pay.
+  const cards = tab === 'available' ? mergeFeeGroups(shown) : shown.map((j) => ({ lead: j, jobs: [j] }))
 
   return (
     <div className="flex flex-col gap-6">
       <PageTitle eyebrow="Delivery" sub="Take an order, collect it, and get the buyer’s PIN when you hand it over. A delivery only counts once the PIN is entered.">
         Deliveries
       </PageTitle>
+      <RiderPhoto />
+      <NewRiderProgress />
       <Segmented<Tab>
         label="Show"
         value={tab}
@@ -48,12 +88,15 @@ export function DeliveryPage() {
         className="w-full sm:w-auto sm:self-start"
         options={[
           { value: 'mine', label: 'Yours', count: mineCount },
-          { value: 'available', label: 'To take', count: jobs.filter((j) => inTab(j, 'available')).length },
+          { value: 'available', label: 'To take', count: mergeFeeGroups(jobs.filter((j) => inTab(j, 'available'))).length },
           { value: 'returns', label: 'Returns', count: returns.data?.length ?? 0 },
           { value: 'done', label: 'Done' },
         ]}
       />
-      {tab === 'returns' ? <ReturnJobList /> : null}
+      {tab === 'done' ? <RiderStatsCard /> : null}
+      {tab === 'available' || tab === 'returns' ? <PoolControls pool={pool} /> : null}
+      {tab === 'returns' ? <ReturnJobList view={pool.view} /> : null}
+      {full && (tab === 'available' || tab === 'returns') ? <Notice tone="ticket">{full}</Notice> : null}
       {jobs.length && tab !== 'returns' ? <ProductSearch value={search} onChange={setSearch} /> : null}
       {tab === 'returns' ? null : q.isPending ? (
         <Skeleton className="h-60" />
@@ -61,6 +104,8 @@ export function DeliveryPage() {
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
       ) : shown.length === 0 && search.trim() ? (
         <NoProductMatch query={search} />
+      ) : shown.length === 0 && tab === 'available' && pool.view.area ? (
+        <EmptyState icon={TruckIcon} title="Nothing in this area right now" body="Jobs collected in or going to this area appear here. Try all areas." />
       ) : shown.length === 0 ? (
         <EmptyState
           icon={TruckIcon}
@@ -68,30 +113,46 @@ export function DeliveryPage() {
           body={tab === 'mine' ? 'Orders you take show up here, with the address and map.' : tab === 'available' ? 'Orders appear here once the seller has them ready.' : 'Deliveries you complete are listed here.'}
         />
       ) : (
-        <div className="grid gap-3 lg:grid-cols-2">
-          {shown.map((j) => (
-            <JobCard key={j.id} job={j} tab={tab} />
-          ))}
-        </div>
+        <>
+          {tab === 'available' ? <TripList groups={cards} held={held} /> : tab === 'mine' ? <RouteStops jobs={shown} /> : null}
+          <div className="grid gap-3 lg:grid-cols-2">
+            {cards.map((g) => (
+              <JobCard key={g.lead.id} job={g.lead} items={g.jobs} tab={tab} />
+            ))}
+          </div>
+        </>
       )}
     </div>
   )
 }
 
-function JobCard({ job: j, tab }: { job: DeliveryJob; tab: Tab }) {
+/** `items`: in the pool, every order that comes with this one on its delivery fee. */
+function JobCard({ job: j, items = [j], tab }: { job: DeliveryJob; items?: DeliveryJob[]; tab: Tab }) {
   const { take } = useDeliveryActions()
   const navigate = useNavigate()
   const toast = useToast()
+  // The buyer chose a later day: riders can take it from 7am that day.
+  const tooSoon = takeTooSoonError(j.windowStart, Date.now())
   const summary = (
     <div className="flex min-w-0 flex-1 gap-3">
       <ProductImage category={j.category} src={j.listingImage ?? undefined} alt="" size="sm" className="size-16 shrink-0" />
       <div className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
         <strong className="leading-tight">{j.listingTitle}{j.quantity > 1 ? ` × ${j.quantity}` : ''}</strong>
         <ProductId code={j.productCode} />
-        <span className="text-xs text-subtle">
-          {j.collectFrom.name} → {destination(j)}
-        </span>
-        {tab === 'done' && j.deliveredAt ? <span className="text-xs text-subtle">Delivered {dateTime(j.deliveredAt)}</span> : null}
+        {items.length > 1 ? (
+          <span className="flex flex-col gap-0.5 text-xs">
+            <span className="font-bold">+ {items.length - 1} more for the same buyer, on one trip:</span>
+            {items.slice(1).map((x) => (
+              <span key={x.id} className="text-muted">
+                {x.listingTitle}{x.quantity > 1 ? ` × ${x.quantity}` : ''} · {x.productCode}
+              </span>
+            ))}
+          </span>
+        ) : null}
+        <span className="text-xs text-subtle">{route(j)}</span>
+        {tab === 'mine' && j.collectBy ? <CollectByLine at={j.collectBy} /> : null}
+        {tab === 'available' || tab === 'mine' ? <JobFacts job={j} /> : null}
+        {tab === 'done' && j.atCounterAt ? <span className="text-xs text-subtle">Handed to the counter {dateTime(j.atCounterAt)}</span> : tab === 'done' && j.deliveredAt ? <span className="text-xs text-subtle">Delivered {dateTime(j.deliveredAt)}</span> : null}
       </div>
     </div>
   )
@@ -108,13 +169,13 @@ function JobCard({ job: j, tab }: { job: DeliveryJob; tab: Tab }) {
       {summary}
       {tab === 'available' ? (
         <>
-          <span className="text-xs text-subtle">The address and map appear once you take it.</span>
+          <span className="text-xs text-subtle">{j.locked ? <LockedText /> : tooSoon ? tooSoon.replace('This one is', 'The buyer wants it') : 'The address and map appear once you take it.'}</span>
           <Button
             loading={take.isPending && take.variables === j.id}
-            disabled={take.isPending}
+            disabled={take.isPending || j.locked || !!tooSoon}
             onClick={() => take.mutate(j.id, { onSuccess: () => navigate(`/delivery/${j.id}`), onError: (e) => toast(errorMessage(e), 'error') })}
           >
-            <TruckIcon size={16} /> Take this delivery
+            <TruckIcon size={16} /> {items.length > 1 ? `Take all ${items.length}` : 'Take this delivery'}
           </Button>
         </>
       ) : null}
@@ -134,8 +195,8 @@ export function DeliveryJobPage() {
   if (q.isPending) return <Skeleton className="h-96" />
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />
   const j = q.data.find((x) => x.id === id)
-  // Delivered, handed back or taken by someone else: its details are gone from here.
-  if (!j?.mine || j.status === 'delivered') return <Navigate to="/delivery" replace />
+  // Delivered, at the counter, handed back or taken by someone else: its details are gone from here.
+  if (!j?.mine || finished(j)) return <Navigate to="/delivery" replace />
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-5">
       {back}
@@ -158,8 +219,11 @@ function JobDetails({ job: j }: { job: DeliveryJob }) {
           <h1 className="font-display text-xl leading-tight font-extrabold">{j.listingTitle}{j.quantity > 1 ? ` × ${j.quantity}` : ''}</h1>
           <ProductId code={j.productCode} copy />
           <Badge tone="sky" className="w-fit">{pickup ? 'For a pickup location' : 'To the buyer'}</Badge>
+          {j.windowStart && j.windowEnd && !j.redeliverAt ? <WindowLine start={j.windowStart} end={j.windowEnd} /> : null}
         </div>
       </Card>
+
+      <ReportProblem kind="delivery" id={j.id} />
 
       <Card className="flex flex-col gap-3 p-4 text-sm">
         <span className="flex items-start gap-2">
@@ -202,19 +266,41 @@ function JobDetails({ job: j }: { job: DeliveryJob }) {
             <a href={`tel:${j.dropOff.contactPhone.replace(/\s/g, '')}`} className="flex min-h-11 w-fit items-center gap-2 font-bold">
               <PhoneIcon size={16} /> Call {j.dropOff.contactPhone}
             </a>
+            {j.fulfilment === 'delivery' ? <MessageBuyer orderId={j.id} name={firstName(j.dropOff.buyerName)} /> : null}
           </div>
         ) : null}
       </Card>
 
-      {j.collected ? (
+      {j.collected && pickup ? (
+        <Notice tone="sky" icon={StoreIcon} title={`Hand it in at ${j.pickupPoint?.name ?? 'the counter'}`}>
+          The counter staff check the product ID on the label ({j.productCode}) and take it in. That finishes this job, and the buyer collects it from them.
+        </Notice>
+      ) : j.collected ? (
         <>
+          {carryingToBuyer(j) ? <ShareLocationPrompt /> : null}
           <PinForm job={j} />
+          <NotHome job={j} />
           <RefuseAtDoor job={j} />
         </>
       ) : (
-        <CollectionCheck job={j} />
+        <>
+          {j.collectBy ? <CollectByNotice at={j.collectBy} /> : null}
+          <CollectionCheck job={j} />
+        </>
       )}
       <HandBack job={j} />
+    </>
+  )
+}
+
+function MessageBuyer({ orderId, name }: { orderId: string; name: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <Button variant="outline" className="w-fit" onClick={() => setOpen(true)}>
+        <ChatIcon size={16} /> Message {name}
+      </Button>
+      <DeliveryChatSheet orderId={orderId} title={`Message ${name}`} open={open} onClose={() => setOpen(false)} />
     </>
   )
 }
@@ -282,6 +368,10 @@ function PinForm({ job: j }: { job: DeliveryJob }) {
           <Button type="submit" size="lg" className="w-full" loading={confirm.isPending}>
             <CheckCircleIcon size={18} /> Confirm {j.fulfilment === 'pickup' ? 'collection' : 'delivery'}
           </Button>
+          {/* offlineJobs.ts: never shown as delivered until the server has checked the PIN. */}
+          <WaitingForSignal paused={confirm.isPaused}>
+            The PIN can only be checked online, so it isn’t {j.fulfilment === 'pickup' ? 'handed in' : 'delivered'} yet. Stay with the buyer and keep DrawMart open: it checks the PIN as soon as there’s signal.
+          </WaitingForSignal>
         </form>
       )}
     </Card>
@@ -505,6 +595,7 @@ function RefuseAtDoor({ job: j }: { job: DeliveryJob }) {
               Refuse it
             </Button>
           </div>
+          <WaitingForSignal paused={refuse.isPaused}>The buyer’s PIN can only be checked online. Stay with the buyer and keep DrawMart open: it sends as soon as there’s signal.</WaitingForSignal>
         </form>
       </Sheet>
     </>
@@ -539,7 +630,7 @@ function ReturnLeg({ job: j }: { job: DeliveryJob }) {
         <div className="flex min-w-0 flex-col gap-1">
           <h1 className="font-display text-xl leading-tight font-extrabold">{j.listingTitle}{j.quantity > 1 ? ` × ${j.quantity}` : ''}</h1>
           <ProductId code={j.productCode} copy />
-          <Badge tone="hot" className="w-fit">Refused: take it back</Badge>
+          <Badge tone="hot" className="w-fit">{j.fulfilment === 'pickup' ? 'Not collected: take it back' : j.failedAttempts ? 'Not delivered: take it back' : 'Refused: take it back'}</Badge>
         </div>
       </div>
       <span className="flex items-start gap-2 text-sm">
@@ -556,10 +647,28 @@ function ReturnLeg({ job: j }: { job: DeliveryJob }) {
           <PhoneIcon size={16} /> Call the seller on {j.collectFrom.contactPhone}
         </a>
       ) : null}
-      <RiderPhotos photos={photos} onChange={setPhotos} max={1} label="Take a photo of the handover" />
-      <Button size="lg" loading={finishReturn.isPending} onClick={onDone}>
-        <CheckCircleIcon size={18} /> It’s back with the seller
-      </Button>
+      {j.waitingAtCounter ? (
+        <>
+          <span className="flex items-start gap-2 text-sm">
+            <MapPinIcon size={16} className="mt-0.5 shrink-0 text-hot" />
+            <span><strong>Collect from</strong> {j.pickupPoint?.name}<span className="block text-muted">{j.pickupPoint?.address}</span></span>
+          </span>
+          {j.pickupPoint ? (
+            <a href={directionsUrl(j.pickupPoint.location)} target="_blank" rel="noreferrer" className="flex min-h-11 w-fit items-center gap-2 text-sm font-bold">
+              <MapPinIcon size={16} /> Get directions to the counter
+            </a>
+          ) : null}
+          <Notice tone="sky">The counter staff hand it to you. Once they have, you can finish here at the seller.</Notice>
+          <HandBack job={j} />
+        </>
+      ) : (
+        <>
+          <RiderPhotos photos={photos} onChange={setPhotos} max={1} label="Take a photo of the handover" />
+          <Button size="lg" loading={finishReturn.isPending} onClick={onDone}>
+            <CheckCircleIcon size={18} /> It’s back with the seller
+          </Button>
+        </>
+      )}
     </Card>
   )
 }
