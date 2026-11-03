@@ -12,6 +12,7 @@ import { NEW_RIDER_JOBS } from '@/domain/riderApplications'
 import { areaName } from '@/domain/riderAlerts'
 import { windowText } from '@/domain/deliveryWindows'
 import { dateTime } from '@/lib/time'
+import { IncidentList } from './Incidents'
 
 type Filter = 'stuck' | 'all' | DispatchStage
 
@@ -43,6 +44,7 @@ export function AdminDispatchPage() {
       >
         Dispatch
       </PageTitle>
+      <IncidentList />
       {q.isPending ? (
         <Skeleton className="h-60" />
       ) : q.isError ? (

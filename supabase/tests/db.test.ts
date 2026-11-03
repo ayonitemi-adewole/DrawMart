@@ -2651,6 +2651,69 @@ describe('cart and checkout', () => {
       expect(pay[0].amount_kobo).toBe(expected)
     }, 60_000)
 
+    it('lets a rider report an incident in one tap, pauses the job and spares the seller', async () => {
+      const carrier = await newUser('incident-rider@example.com', { role: 'delivery' })
+      const boss = await newUser('incident-admin@example.com', { role: 'admin' })
+      await admin(`insert into public.push_subscriptions (endpoint, user_id, p256dh, auth) values ('https://fcm.googleapis.com/x/boss', $1, 'k', 'a')`, [boss])
+      const b = await newUser('incident-buyer@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const ready = async (title: string) => {
+        const item = await newProduct(title)
+        await add(b, item)
+        const [id] = await checkout(b, details([item]))
+        await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+        await asUser(store, `select public.dispatch_order($1)`, [id])
+        await asUser(carrier, `select public.take_delivery($1)`, [id])
+        return id
+      }
+      const report = (who: string, id: string, type = 'damaged') => asUser<{ id: string }>(who, `select public.report_incident('delivery', $1, $2, 6.5, 3.4) id`, [id, type])
+
+      // Before collecting: a threat at the seller's. Its collection deadline stops.
+      const waiting = await ready('Incident lamp A')
+      await expectFail(report(await newUser('other-rider@example.com', { role: 'delivery' }), waiting), 'invalid_input')
+      const [{ id: first }] = await report(carrier, waiting, 'threat')
+      expect((await report(carrier, waiting, 'threat'))[0].id).toBe(first) // a second tap
+      const [push] = await admin<{ title: string; body: string; url: string }>(`select title, body, url from private.push_outbox where user_id = $1`, [boss])
+      expect(push).toEqual({ title: 'Rider incident: Threat', body: 'A rider reported a problem on a job. Open the dispatch board.', url: '/admin/dispatch' })
+      await admin(`update public.orders set rider_assigned_at = now() - interval '3 hours' where id = $1`, [waiting])
+      await admin(`select private.release_late_jobs()`)
+      expect(await admin(`select rider_id from public.orders where id = $1`, [waiting])).toEqual([{ rider_id: carrier }])
+      expect(Object.keys((await asUser<{ m: Record<string, unknown> }>(carrier, `select public.my_open_incidents() m`))[0].m)).toEqual([waiting])
+
+      // Details follow; only admins see the list.
+      await asUser(carrier, `select public.add_incident_details($1, 'Two men at the gate', '/assets/gate.jpg', null, null)`, [first])
+      await expectFail(asUser(carrier, `select public.open_incidents()`), 'forbidden')
+      const open = (await asUser<{ o: { id: string; note: string; photo: string; location: unknown; type: string }[] }>(boss, `select public.open_incidents() o`))[0].o
+      expect(open.find((x) => x.id === first)).toMatchObject({ type: 'threat', note: 'Two men at the gate', photo: '/assets/gate.jpg', location: { lat: 6.5, lng: 3.4 } })
+      await asUser(boss, `select public.resolve_incident($1, 'carry_on', 'Rider is safe')`, [first])
+      expect(await admin(`select paused_at from public.orders where id = $1`, [waiting])).toEqual([{ paused_at: null }])
+      // A fresh window to collect, so the deadline doesn't take it straight away.
+      await admin(`select private.release_late_jobs()`)
+      expect(await admin(`select rider_id from public.orders where id = $1`, [waiting])).toEqual([{ rider_id: carrier }])
+      await expectFail(asUser(carrier, `select public.add_incident_details($1, 'more', null, null, null)`, [first]), 'invalid_input')
+
+      // Damaged on the way, then refused at the door as damaged: the seller isn't charged.
+      const damaged = await ready('Incident lamp B')
+      await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [damaged])
+      await report(carrier, damaged)
+      const pins = await pinsOf(b)
+      await asUser(carrier, `select public.refuse_delivery($1, $2, 'refused_damaged', 'Crushed', '/assets/x.jpg')`, [damaged, pins[damaged]])
+      expect(await admin(`select 1 from public.payouts where order_id = $1 and kind = 'charge'`, [damaged])).toHaveLength(0)
+      expect(await admin(`select failure_excused from public.orders where id = $1`, [damaged])).toEqual([{ failure_excused: true }])
+
+      // Stolen after collecting: the buyer gets everything back and the seller is still paid.
+      const stolen = await ready('Incident lamp C')
+      await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [stolen])
+      const [{ id: theft }] = await report(carrier, stolen, 'theft')
+      await expectFail(asUser(carrier, `select public.resolve_incident($1, 'refund', '')`, [theft]), 'forbidden')
+      await asUser(boss, `select public.resolve_incident($1, 'refund', 'Stolen at Ojota')`, [theft])
+      expect(await admin(`select status, cancel_reason, paused_at from public.orders where id = $1`, [stolen])).toEqual([{ status: 'cancelled', cancel_reason: 'incident', paused_at: null }])
+      const refunds = await admin<{ memo: string }>(`select memo from public.ledger_entries where user_id = $1 and kind = 'order_refund' and listing_id = (select listing_id from public.orders where id = $2) order by memo`, [b, stolen])
+      expect(refunds.map((r) => r.memo)).toEqual(['Delivery refund · Incident lamp C', 'Refund · Incident lamp C'])
+      expect(await admin(`select status from public.payouts where order_id = $1 and kind = 'sale'`, [stolen])).toEqual([{ status: 'due' }])
+      await expectFail(asUser(boss, `select public.resolve_incident($1, 'carry_on', '')`, [theft]), 'not_found')
+    }, 60_000)
+
     it('lets a buyer rate the delivery, and shows the rider only totals', async () => {
       const carrier = await newUser('rated-rider@example.com', { role: 'delivery' })
       const boss = await newUser('rated-admin@example.com', { role: 'admin' })

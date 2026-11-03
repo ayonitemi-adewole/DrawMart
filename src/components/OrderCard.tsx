@@ -179,6 +179,11 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
         ) : null}
       </div>}
 
+      {audience === 'buyer' && o.status === 'dispatched' && o.pausedAt ? (
+        <Notice tone="ticket" icon={ClockIcon} title="There’s a delay on the way">
+          We’re looking into it and will keep you posted. If it can’t reach you, you’ll be refunded in full.
+        </Notice>
+      ) : null}
       {waiting && o.confirmBy ? (
         <Notice tone="ticket" icon={ClockIcon} title={audience === 'buyer' ? `The seller has until ${dateTime(o.confirmBy)} to confirm` : `Confirm by ${dateTime(o.confirmBy)}`}>
           {audience === 'buyer' ? 'They’ll send a photo of your item. If they don’t, you’re refunded automatically.' : 'Take a fresh photo of the item on your phone. If you don’t, the order cancels, the buyer is refunded and the product is paused. Your time doesn’t run from 10pm to 9am.'}

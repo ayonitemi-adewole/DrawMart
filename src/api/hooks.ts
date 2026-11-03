@@ -1,6 +1,7 @@
 import type { ClaimInput } from './types'
 import type { StoreRole } from '@/domain/team'
 import type { DeliveryRatingReason } from '@/domain/deliveryRatings'
+import type { IncidentOutcome, IncidentType } from '@/domain/incidents'
 import type { DiscountInput } from '@/domain/discounts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
@@ -60,6 +61,8 @@ export const keys = {
   adminRiders: ['admin-riders'] as const,
   dispatchBoard: ['dispatch-board'] as const,
   myRiderStats: ['my-rider-stats'] as const,
+  myOpenIncidents: ['my-open-incidents'] as const,
+  openIncidents: ['open-incidents'] as const,
   riderPerformance: ['rider-performance'] as const,
   riderLevel: ['rider-level'] as const,
   riderProfile: ['rider-profile'] as const,
@@ -472,6 +475,17 @@ export const useRiderApplications = () => useQuery({ queryKey: keys.riderApplica
 export const useRiderFleets = () => useQuery({ queryKey: keys.riderFleets, queryFn: () => api.listRiderFleets(), enabled: useIs('admin') })
 export const useAdminRiders = () => useQuery({ queryKey: keys.adminRiders, queryFn: () => api.listRiders(), enabled: useIs('admin') })
 /** Riders move jobs on their own, so it keeps itself fresh. */
+export const useMyOpenIncidents = () => useQuery({ queryKey: keys.myOpenIncidents, queryFn: () => api.getMyOpenIncidents(), enabled: useIs('delivery') })
+/** Someone may be in trouble, so admins see new reports without reloading. */
+export const useOpenIncidents = () => useQuery({ queryKey: keys.openIncidents, queryFn: () => api.listOpenIncidents(), enabled: useIs('admin'), refetchInterval: 30_000 })
+export function useIncidentActions() {
+  const invalidate = useInvalidateAll()
+  return {
+    report: useMutation({ mutationFn: ({ kind, id, type, at }: { kind: DispatchJobKind; id: string; type: IncidentType; at: GeoPoint | null }) => api.reportIncident(kind, id, type, at), onSettled: invalidate }),
+    addDetails: useMutation({ mutationFn: ({ id, details }: { id: string; details: { note?: string; photo?: string; at?: GeoPoint | null } }) => api.addIncidentDetails(id, details), onSettled: invalidate }),
+    resolve: useMutation({ mutationFn: ({ id, outcome, note }: { id: string; outcome: IncidentOutcome; note: string }) => api.resolveIncident(id, outcome, note), onSettled: invalidate }),
+  }
+}
 export const useMyRiderStats = () => useQuery({ queryKey: keys.myRiderStats, queryFn: () => api.getMyRiderStats(), enabled: useIs('delivery') })
 export const useRiderPerformance = () => useQuery({ queryKey: keys.riderPerformance, queryFn: () => api.getRiderPerformance(), enabled: useIs('admin') })
 export function useRateDelivery() {

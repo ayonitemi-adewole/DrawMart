@@ -10,6 +10,7 @@ import type { PinResult } from '@/domain/delivery'
 import type { SavedAddress, SavedAddressInput } from '@/domain/addresses'
 import type { CheckoutDetails } from '@/domain/cart'
 import type { DeliveryWindow } from '@/domain/deliveryWindows'
+import type { IncidentOutcome, IncidentType } from '@/domain/incidents'
 import type { DeliveryRating, DeliveryRatingReason, RiderPerformance, RiderStats } from '@/domain/deliveryRatings'
 import type { DeliveryPricing } from '@/domain/deliveryFees'
 import type { ShopPickup } from '@/domain/shopPickup'
@@ -484,6 +485,31 @@ export interface DispatchJob {
 }
 
 export type DispatchJobKind = 'delivery' | 'return'
+
+/** An incident a rider reported, still open, for admins (incidents.ts). */
+export interface OpenIncident {
+  id: string
+  kind: DispatchJobKind
+  orderId: string
+  type: IncidentType
+  createdAt: string
+  note: string | null
+  photo: string | null
+  location: GeoPoint | null
+  productCode: string
+  listingTitle: string
+  isPrize: boolean
+  orderStatus: OrderStatus
+  collected: boolean
+  rider: { id: string; name: string; phone: string | null } | null
+}
+
+/** A rider's own open report on a job. */
+export interface MyIncident {
+  id: string
+  type: IncidentType
+  createdAt: string
+}
 
 /** A rider's last STATS_DAYS, for admins (deliveryRatings.ts). Ratings never say who gave them. */
 export interface RiderPerformanceRow extends RiderPerformance {
@@ -1229,6 +1255,15 @@ export interface DrawMartApi {
   setRiderTrusted(riderId: string, trusted: boolean): Promise<void>
   /** Every active delivery and return, for admins (dispatch.ts). */
   getDispatchBoard(): Promise<DispatchBoard>
+  /** One tap: the rider reports a problem on a job they have (incidents.ts). Pauses the job and tells admins. Returns the report's id. */
+  reportIncident(kind: DispatchJobKind, id: string, type: IncidentType, at: GeoPoint | null): Promise<string>
+  /** What can follow: a note, a photo (data URL or path) and where they are. */
+  addIncidentDetails(incidentId: string, details: { note?: string; photo?: string; at?: GeoPoint | null }): Promise<void>
+  /** The rider's open reports, by order or claim id. */
+  getMyOpenIncidents(): Promise<Record<string, MyIncident>>
+  /** Admins: open reports, oldest first. */
+  listOpenIncidents(): Promise<OpenIncident[]>
+  resolveIncident(incidentId: string, outcome: IncidentOutcome, note: string): Promise<void>
   /** The buyer rates a delivery to their door: thumbs up, or down with optional reasons (deliveryRatings.ts). Changeable for a week. */
   rateDelivery(orderId: string, good: boolean, reasons: DeliveryRatingReason[]): Promise<void>
   /** A rider's own last 30 days: totals only. */

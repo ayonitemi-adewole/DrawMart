@@ -13,7 +13,7 @@ import { STORE_APPLICATION_ERROR_TEXT, validateStoreApplication } from '@/domain
 import type { RiderEarning } from '@/domain/riderPay'
 import type { DeliveryRating, RiderStats } from '@/domain/deliveryRatings'
 import type { PayoutAccount, PayoutKind, PayoutStatus } from '@/domain/payouts'
-import type { RiderPerformanceRow, ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews, StoreApplicationView, SupportMessage, SupportThreadSummary, QuickReply, BulkUploadResult, IncomingStoreInvite, StoreActivityEntry, StoreTeam } from './types'
+import type { MyIncident, OpenIncident, RiderPerformanceRow, ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews, StoreApplicationView, SupportMessage, SupportThreadSummary, QuickReply, BulkUploadResult, IncomingStoreInvite, StoreActivityEntry, StoreTeam } from './types'
 import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js'
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
@@ -293,6 +293,7 @@ interface OrderRow {
   confirmed_at: string | null
   confirm_photo: string | null
   refunded_at: string | null
+  paused_at?: string | null
   claim: { id: string; kind: ClaimKind; status: ClaimStatus; description: string; photos: string[] | null; return_fee_kobo: number; review_note: string | null } | null
   review: { id: string; rating: number; seller_comment: string; product_comment: string; reply: string | null; replied_at: string | null; hidden_at: string | null; created_at: string } | null
   ready_by: string | null
@@ -501,6 +502,7 @@ function toOrderView(o: OrderRow): OrderView {
     feeKobo: num(o.fee_kobo),
     quantity: o.quantity,
     refundedAt: o.refunded_at,
+    pausedAt: o.paused_at ?? null,
     claim: o.claim ? { id: o.claim.id, kind: o.claim.kind, status: o.claim.status, description: o.claim.description, photos: o.claim.photos ?? [], returnFeeKobo: num(o.claim.return_fee_kobo), reviewNote: o.claim.review_note } : null,
     confirmBy: o.confirm_by,
     confirmedAt: o.confirmed_at,
@@ -1545,6 +1547,14 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     setRiderFleet: (riderId, fleetId) => rpc('set_rider_fleet', { p_rider: riderId, p_fleet: fleetId }),
     setRiderTrusted: (riderId, trusted) => rpc('set_rider_trusted', { p_rider: riderId, p_trusted: trusted }),
     getDispatchBoard: () => rpc<DispatchBoard>('dispatch_board'),
+    reportIncident: (kind, id, type, at) => rpc<string>('report_incident', { p_kind: kind, p_id: id, p_type: type, p_lat: at?.lat ?? null, p_lng: at?.lng ?? null }),
+    addIncidentDetails: async (incidentId, d) => {
+      const photo = d.photo ? (await uploadPhotos(`riders/${await requireId()}`, [d.photo]))[0] : null
+      await rpc('add_incident_details', { p_id: incidentId, p_note: d.note ?? null, p_photo: photo, p_lat: d.at?.lat ?? null, p_lng: d.at?.lng ?? null })
+    },
+    getMyOpenIncidents: () => rpc<Record<string, MyIncident>>('my_open_incidents'),
+    listOpenIncidents: () => rpc<OpenIncident[]>('open_incidents'),
+    resolveIncident: (incidentId, outcome, note) => rpc('resolve_incident', { p_id: incidentId, p_outcome: outcome, p_note: note }),
     rateDelivery: (orderId, good, reasons) => rpc('rate_delivery', { p_order_id: orderId, p_good: good, p_reasons: reasons }),
     getMyRiderStats: () => rpc<RiderStats>('my_rider_stats'),
     getRiderPerformance: () => rpc<RiderPerformanceRow[]>('rider_performance'),

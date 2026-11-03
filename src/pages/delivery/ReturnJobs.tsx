@@ -12,6 +12,7 @@ import { directionsUrl } from '@/domain/location'
 import { CollectByLine, CollectByNotice } from './CollectBy'
 import { JobFacts, type PoolView } from './PoolControls'
 import { LockedText } from './NewRider'
+import { ReportProblem } from './ReportProblem'
 
 /** The Returns tab: items going from a buyer back to a seller. */
 export function ReturnJobList({ view }: { view: PoolView }) {
@@ -76,6 +77,7 @@ export function ReturnJobPage() {
           <Badge tone="hot" className="w-fit">{j.kind === 'fault' ? 'Reported faulty' : 'Changed their mind'}</Badge>
         </div>
       </Card>
+      <ReportProblem kind="return" id={j.id} />
       {j.status === 'returning' ? <BackToSeller job={j} /> : <CollectFromBuyer job={j} />}
     </div>
   )

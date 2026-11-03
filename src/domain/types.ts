@@ -223,7 +223,7 @@ export interface OrderClaim {
 /** Why a seller cancelled an order (orderCancel.ts). */
 export type RefusalReason = 'refused_wrong' | 'refused_damaged'
 export type CollectionProblem = 'wrong_item' | 'wrong_quantity' | 'damaged' | 'wont_power_on' | 'no_item'
-export type CancelReason = 'out_of_stock' | 'damaged' | 'cant_send' | 'other' | 'not_confirmed' | 'not_sent' | 'failed_check' | 'not_collected' | 'not_delivered' | RefusalReason
+export type CancelReason = 'out_of_stock' | 'damaged' | 'cant_send' | 'other' | 'not_confirmed' | 'not_sent' | 'failed_check' | 'not_collected' | 'not_delivered' | 'incident' | RefusalReason
 
 /** Where the buyer wants a fixed-price item sent. Seen only by the buyer, the store and admins. */
 export interface Delivery {
@@ -289,6 +289,8 @@ export interface Order {
   redeliveryChoice: 'redeliver' | 'pickup' | null
   /** The start of the new two-hour window. */
   redeliverAt: ISODate | null
+  /** A rider reported an incident and DrawMart is looking into it (incidents.ts). */
+  pausedAt?: ISODate | null
   /** The delivery window the buyer chose at checkout (deliveryWindows.ts). Null: as soon as it's ready. */
   windowStart?: ISODate | null
   windowEnd?: ISODate | null

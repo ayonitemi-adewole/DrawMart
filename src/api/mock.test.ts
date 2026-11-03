@@ -1545,6 +1545,60 @@ describe('mock api', () => {
     })
   })
 
+  describe('incident reports', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('pauses the job in one tap, and an admin can refund the buyer while the seller is still paid', async () => {
+      const c = { t: Date.parse('2026-11-03T10:00:00+01:00') }
+      const api = make(() => c.t)
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Incident lamp', description: '', category: 'Home', priceKobo: k(10_000), stock: 5 })
+      await as(api, 'admin')
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const [order] = await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await as(api, 'store')
+      await api.sellerConfirmOrder(order.id, '/assets/c.jpg')
+      await api.dispatchOrder(order.id)
+      await as(api, 'rider')
+      await api.takeDelivery(order.id)
+
+      // Before collecting: the collection deadline stops.
+      const id = await api.reportIncident('delivery', order.id, 'threat', null)
+      expect(await api.reportIncident('delivery', order.id, 'threat', null)).toBe(id)
+      c.t += 3 * 3_600_000
+      expect((await api.listDeliveryJobs()).find((j) => j.id === order.id)?.mine).toBe(true)
+      expect(await api.getMyOpenIncidents()).toEqual({ [order.id]: expect.objectContaining({ id, type: 'threat' }) })
+      await api.addIncidentDetails(id, { note: 'Men at the gate', at: { lat: 6.5, lng: 3.4 } })
+      await as(api, 'funke')
+      expect((await api.listMyOrders()).find((o) => o.id === order.id)?.pausedAt).toBeTruthy()
+
+      await as(api, 'admin')
+      const [open] = await api.listOpenIncidents()
+      expect(open).toMatchObject({ id, type: 'threat', note: 'Men at the gate', location: { lat: 6.5, lng: 3.4 }, collected: false })
+      await api.resolveIncident(id, 'carry_on', 'Rider is safe')
+      expect(await api.listOpenIncidents()).toEqual([])
+
+      // Stolen after collecting: buyer refunded in full, seller still paid.
+      await as(api, 'rider')
+      await api.passCollection(order.id, ['/assets/a.jpg'])
+      const theft = await api.reportIncident('delivery', order.id, 'theft', null)
+      await as(api, 'funke')
+      const before = (await api.getWallet()).balance
+      await as(api, 'admin')
+      await api.resolveIncident(theft, 'refund', 'Stolen')
+      await as(api, 'funke')
+      const after = (await api.getWallet()).balance
+      expect(after.cashKobo + after.creditKobo - before.cashKobo - before.creditKobo).toBe(order.priceKobo + order.deliveryFeeKobo)
+      expect((await api.listMyOrders()).find((o) => o.id === order.id)).toMatchObject({ status: 'cancelled', cancelReason: 'incident', pausedAt: null })
+      await as(api, 'store')
+      const lines = (await api.listPayouts()).filter((l) => l.orderId === order.id)
+      expect(lines.map((l) => [l.kind, l.status])).toEqual([['sale', 'due']])
+    })
+  })
+
   describe('rider and door checks', () => {
     const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
     const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')

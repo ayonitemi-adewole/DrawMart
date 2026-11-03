@@ -22,6 +22,7 @@ import { firstName } from '@/domain/deliveryChat'
 import { ReturnJobList } from './ReturnJobs'
 import { RouteStops, TripList } from './Trips'
 import { RiderStatsCard } from './RiderStats'
+import { ReportProblem } from './ReportProblem'
 import { directionsUrl } from '@/domain/location'
 import { matchesProductSearch } from '@/domain/productCode'
 import { takeJobError } from '@/domain/riderLimits'
@@ -218,6 +219,8 @@ function JobDetails({ job: j }: { job: DeliveryJob }) {
           {j.windowStart && j.windowEnd && !j.redeliverAt ? <WindowLine start={j.windowStart} end={j.windowEnd} /> : null}
         </div>
       </Card>
+
+      <ReportProblem kind="delivery" id={j.id} />
 
       <Card className="flex flex-col gap-3 p-4 text-sm">
         <span className="flex items-start gap-2">

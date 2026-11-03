@@ -2,7 +2,7 @@ import { NavLink, Outlet, ScrollRestoration, useLocation, useNavigate } from 're
 import { canDo } from '@/domain/team'
 import { api } from '@/api'
 import { cancelRateFlagged } from '@/domain/orderCancel'
-import { useStoreRole, useSupportInbox, useSupportUnread, useStoreApplications, useOpenClaims, useAccess, useCancelRates, useDispatchBoard, useDuePayouts, useMerchant, useMyCounter, useRiderApplications, useRiderPayDue, usePendingListings, usePendingWinnerStories, usePriceReviews, usePrizeOrders, useSellerApplications, useSignOut, useUnreadMessages, useUnreadNotifications } from '@/api/hooks'
+import { useStoreRole, useSupportInbox, useSupportUnread, useStoreApplications, useOpenClaims, useAccess, useCancelRates, useDispatchBoard, useOpenIncidents, useDuePayouts, useMerchant, useMyCounter, useRiderApplications, useRiderPayDue, usePendingListings, usePendingWinnerStories, usePriceReviews, usePrizeOrders, useSellerApplications, useSignOut, useUnreadMessages, useUnreadNotifications } from '@/api/hooks'
 import { UsersIcon, GiftIcon, InfoIcon, StarIcon, StoreIcon, AlertIcon, XIcon, BellIcon, NairaIcon, HeartIcon, ChartIcon, ChatIcon, TrendingUpIcon, TrophyIcon, TruckIcon, CheckIcon, ClipboardIcon, DiceIcon, GaugeIcon, HashIcon, IdCardIcon, LayoutIcon, LogOutIcon, type IconComponent } from '@/components/icons'
 import { NavMenu } from '@/components/NavMenu'
 import { ThemeToggle } from '@/components/ThemeToggle'
@@ -48,6 +48,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
   const riderPayDue = useRiderPayDue()
   const riderApplications = useRiderApplications()
   const dispatch = useDispatchBoard()
+  const incidents = useOpenIncidents()
   const counter = useMyCounter()
   const signOut = useSignOut()
 
@@ -88,7 +89,7 @@ export function BackOfficeLayout({ app }: { app: BackOfficeApp }) {
           { to: '/admin/claims', label: 'Claims', icon: AlertIcon, count: claims.data?.length ?? 0 },
           { to: '/admin/reviews', label: 'Reviews', icon: StarIcon },
           { to: '/admin/cancellations', label: 'Cancellations', icon: XIcon, count: cancelRates.data?.filter((r) => cancelRateFlagged(r.orders, r.cancelled)).length ?? 0 },
-          { to: '/admin/dispatch', label: 'Dispatch', icon: GaugeIcon, count: dispatch.data?.jobs.filter((j) => j.stuck).length ?? 0 },
+          { to: '/admin/dispatch', label: 'Dispatch', icon: GaugeIcon, count: (dispatch.data?.jobs.filter((j) => j.stuck).length ?? 0) + (incidents.data?.length ?? 0) },
           { to: '/admin/riders', label: 'Riders', icon: TruckIcon, count: riderApplications.data?.length ?? 0 },
           { to: '/admin/rider-pay', label: 'Rider pay', icon: NairaIcon, count: riderPayDue.data?.length ?? 0 },
           { to: '/admin/delivery', label: 'Delivery prices', icon: TruckIcon },

@@ -69,6 +69,7 @@ import {
 import { checkPin, isDeliveryPin, newDeliveryPin, type PinState } from '@/domain/delivery'
 import { COLLECT_WARNING_MINUTES, MAX_RIDER_JOBS, collectBy, collectionOverdue, takeJobError } from '@/domain/riderLimits'
 import { DEFAULT_STUCK_LIMITS, assignJobError, claimStage, dispatchStuck, orderStage } from '@/domain/dispatch'
+import { incidentNoteError, resolveIncidentError, sellerStillPaid, type IncidentOutcome, type IncidentType } from '@/domain/incidents'
 import { STATS_DAYS, canRateDelivery, ratingError, riderPerformance, riderStats, type DeliveryRating, type TimedJob } from '@/domain/deliveryRatings'
 import { canTakeYet, takeTooSoonError, windowError, windowOpens, windowTimes } from '@/domain/deliveryWindows'
 import { tripRoomError } from '@/domain/trips'
@@ -103,6 +104,7 @@ import {
   type DispatchBoard,
   type DispatchJob,
   type RiderPerformanceRow,
+  type OpenIncident,
   type RiderApplicationView,
   type RiderFleet,
   type NotificationView,
@@ -136,6 +138,24 @@ const DAY = 24 * 60 * 60 * 1000
 
 /** The PIN and who's carrying it stay out of the order everyone else sees. */
 type MockOrder = Order & { pin: string; riderId: string | null; pinState: PinState; paidCashKobo: Kobo; paidCreditKobo: Kobo; paidFeeCashKobo: Kobo; paidFeeCreditKobo: Kobo; checkoutId: string; confirmRemindedAt: string | null; riderTakenAt?: string | null; counterRemindedAt?: string | null; counterOutAt?: string | null; windowAlertedAt?: string | null }
+
+interface MockIncident {
+  id: string
+  orderId: string | null
+  claimId: string | null
+  riderId: string
+  type: IncidentType
+  note: string | null
+  photo: string | null
+  location: GeoPoint | null
+  createdAt: string
+  resolvedAt: string | null
+  outcome: IncidentOutcome | null
+}
+
+/** A rider's open report pauses the job (incidents.ts). */
+const openIncident = (db: Db, job: { orderId?: string; claimId?: string }) =>
+  db.incidents.find((i) => !i.resolvedAt && (job.orderId ? i.orderId === job.orderId : i.claimId === job.claimId))
 
 interface Db {
   users: User[]
@@ -195,6 +215,8 @@ interface Db {
   riderAccounts: Record<string, true>
   /** deliveryRatings.ts, by order id. Only ever read back as the buyer's own, or as totals. */
   deliveryRatings: Record<string, DeliveryRating & { riderId: string; buyerId: string }>
+  /** incidents.ts. */
+  incidents: MockIncident[]
   riderFleets: RiderFleet[]
   riderTrust: Record<string, { fleetId: string | null; trusted: boolean }>
   /** Buyer accounts an approved application turned into a store's: user id → store id. */
@@ -687,6 +709,7 @@ async function freshDb(): Promise<Db> {
     riderApplications: {},
     riderAccounts: {},
     deliveryRatings: {},
+    incidents: [],
     riderFleets: [],
     // The demo rider has a track record, so demos can carry anything.
     riderTrust: { 'u-rider': { fleetId: null, trusted: true } },
@@ -912,6 +935,12 @@ function refundBuyers(db: Db, l: Listing, at: string) {
 /** deliveryChecks.ts: the seller's charge, the buyer's apology, and suspension if it keeps happening. */
 function penaliseSeller(db: Db, o: MockOrder, nowMs: number) {
   const at = iso(nowMs)
+  // incidents.ts: something happened after the rider collected it, so it isn't the seller's to pay for.
+  if (o.collectedAt && db.incidents.some((i) => i.orderId === o.id && i.createdAt >= o.collectedAt!)) {
+    db.excusedFailures.push(o.id)
+    db.ledger.push({ id: uid('E'), userId: o.buyerId, kind: 'store_credit', cashKobo: 0, creditKobo: APOLOGY_CREDIT_KOBO, memo: 'Sorry about your order', listingId: o.listingId, createdAt: at })
+    return
+  }
   db.payouts.push({ id: uid('Y'), merchantId: o.merchantId, listingId: o.listingId, orderId: o.id, kind: 'charge', amountKobo: -FAILURE_CHARGE_KOBO, status: 'due', createdAt: at, dueAt: at, paidAt: null, reference: null, paidTo: null })
   db.ledger.push({ id: uid('E'), userId: o.buyerId, kind: 'store_credit', cashKobo: 0, creditKobo: APOLOGY_CREDIT_KOBO, memo: 'Sorry about your order', listingId: o.listingId, createdAt: at })
   notifyShop(db, o.merchantId, 'store_order_failed', o.listingId, at)
@@ -1005,7 +1034,7 @@ function processDeadlines(db: Db, now: number): boolean {
   }
   // No new time chosen after a failed attempt (deliveryAttempts.ts).
   for (const o of db.orders) {
-    if (o.status === 'dispatched' && o.failedAttempts === 1 && !o.redeliveryChoice && o.lastFailedAt && Date.parse(o.lastFailedAt) + CHOOSE_WITHIN_HOURS * 3_600_000 <= now) returnUndelivered(db, o, now)
+    if (o.status === 'dispatched' && !o.pausedAt && o.failedAttempts === 1 && !o.redeliveryChoice && o.lastFailedAt && Date.parse(o.lastFailedAt) + CHOOSE_WITHIN_HOURS * 3_600_000 <= now) returnUndelivered(db, o, now)
   }
   for (const o of db.orders) {
     if (o.status !== 'dispatched' || o.riderId || o.atCounterAt || !o.windowStart || o.windowAlertedAt || !canTakeYet(o.windowStart, now)) continue
@@ -1029,14 +1058,14 @@ function processDeadlines(db: Db, now: number): boolean {
     }
   }
   for (const o of db.orders) {
-    if (o.status === 'dispatched' && o.riderId && !o.collectedAt && o.riderTakenAt && collectionOverdue(collectBy(o.riderTakenAt), now)) {
+    if (o.status === 'dispatched' && !o.pausedAt && o.riderId && !o.collectedAt && o.riderTakenAt && collectionOverdue(collectBy(o.riderTakenAt), now)) {
       const was = o.riderId
       Object.assign(o, { riderId: null, riderTakenAt: null, collectionPhotos: null })
       notify(db, was, 'rider_job_released', o.listingId, iso(now))
       alertNewJob(db, o, was, now)
     }
     const d = o.claim?.status === 'awaiting_pickup' ? db.claimDetails[o.claim.id] : null
-    if (d?.riderId && d.takenAt && collectionOverdue(collectBy(d.takenAt), now)) {
+    if (d?.riderId && d.takenAt && !openIncident(db, { claimId: o.claim!.id }) && collectionOverdue(collectBy(d.takenAt), now)) {
       const was = d.riderId
       Object.assign(d, { riderId: null, takenAt: null })
       notify(db, was, 'rider_job_released', o.listingId, iso(now))
@@ -2255,6 +2284,77 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         return riderIds(db)
           .map((id) => ({ id, name: riderName(db, id), photo: db.riderPhotos[id] ?? null, fleetId: db.riderTrust[id]?.fleetId ?? null, trusted: !!db.riderTrust[id]?.trusted, completed: riderCompleted(db, id), holding: riderJobsHeld(db, id), joinedAt: db.riderApplications[id]?.reviewedAt ?? '2026-10-01T00:00:00.000Z' }))
           .sort((a, b) => a.name.localeCompare(b.name))
+      }),
+
+    reportIncident: (kind, id, type, at) =>
+      tx((db) => {
+        const me = rider()
+        const o = kind === 'delivery' ? db.orders.find((x) => x.id === id && x.riderId === me && ((x.status === 'dispatched' && !x.atCounterAt) || x.returnState === 'returning')) : undefined
+        const claimed = kind === 'return' ? db.orders.find((x) => x.claim?.id === id && db.claimDetails[id]?.riderId === me && (x.claim.status === 'awaiting_pickup' || x.claim.status === 'returning')) : undefined
+        if (!o && !claimed) throw new ApiError('invalid_input', 'You can only report a problem on a job you have.')
+        const open = openIncident(db, o ? { orderId: id } : { claimId: id })
+        if (open) return open.id
+        const incident: MockIncident = { id: uid('I'), orderId: o ? id : null, claimId: o ? null : id, riderId: me, type, note: null, photo: null, location: at, createdAt: iso(now()), resolvedAt: null, outcome: null }
+        db.incidents.push(incident)
+        if (o) o.pausedAt = incident.createdAt
+        return incident.id
+      }),
+
+    addIncidentDetails: (incidentId, d) =>
+      tx((db) => {
+        const i = db.incidents.find((x) => x.id === incidentId && x.riderId === rider() && !x.resolvedAt)
+        if (!i) throw new ApiError('invalid_input', 'That report has been closed. Call DrawMart if you need help.')
+        const problem = incidentNoteError(d.note ?? '')
+        if (problem) throw new ApiError('invalid_input', problem)
+        Object.assign(i, { note: d.note?.trim() || i.note, photo: d.photo ?? i.photo, location: d.at ?? i.location })
+      }),
+
+    getMyOpenIncidents: () =>
+      tx((db) => {
+        const me = rider()
+        return Object.fromEntries(db.incidents.filter((i) => i.riderId === me && !i.resolvedAt).map((i) => [(i.orderId ?? i.claimId)!, { id: i.id, type: i.type, createdAt: i.createdAt }]))
+      }),
+
+    listOpenIncidents: () =>
+      tx((db): OpenIncident[] => {
+        requireAdmin()
+        return db.incidents
+          .filter((i) => !i.resolvedAt)
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+          .map((i) => {
+            const o = db.orders.find((x) => (i.orderId ? x.id === i.orderId : x.claim?.id === i.claimId))!
+            const l = getListingOr404(db, o.listingId)
+            return {
+              id: i.id, kind: i.orderId ? 'delivery' : 'return', orderId: o.id, type: i.type, createdAt: i.createdAt, note: i.note, photo: i.photo, location: i.location,
+              productCode: l.productCode, listingTitle: l.title, isPrize: o.isPrize, orderStatus: o.status, collected: !!o.collectedAt,
+              rider: { id: i.riderId, name: riderName(db, i.riderId), phone: db.riderApplications[i.riderId]?.phone ?? db.users.find((u) => u.id === i.riderId)?.phone ?? null },
+            }
+          })
+      }),
+
+    resolveIncident: (incidentId, outcome, note) =>
+      tx((db) => {
+        requireAdmin()
+        const i = db.incidents.find((x) => x.id === incidentId && !x.resolvedAt)
+        if (!i) throw new ApiError('not_found', 'That incident is already closed.')
+        const o = db.orders.find((x) => (i.orderId ? x.id === i.orderId : x.claim?.id === i.claimId))!
+        const problem = resolveIncidentError(outcome, { kind: i.orderId ? 'delivery' : 'return', isPrize: o.isPrize, status: o.status })
+        if (problem) throw new ApiError('invalid_input', problem)
+        const at = now()
+        if (outcome === 'refund') {
+          cancelOrderNow(db, o, 'incident', note, at)
+          // incidents.ts sellerStillPaid: it left the seller as it should.
+          if (sellerStillPaid(!!o.collectedAt) && o.priceKobo - o.feeKobo > 0 && !db.payouts.some((p) => p.orderId === o.id && p.kind === 'sale'))
+            db.payouts.push({ id: uid('Y'), merchantId: o.merchantId, listingId: o.listingId, orderId: o.id, kind: 'sale', amountKobo: o.priceKobo - o.feeKobo, status: 'due', createdAt: iso(at), dueAt: iso(at), paidAt: null, reference: null, paidTo: null })
+        }
+        Object.assign(i, { resolvedAt: iso(at), outcome })
+        // Not yet collected: a fresh collection window, for the whole trip.
+        if (i.orderId && o.status === 'dispatched' && o.riderId && !o.collectedAt) {
+          const was = o.riderTakenAt
+          for (const x of db.orders) if (x.riderId === o.riderId && x.riderTakenAt === was && x.status === 'dispatched' && !x.collectedAt) x.riderTakenAt = iso(at)
+        }
+        if (i.claimId && o.claim?.status === 'awaiting_pickup' && db.claimDetails[i.claimId]) db.claimDetails[i.claimId].takenAt = iso(at)
+        if (i.orderId) o.pausedAt = null
       }),
 
     rateDelivery: (orderId, good, reasons) =>
@@ -3641,7 +3741,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         return db.merchants.flatMap((m) => {
           const mine = recent.filter((o) => o.merchantId === m.id)
           const failed = mine.filter((o) => o.cancelReason === 'failed_check' || o.cancelReason === 'refused_wrong' || o.cancelReason === 'refused_damaged').length
-          return mine.length || m.suspendedAt ? [{ merchantId: m.id, merchantName: m.name, orders: mine.length, cancelled: mine.filter((o) => o.status === 'cancelled' && o.cancelReason !== 'not_collected' && o.cancelReason !== 'not_delivered').length, failed, suspended: !!m.suspendedAt }] : []
+          return mine.length || m.suspendedAt ? [{ merchantId: m.id, merchantName: m.name, orders: mine.length, cancelled: mine.filter((o) => o.status === 'cancelled' && o.cancelReason !== 'not_collected' && o.cancelReason !== 'not_delivered' && o.cancelReason !== 'incident').length, failed, suspended: !!m.suspendedAt }] : []
         })
       }),
 
