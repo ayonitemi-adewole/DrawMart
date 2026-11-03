@@ -10,6 +10,7 @@ import type { PinResult } from '@/domain/delivery'
 import type { SavedAddress, SavedAddressInput } from '@/domain/addresses'
 import type { CheckoutDetails } from '@/domain/cart'
 import type { DeliveryWindow } from '@/domain/deliveryWindows'
+import type { DeliveryRating, DeliveryRatingReason, RiderPerformance, RiderStats } from '@/domain/deliveryRatings'
 import type { DeliveryPricing } from '@/domain/deliveryFees'
 import type { ShopPickup } from '@/domain/shopPickup'
 import type { ShopProfileInput } from '@/domain/shopProfile'
@@ -299,6 +300,8 @@ export interface OrderView extends Order {
   deliveryPin: string | null
   /** Who's bringing it: only to the buyer, only while a rider has it on the way (deliveryChat.ts). */
   rider?: RiderCard | null
+  /** The buyer's own rating of the delivery (deliveryRatings.ts). Only the buyer gets it. */
+  deliveryRating?: DeliveryRating | null
 }
 
 /** All a buyer learns about their rider. Never a phone number. */
@@ -481,6 +484,14 @@ export interface DispatchJob {
 }
 
 export type DispatchJobKind = 'delivery' | 'return'
+
+/** A rider's last STATS_DAYS, for admins (deliveryRatings.ts). Ratings never say who gave them. */
+export interface RiderPerformanceRow extends RiderPerformance {
+  name: string
+  rider: { id: string; name: string; phone: string | null }
+  /** The latest thumbs down, to look into. */
+  recentDowns: { orderId: string; productCode: string; ratedAt: string; reasons: DeliveryRatingReason[] }[]
+}
 
 export interface DispatchBoard {
   /** app_settings: when a job counts as stuck (dispatch.ts). */
@@ -1218,6 +1229,12 @@ export interface DrawMartApi {
   setRiderTrusted(riderId: string, trusted: boolean): Promise<void>
   /** Every active delivery and return, for admins (dispatch.ts). */
   getDispatchBoard(): Promise<DispatchBoard>
+  /** The buyer rates a delivery to their door: thumbs up, or down with optional reasons (deliveryRatings.ts). Changeable for a week. */
+  rateDelivery(orderId: string, good: boolean, reasons: DeliveryRatingReason[]): Promise<void>
+  /** A rider's own last 30 days: totals only. */
+  getMyRiderStats(): Promise<RiderStats>
+  /** Every rider's last 30 days, for admins. */
+  getRiderPerformance(): Promise<RiderPerformanceRow[]>
   /** A job waiting in the pool, to this rider, within their limits. */
   assignJob(kind: DispatchJobKind, id: string, riderId: string): Promise<void>
   /** Back in the pool. Only before the rider has collected it. */

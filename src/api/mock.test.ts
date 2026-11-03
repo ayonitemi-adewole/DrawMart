@@ -14,7 +14,7 @@ import { addDays, cautionFeeFor, localDate } from '@/domain/listing'
 import { nairaToKobo as k } from '@/domain/money'
 import type { Delivery } from '@/domain/types'
 import { createMockApi, memoryStore } from './mock'
-import { ApiError, type NewListingInput } from './types'
+import { ApiError, type NewListingInput, type OrderView } from './types'
 
 // Proof on stores' first listings and spot checks are off, except where a test turns them on.
 const make = (now = () => Date.now(), listingChecks = { firstListings: 0, spotPercent: 0 }) => createMockApi({ store: memoryStore(), latencyMs: 0, now, listingChecks })
@@ -1042,7 +1042,7 @@ describe('mock api', () => {
       await api.approveListing(p.id)
       await as(api, 'funke')
       await api.topUp(k(200_000))
-      const orders = []
+      const orders: OrderView[] = []
       for (let i = 0; i < n; i++) orders.push((await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null }))[0])
       await as(api, 'store')
       for (const o of orders) {
@@ -1231,7 +1231,7 @@ describe('mock api', () => {
       await api.approveListing(p.id)
       await as(api, 'funke')
       await api.topUp(k(100_000))
-      const orders = []
+      const orders: OrderView[] = []
       for (let i = 0; i < 8; i++) orders.push((await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null }))[0])
       const ids = orders.map((o) => o.id)
       const ready = async (id: string) => {
@@ -1491,6 +1491,57 @@ describe('mock api', () => {
       expect(await alerts()).toHaveLength(1)
       expect(await alerts()).toHaveLength(1)
       await api.takeDelivery(order.id)
+    })
+  })
+
+  describe('delivery ratings', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('lets the buyer rate each delivery, and shows the rider only totals, from the next day', async () => {
+      const c = { t: Date.parse('2026-11-03T10:00:00+01:00') }
+      const api = make(() => c.t)
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Rated lamp', description: '', category: 'Home', priceKobo: k(5_000), stock: 10 })
+      await as(api, 'admin')
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const orders: OrderView[] = []
+      for (let i = 0; i < 5; i++) orders.push((await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null }))[0])
+      await as(api, 'store')
+      for (const o of orders) {
+        await api.sellerConfirmOrder(o.id, '/assets/c.jpg')
+        await api.dispatchOrder(o.id)
+      }
+      await as(api, 'rider')
+      for (const o of orders) {
+        await api.takeDelivery(o.id)
+        await api.passCollection(o.id, ['/assets/a.jpg'])
+        await api.confirmDelivery(o.id, o.deliveryPin!)
+      }
+
+      await as(api, 'funke')
+      await expect(api.rateDelivery(orders[0].id, true, ['late'])).rejects.toThrow(/only for a thumbs down/)
+      for (let i = 0; i < 5; i++) await api.rateDelivery(orders[i].id, i < 3, i < 3 ? [] : ['late'])
+      await api.rateDelivery(orders[4].id, false, ['rude'])
+      const mine = await api.listMyOrders()
+      expect(mine.find((o) => o.id === orders[4].id)?.deliveryRating).toMatchObject({ good: false, reasons: ['rude'] })
+
+      await as(api, 'rider')
+      expect(await api.getMyRiderStats()).toEqual({ completed: 5, onTimeShare: 1, ratings: null })
+      c.t += 86_400_000
+      expect((await api.getMyRiderStats()).ratings).toEqual({ up: 3, down: 2, reasons: { late: 1, rude: 1 } })
+      await expect(api.getRiderPerformance()).rejects.toThrow()
+
+      await as(api, 'admin')
+      const row = (await api.getRiderPerformance()).find((r) => r.rider.id === 'u-rider')!
+      expect([row.completed, row.up, row.down, row.recentDowns.map((d) => d.orderId).sort()]).toEqual([5, 3, 2, [orders[3].id, orders[4].id].sort()])
+
+      // A week on, it can't be changed.
+      c.t += 7 * 86_400_000
+      await as(api, 'funke')
+      await expect(api.rateDelivery(orders[0].id, false, [])).rejects.toThrow(/7 days/)
     })
   })
 
@@ -2654,7 +2705,7 @@ describe('mock api', () => {
 
     it('shows a shop’s rating from 5 reviews, first names only, and admins can hide one', async () => {
       const { api } = clock()
-      const orders = []
+      const orders: OrderView[] = []
       for (const [i, rating] of [5, 4, 4, 4, 5].entries()) {
         const { order } = await delivered(api, `Lamp ${i}`)
         await api.submitReview(order.id, { ...input, rating })

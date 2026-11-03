@@ -97,6 +97,18 @@ export const HeartIcon = (p: IconProps) => (
     <path d="M12 20.5s-8-4.9-8-11A4.6 4.6 0 0 1 12 6.6a4.6 4.6 0 0 1 8 2.9c0 6.1-8 11-8 11Z" />
   </Icon>
 );
+export const ThumbUpIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M7 10v11" />
+    <path d="M15 5.9 14 10h5.8a2 2 0 0 1 1.9 2.5l-2.3 8a2 2 0 0 1-1.9 1.5H4a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1h2.8a2 2 0 0 0 1.8-1.1L12 2a3.1 3.1 0 0 1 3 3.9Z" />
+  </Icon>
+);
+export const ThumbDownIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M17 14V3" />
+    <path d="M9 18.1 10 14H4.2a2 2 0 0 1-1.9-2.5l2.3-8A2 2 0 0 1 6.5 2H20a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-2.8a2 2 0 0 0-1.8 1.1L12 22a3.1 3.1 0 0 1-3-3.9Z" />
+  </Icon>
+);
 export const XIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M6 6l12 12M18 6L6 18" />

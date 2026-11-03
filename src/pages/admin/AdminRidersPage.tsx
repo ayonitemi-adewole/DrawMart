@@ -8,6 +8,7 @@ import { Badge, Button, Card, EmptyState, ErrorState, Field, Notice, PageTitle, 
 import { NEW_RIDER_JOBS, VEHICLE_TEXT } from '@/domain/riderApplications'
 import { areaName } from '@/domain/riderAlerts'
 import { dateTime } from '@/lib/time'
+import { RiderPerformance } from './RiderPerformance'
 
 /** /admin/riders: the sign-up switch, applications, fleets, and every rider. */
 export function AdminRidersPage() {
@@ -18,6 +19,7 @@ export function AdminRidersPage() {
       </PageTitle>
       <SignupSwitch />
       <Applications />
+      <RiderPerformance />
       <Fleets />
       <RiderList />
     </div>

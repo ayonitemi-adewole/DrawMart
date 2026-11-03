@@ -23,6 +23,7 @@ import { imeiValid } from '@/domain/listingChecks'
 import { returnFeeKobo, sellerShareOfReturnFee } from '@/domain/claims'
 import { addConfirmTime, confirmDeadline } from '@/domain/orderConfirm'
 import { lagosDay, offeredWindows, windowOpens, windowTimes } from '@/domain/deliveryWindows'
+import { followUpReasons, type RiderPerformance } from '@/domain/deliveryRatings'
 import { addDays, cautionFeeFor, localDate } from '@/domain/listing'
 import { DEMO_ACCOUNTS } from '@/api/demoAccounts'
 
@@ -2648,6 +2649,56 @@ describe('cart and checkout', () => {
       const [{ expected }] = await admin<{ expected: string }>(
         `select private.rider_pay(m.delivery_area, private.buyer_area(o), 'large') expected from public.orders o join public.merchants m on m.id = o.merchant_id where o.id = $1`, [one])
       expect(pay[0].amount_kobo).toBe(expected)
+    }, 60_000)
+
+    it('lets a buyer rate the delivery, and shows the rider only totals', async () => {
+      const carrier = await newUser('rated-rider@example.com', { role: 'delivery' })
+      const boss = await newUser('rated-admin@example.com', { role: 'admin' })
+      const b = await newUser('rating-buyer@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const ids: string[] = []
+      for (let i = 0; i < 5; i++) {
+        const item = await newProduct(`Rated lamp ${i}`)
+        await add(b, item)
+        const [id] = await checkout(b, details([item]))
+        await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+        await asUser(store, `select public.dispatch_order($1)`, [id])
+        await asUser(carrier, `select public.take_delivery($1)`, [id])
+        await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+        ids.push(id)
+      }
+      const rate = (who: string, id: string, good: boolean, reasons: string[] = []) => asUser(who, `select public.rate_delivery($1, $2, $3)`, [id, good, reasons])
+      // Not before it arrives.
+      await expectFail(rate(b, ids[0], true), 'invalid_input')
+      const pins = await pinsOf(b)
+      for (const id of ids) await tryPin(carrier, id, pins[id])
+
+      // Only the buyer, reasons only with a thumbs down, and nobody reads the table.
+      await expectFail(rate(b, ids[0], true, ['late']), 'invalid_input')
+      await expectFail(rate(b, ids[0], false, ['slow']), 'invalid_input')
+      await expectFail(rate(await newUser('nosy-buyer@example.com'), ids[0], true), 'invalid_input')
+      for (let i = 0; i < 5; i++) await rate(b, ids[i], i < 3, i < 3 ? [] : ['late'])
+      await rate(b, ids[4], false, ['rude'])
+      for (const who of [carrier, b, boss]) await expect(asUser(who, `select * from private.delivery_ratings`)).rejects.toThrow(/permission denied/)
+      const mine = (await asUser<{ r: Record<string, { good: boolean; reasons: string[] }> }>(b, `select public.my_delivery_ratings() r`))[0].r
+      expect(mine[ids[4]]).toMatchObject({ good: false, reasons: ['rude'] })
+
+      // The rider sees totals, and ratings only from the next day.
+      const stats = async () => (await asUser<{ s: { completed: number; onTimeShare: number; ratings: unknown } }>(carrier, `select public.my_rider_stats() s`))[0].s
+      expect(await stats()).toEqual({ completed: 5, onTimeShare: 1, ratings: null })
+      await admin(`update private.delivery_ratings set rated_at = now() - interval '1 day'`)
+      expect((await stats()).ratings).toEqual({ up: 3, down: 2, reasons: { late: 1, rude: 1 } })
+      await expectFail(asUser(b, `select public.my_rider_stats()`), 'forbidden')
+
+      // Admins see who needs a call, and the latest thumbs down.
+      await expectFail(asUser(carrier, `select public.rider_performance()`), 'forbidden')
+      const perf = (await asUser<{ p: (RiderPerformance & { rider: { id: string }; recentDowns: { orderId: string }[] })[] }>(boss, `select public.rider_performance() p`))[0].p.find((x) => x.rider.id === carrier)!
+      expect([perf.completed, perf.up, perf.down, perf.recentDowns.length]).toEqual([5, 3, 2, 2])
+      expect(followUpReasons(perf)).toEqual(['1 buyer said rude or unsafe', '2 of 5 thumbs down'])
+
+      // A week on, it can't be rated or changed.
+      await admin(`update public.orders set delivered_at = now() - interval '8 days' where id = $1`, [ids[0]])
+      await expectFail(rate(b, ids[0], false), 'invalid_input')
     }, 60_000)
 
     it('offers the same delivery windows as the app, from the latest the seller can be ready', async () => {

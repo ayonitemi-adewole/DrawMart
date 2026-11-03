@@ -21,6 +21,7 @@ import { DeliveryChatSheet } from '@/components/DeliveryChat'
 import { firstName } from '@/domain/deliveryChat'
 import { ReturnJobList } from './ReturnJobs'
 import { RouteStops, TripList } from './Trips'
+import { RiderStatsCard } from './RiderStats'
 import { directionsUrl } from '@/domain/location'
 import { matchesProductSearch } from '@/domain/productCode'
 import { takeJobError } from '@/domain/riderLimits'
@@ -88,6 +89,7 @@ export function DeliveryPage() {
           { value: 'done', label: 'Done' },
         ]}
       />
+      {tab === 'done' ? <RiderStatsCard /> : null}
       {tab === 'available' || tab === 'returns' ? <PoolControls pool={pool} /> : null}
       {tab === 'returns' ? <ReturnJobList view={pool.view} /> : null}
       {full && (tab === 'available' || tab === 'returns') ? <Notice tone="ticket">{full}</Notice> : null}

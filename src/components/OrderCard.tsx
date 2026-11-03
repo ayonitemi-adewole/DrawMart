@@ -21,6 +21,7 @@ import { dateTime } from '@/lib/time'
 import { ProductId } from './ProductId'
 import { DeliveryPin } from './DeliveryPin'
 import { Rebook } from './Rebook'
+import { RateDelivery } from './RateDelivery'
 import { DeliveryTracker } from './DeliveryTracker'
 import { CameraCapture } from './CameraCapture'
 import { ReviewSheet } from './ReviewSheet'
@@ -267,6 +268,7 @@ export function OrderCard({ order: o, audience }: { order: OrderView; audience: 
         </Button>
       ) : null}
       {reviewing ? <ReviewSheet order={o} onClose={() => setReviewing(false)} /> : null}
+      {audience === 'buyer' ? <RateDelivery order={o} /> : null}
       {audience === 'buyer' && o.isPrize && o.status === 'delivered' ? (
         <Link to={`/draws/${o.listingId}`} className="flex min-h-11 w-fit items-center text-sm">
           Choose whether to show this on the Winners page

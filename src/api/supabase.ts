@@ -11,8 +11,9 @@ import type { Discount } from '@/domain/discounts'
 import type { PricingStats } from '@/domain/drawPricing'
 import { STORE_APPLICATION_ERROR_TEXT, validateStoreApplication } from '@/domain/storeApplications'
 import type { RiderEarning } from '@/domain/riderPay'
+import type { DeliveryRating, RiderStats } from '@/domain/deliveryRatings'
 import type { PayoutAccount, PayoutKind, PayoutStatus } from '@/domain/payouts'
-import type { ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews, StoreApplicationView, SupportMessage, SupportThreadSummary, QuickReply, BulkUploadResult, IncomingStoreInvite, StoreActivityEntry, StoreTeam } from './types'
+import type { RiderPerformanceRow, ListingCheckPlan, BankOption, CancelRateView, ClaimReview, PayoutLineView, ReturnJob, AdminReviewView, ShopReviews, StoreApplicationView, SupportMessage, SupportThreadSummary, QuickReply, BulkUploadResult, IncomingStoreInvite, StoreActivityEntry, StoreTeam } from './types'
 import type { PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js'
 import { PURCHASE_ERROR_TEXT, type PurchaseError } from '@/domain/rules'
 import { openFlutterwaveCheckout } from '@/lib/flutterwave'
@@ -641,11 +642,14 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     return row ? { items: row.items, savedAt: row.saved_at, expiresAt: row.expires_at } : null
   }
 
-  /** The buyer's own PINs, which the orders table doesn't hold. */
-  /** The buyer's PINs, and who's bringing each order now. */
+  /** The buyer's PINs, who's bringing each order now, and how they rated each delivery. */
   async function withPins(orders: OrderView[]): Promise<OrderView[]> {
-    const [pins, riders] = await Promise.all([rpc<Record<string, string>>('my_delivery_pins'), rpc<Record<string, RiderCard>>('my_order_riders')])
-    return orders.map((o) => ({ ...o, deliveryPin: pins[o.id] ?? null, rider: riders[o.id] ?? null }))
+    const [pins, riders, ratings] = await Promise.all([
+      rpc<Record<string, string>>('my_delivery_pins'),
+      rpc<Record<string, RiderCard>>('my_order_riders'),
+      rpc<Record<string, DeliveryRating>>('my_delivery_ratings'),
+    ])
+    return orders.map((o) => ({ ...o, deliveryPin: pins[o.id] ?? null, rider: riders[o.id] ?? null, deliveryRating: ratings[o.id] ?? null }))
   }
 
   /** Row security limits these to the signed-in buyer's own. */
@@ -1541,6 +1545,9 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     setRiderFleet: (riderId, fleetId) => rpc('set_rider_fleet', { p_rider: riderId, p_fleet: fleetId }),
     setRiderTrusted: (riderId, trusted) => rpc('set_rider_trusted', { p_rider: riderId, p_trusted: trusted }),
     getDispatchBoard: () => rpc<DispatchBoard>('dispatch_board'),
+    rateDelivery: (orderId, good, reasons) => rpc('rate_delivery', { p_order_id: orderId, p_good: good, p_reasons: reasons }),
+    getMyRiderStats: () => rpc<RiderStats>('my_rider_stats'),
+    getRiderPerformance: () => rpc<RiderPerformanceRow[]>('rider_performance'),
     assignJob: (kind, id, riderId) => rpc('assign_job', { p_kind: kind, p_id: id, p_rider: riderId }),
     unassignJob: (kind, id) => rpc('unassign_job', { p_kind: kind, p_id: id }),
     rejectStoreApplication: (id, note) => rpc('reject_store_application', { p_application_id: id, p_note: note }),

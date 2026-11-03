@@ -69,6 +69,7 @@ import {
 import { checkPin, isDeliveryPin, newDeliveryPin, type PinState } from '@/domain/delivery'
 import { COLLECT_WARNING_MINUTES, MAX_RIDER_JOBS, collectBy, collectionOverdue, takeJobError } from '@/domain/riderLimits'
 import { DEFAULT_STUCK_LIMITS, assignJobError, claimStage, dispatchStuck, orderStage } from '@/domain/dispatch'
+import { STATS_DAYS, canRateDelivery, ratingError, riderPerformance, riderStats, type DeliveryRating, type TimedJob } from '@/domain/deliveryRatings'
 import { canTakeYet, takeTooSoonError, windowError, windowOpens, windowTimes } from '@/domain/deliveryWindows'
 import { tripRoomError } from '@/domain/trips'
 import { feeGroupOf, largestSize, tripAlreadyPaid } from '@/domain/feeGroups'
@@ -101,6 +102,7 @@ import {
   type AdminRider,
   type DispatchBoard,
   type DispatchJob,
+  type RiderPerformanceRow,
   type RiderApplicationView,
   type RiderFleet,
   type NotificationView,
@@ -191,6 +193,8 @@ interface Db {
   riderSignupsOpen: boolean
   riderApplications: Record<string, RiderApplicationView>
   riderAccounts: Record<string, true>
+  /** deliveryRatings.ts, by order id. Only ever read back as the buyer's own, or as totals. */
+  deliveryRatings: Record<string, DeliveryRating & { riderId: string; buyerId: string }>
   riderFleets: RiderFleet[]
   riderTrust: Record<string, { fleetId: string | null; trusted: boolean }>
   /** Buyer accounts an approved application turned into a store's: user id → store id. */
@@ -682,6 +686,7 @@ async function freshDb(): Promise<Db> {
     riderSignupsOpen: false,
     riderApplications: {},
     riderAccounts: {},
+    deliveryRatings: {},
     riderFleets: [],
     // The demo rider has a track record, so demos can carry anything.
     riderTrust: { 'u-rider': { fleetId: null, trusted: true } },
@@ -1269,6 +1274,12 @@ function accountFacts(db: Db, userId: string) {
 }
 
 /** Every rider: the demo ones (not counter staff), and accounts approved to ride. */
+/** private.rider_done_jobs: handed to the buyer or a counter, in the last 30 days (riderStats filters by date). */
+const riderDoneJobs = (db: Db, riderId: string): TimedJob[] =>
+  db.orders
+    .filter((o) => o.riderId === riderId && !o.returnState && (o.atCounterAt ?? o.deliveredAt))
+    .map((o) => ({ collectedAt: o.collectedAt, doneAt: (o.atCounterAt ?? o.deliveredAt)!, windowEnd: o.windowEnd ?? null, redeliverAt: o.redeliveryChoice === 'redeliver' ? o.redeliverAt : null }))
+const ratingsOf = (db: Db, riderId: string) => Object.values(db.deliveryRatings).filter((r) => r.riderId === riderId)
 const riderIds = (db: Db) => [...DEMO_ACCOUNTS.filter((a) => a.role === 'delivery' && !a.pickupPointId).map((a) => a.mockId), ...Object.keys(db.riderAccounts)]
 const riderName = (db: Db, id: string) => db.riderApplications[id]?.fullName ?? DEMO_ACCOUNTS.find((a) => a.mockId === id)?.name ?? 'Rider'
 const riderCompleted = (db: Db, id: string) => db.orders.filter((o) => o.riderId === id && (o.status === 'delivered' || !!o.atCounterAt)).length
@@ -1294,7 +1305,8 @@ function orderView(db: Db, order: MockOrder, forBuyer = false): OrderView {
   const merchant = db.merchants.find((m) => m.id === o.merchantId)!
   const r = db.reviews.find((x) => x.orderId === o.id)
   const review = r ? { id: r.id, rating: r.rating, sellerComment: r.sellerComment, productComment: r.productComment, reply: r.reply, repliedAt: r.repliedAt, hidden: !!r.hiddenAt, createdAt: r.createdAt } : null
-  return { ...o, review, rider: forBuyer && chatOpen(order) ? riderCard(db, order.riderId!) : null, deliveryPin: forBuyer && o.status !== 'delivered' && o.status !== 'cancelled' ? pin : null, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, merchantName: merchant.name }
+  const rated = forBuyer ? db.deliveryRatings[o.id] : undefined
+  return { ...o, review, deliveryRating: rated ? { good: rated.good, reasons: rated.reasons, ratedAt: rated.ratedAt } : null, rider: forBuyer && chatOpen(order) ? riderCard(db, order.riderId!) : null, deliveryPin: forBuyer && o.status !== 'delivered' && o.status !== 'cancelled' ? pin : null, productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, merchantName: merchant.name }
 }
 
 // -------------------------------------------------------------------- API
@@ -2242,6 +2254,41 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         requireAdmin()
         return riderIds(db)
           .map((id) => ({ id, name: riderName(db, id), photo: db.riderPhotos[id] ?? null, fleetId: db.riderTrust[id]?.fleetId ?? null, trusted: !!db.riderTrust[id]?.trusted, completed: riderCompleted(db, id), holding: riderJobsHeld(db, id), joinedAt: db.riderApplications[id]?.reviewedAt ?? '2026-10-01T00:00:00.000Z' }))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      }),
+
+    rateDelivery: (orderId, good, reasons) =>
+      tx((db) => {
+        const me = buyer()
+        const o = db.orders.find((x) => x.id === orderId && x.buyerId === me)
+        const l = o && db.listings.find((x) => x.id === o.listingId)
+        if (!o || !l || !o.riderId || !canRateDelivery({ ...o, category: l.category }, now())) throw new ApiError('invalid_input', 'You can rate a delivery to your door for 7 days after it arrives.')
+        const problem = ratingError(good, reasons)
+        if (problem) throw new ApiError('invalid_input', problem)
+        db.deliveryRatings[o.id] = { riderId: o.riderId, buyerId: me, good, reasons: [...reasons], ratedAt: iso(now()) }
+      }),
+
+    getMyRiderStats: () =>
+      tx((db) => {
+        const me = rider()
+        return riderStats(riderDoneJobs(db, me), ratingsOf(db, me), now())
+      }),
+
+    getRiderPerformance: () =>
+      tx((db): RiderPerformanceRow[] => {
+        requireAdmin()
+        const at = now()
+        return riderIds(db)
+          .map((id) => {
+            const ratings = ratingsOf(db, id)
+            const recentDowns = Object.entries(db.deliveryRatings)
+              .filter(([, r]) => r.riderId === id && !r.good && Date.parse(r.ratedAt) > at - STATS_DAYS * DAY)
+              .sort(([, a], [, b]) => b.ratedAt.localeCompare(a.ratedAt))
+              .slice(0, 5)
+              .map(([orderId, r]) => ({ orderId, productCode: getListingOr404(db, db.orders.find((o) => o.id === orderId)!.listingId).productCode, ratedAt: r.ratedAt, reasons: r.reasons }))
+            const name = riderName(db, id)
+            return { ...riderPerformance(riderDoneJobs(db, id), ratings, at), name, rider: { id, name, phone: db.riderApplications[id]?.phone ?? db.users.find((u) => u.id === id)?.phone ?? null }, recentDowns }
+          })
           .sort((a, b) => a.name.localeCompare(b.name))
       }),
 

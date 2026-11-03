@@ -1,5 +1,6 @@
 import type { ClaimInput } from './types'
 import type { StoreRole } from '@/domain/team'
+import type { DeliveryRatingReason } from '@/domain/deliveryRatings'
 import type { DiscountInput } from '@/domain/discounts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
@@ -58,6 +59,8 @@ export const keys = {
   riderFleets: ['rider-fleets'] as const,
   adminRiders: ['admin-riders'] as const,
   dispatchBoard: ['dispatch-board'] as const,
+  myRiderStats: ['my-rider-stats'] as const,
+  riderPerformance: ['rider-performance'] as const,
   riderLevel: ['rider-level'] as const,
   riderProfile: ['rider-profile'] as const,
   deliveryChat: (orderId: string) => ['delivery-chat', orderId] as const,
@@ -469,6 +472,12 @@ export const useRiderApplications = () => useQuery({ queryKey: keys.riderApplica
 export const useRiderFleets = () => useQuery({ queryKey: keys.riderFleets, queryFn: () => api.listRiderFleets(), enabled: useIs('admin') })
 export const useAdminRiders = () => useQuery({ queryKey: keys.adminRiders, queryFn: () => api.listRiders(), enabled: useIs('admin') })
 /** Riders move jobs on their own, so it keeps itself fresh. */
+export const useMyRiderStats = () => useQuery({ queryKey: keys.myRiderStats, queryFn: () => api.getMyRiderStats(), enabled: useIs('delivery') })
+export const useRiderPerformance = () => useQuery({ queryKey: keys.riderPerformance, queryFn: () => api.getRiderPerformance(), enabled: useIs('admin') })
+export function useRateDelivery() {
+  const invalidate = useInvalidateAll()
+  return useMutation({ mutationFn: ({ orderId, good, reasons }: { orderId: string; good: boolean; reasons: DeliveryRatingReason[] }) => api.rateDelivery(orderId, good, reasons), onSettled: invalidate })
+}
 export const useDispatchBoard = () => useQuery({ queryKey: keys.dispatchBoard, queryFn: () => api.getDispatchBoard(), enabled: useIs('admin'), refetchInterval: 30_000 })
 
 export function useDispatchActions() {
