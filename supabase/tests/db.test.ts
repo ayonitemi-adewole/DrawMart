@@ -465,7 +465,9 @@ describe('store → admin → draw', () => {
     expect(res.closing_ref).toBe(r.purchaseId)
     const v = await verifyDraw({ commitment: l.commitment, seed: res.seed, closingRef: res.closing_ref, ticketCount: 10, claimedWinner: res.winning_number })
     expect(v.valid).toBe(true)
-    expect(winner_user_id).toBe(res.winning_number <= 4 ? alice : bob)
+    // Numbers are random (pickTicketNumbers), so the winner is whoever holds the winning one.
+    const [{ user_id: holder }] = await admin<{ user_id: string }>(`select user_id from public.tickets where listing_id = $1 and number = $2`, [listingId, res.winning_number])
+    expect(winner_user_id).toBe(holder)
 
     // Loser gets 20% of what they spent as store credit; winner gets none.
     const loser = winner_user_id === alice ? bob : alice
