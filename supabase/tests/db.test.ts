@@ -2593,6 +2593,84 @@ describe('cart and checkout', () => {
       await asUser(otherRider, `select public.release_delivery($1)`, [ids[3]])
     })
 
+    it('keeps orders sharing one delivery fee on one trip, paid once', async () => {
+      const carrier = await newUser('fee-rider@example.com', { role: 'delivery' })
+      const b = await newUser('fee-buyer@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const small = await newProduct('Fee phone case', 300_000, 'Phones')
+      const big = await newProduct('Fee sofa', 400_000, 'Home')
+      await add(b, small)
+      await add(b, big)
+      const [one, two] = await checkout(b, details([small, big]))
+      for (const id of [one, two]) await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+      const held = async () => (await admin<{ n: number }>(`select private.rider_jobs_held($1) n`, [carrier]))[0].n
+      const riderOf = async (id: string) => (await admin<{ rider_id: string | null }>(`select rider_id from public.orders where id = $1`, [id]))[0].rider_id
+
+      // The second, made ready after the first was taken, joins the same rider; it's one job.
+      await asUser(store, `select public.dispatch_order($1)`, [one])
+      const pool = (await asUser<{ j: { id: string; feeGroup: string; payKobo: number }[] }>(carrier, `select public.delivery_jobs() j`))[0].j
+      await asUser(carrier, `select public.take_delivery($1)`, [one])
+      await asUser(store, `select public.dispatch_order($1)`, [two])
+      expect(await riderOf(two)).toBe(carrier)
+      expect(await held()).toBe(1)
+      expect(await asUser(carrier, `select 1 from public.notifications where kind = 'rider_job_added'`)).toHaveLength(1)
+      const mine = (await asUser<{ j: { id: string; feeGroup: string; payKobo: number }[] }>(carrier, `select public.delivery_jobs() j`))[0].j
+      expect(mine.find((j) => j.id === one)?.feeGroup).toBe(mine.find((j) => j.id === two)?.feeGroup)
+      // Pays at the sofa's size now, not the case's alone as the pool showed.
+      const payAt = async (size: string) => Number((await admin<{ p: string }>(
+        `select private.rider_pay(m.delivery_area, private.buyer_area(o), $2) p from public.orders o join public.merchants m on m.id = o.merchant_id where o.id = $1`, [one, size]))[0].p)
+      expect(pool.find((j) => j.id === one)!.payKobo).toBe(await payAt('small'))
+      expect(mine.find((j) => j.id === one)!.payKobo).toBe(await payAt('large'))
+
+      // Handed back together, and taken together.
+      await asUser(carrier, `select public.release_delivery($1)`, [one])
+      expect([await riderOf(one), await riderOf(two)]).toEqual([null, null])
+      await asUser(carrier, `select public.take_delivery($1)`, [two])
+      expect([await riderOf(one), await riderOf(two)]).toEqual([carrier, carrier])
+
+      // One failed visit for both pays once.
+      for (const id of [one, two]) {
+        await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [id])
+        await asUser(carrier, `select public.mark_arrived($1)`, [id])
+      }
+      await admin(`update public.orders set arrived_at = now() - interval '11 minutes' where id = any($1)`, [[one, two]])
+      for (const id of [one, two]) await asUser(carrier, `select public.fail_delivery_attempt($1, '/assets/door.jpg', 6.45, 3.43)`, [id])
+      const earned = async (kind: string) => admin<{ amount_kobo: string }>(`select amount_kobo from public.rider_earnings where rider_id = $1 and kind = $2`, [carrier, kind])
+      expect(await earned('failed_attempt')).toHaveLength(1)
+
+      // Delivered: one trip, one pay, at the largest package.
+      await admin(`update public.orders set failed_attempts = 0, redelivery_choice = null where id = any($1)`, [[one, two]])
+      const pins = await pinsOf(b)
+      for (const id of [one, two]) expect((await tryPin(carrier, id, pins[id])).confirmed).toBe(true)
+      const pay = await earned('delivery')
+      expect(pay).toHaveLength(1)
+      const [{ expected }] = await admin<{ expected: string }>(
+        `select private.rider_pay(m.delivery_area, private.buyer_area(o), 'large') expected from public.orders o join public.merchants m on m.id = o.merchant_id where o.id = $1`, [one])
+      expect(pay[0].amount_kobo).toBe(expected)
+    }, 60_000)
+
+    it('makes an order readied after the rest were collected its own trip, paid on its own', async () => {
+      const carrier = await newUser('fee-rider2@example.com', { role: 'delivery' })
+      const b = await newUser('fee-buyer2@example.com')
+      await asUser(b, `select public.top_up(5000000)`)
+      const first = await newProduct('Fee lamp A')
+      const second = await newProduct('Fee lamp B')
+      await add(b, first)
+      await add(b, second)
+      const [one, two] = await checkout(b, details([first, second]))
+      for (const id of [one, two]) await asUser(store, `select public.seller_confirm_order($1, '/assets/x.jpg')`, [id])
+      await asUser(store, `select public.dispatch_order($1)`, [one])
+      await asUser(carrier, `select public.take_delivery($1)`, [one])
+      await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [one])
+      await asUser(store, `select public.dispatch_order($1)`, [two])
+      expect(await admin(`select rider_id from public.orders where id = $1`, [two])).toEqual([{ rider_id: null }])
+      await asUser(carrier, `select public.take_delivery($1)`, [two])
+      await asUser(carrier, `select public.pass_collection($1, array['/assets/check.jpg'])`, [two])
+      const pins = await pinsOf(b)
+      for (const id of [one, two]) await tryPin(carrier, id, pins[id])
+      expect(await admin(`select 1 from public.rider_earnings where rider_id = $1 and kind = 'delivery'`, [carrier])).toHaveLength(2)
+    })
+
     it('alerts riders to jobs in their areas, a few an hour, without details on the lock screen', async () => {
       const near = await newUser('near-rider@example.com', { role: 'delivery' })
       const far = await newUser('far-rider@example.com', { role: 'delivery' })

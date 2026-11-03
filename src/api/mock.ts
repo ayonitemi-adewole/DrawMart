@@ -70,6 +70,7 @@ import { checkPin, isDeliveryPin, newDeliveryPin, type PinState } from '@/domain
 import { COLLECT_WARNING_MINUTES, MAX_RIDER_JOBS, collectBy, collectionOverdue, takeJobError } from '@/domain/riderLimits'
 import { DEFAULT_STUCK_LIMITS, assignJobError, claimStage, dispatchStuck, orderStage } from '@/domain/dispatch'
 import { tripRoomError } from '@/domain/trips'
+import { feeGroupOf, largestSize, tripAlreadyPaid } from '@/domain/feeGroups'
 import { riderAreasError, riderJobAlertAllowed } from '@/domain/riderAlerts'
 import { counterCodeError, counterReminderDue, counterReturnDue } from '@/domain/counter'
 import { NEW_RIDER_JOBS, NEW_RIDER_MAX_KOBO, RIDER_APPLICATION_ERROR_TEXT, newRiderLimitError, riderAccountBlocker, validateRiderApplication } from '@/domain/riderApplications'
@@ -84,7 +85,7 @@ import { MAX_MESSAGES_PER_MINUTE, messageError } from '@/domain/messages'
 import { fillDays, lagosDay } from '@/domain/metrics'
 import { BOOST_DEFAULTS, BOOST_ERROR_TEXT, DEFAULT_BOOST_PACKAGES, boostEndsAt, boostWindow, boostsUnlocked, canBoost } from '@/domain/boosts'
 import { SELLER_APPLICATION_ERROR_TEXT, normalizeNin, validateSellerApplication } from '@/domain/sellers'
-import type { CancelReason, Category, DrawResult, GeoPoint, Kobo, NotificationKind, PickupPoint, LedgerEntry, Listing, ListingStatus, Merchant, Order, Ticket, UnsoldPolicy, User } from '@/domain/types'
+import type { CancelReason, Category, DrawResult, GeoPoint, Kobo, NotificationKind, PackageSize, PickupPoint, LedgerEntry, Listing, ListingStatus, Merchant, Order, Ticket, UnsoldPolicy, User } from '@/domain/types'
 import {
   ApiError,
   type DrawMartApi,
@@ -1041,8 +1042,17 @@ function returnUndelivered(db: Db, o: MockOrder, now: number) {
 function earn(db: Db, riderId: string | null, kind: EarningKind, sourceKey: string, o: MockOrder, from: string | null, to: string | null, now: number) {
   if (!riderId || db.riderEarnings.some((e) => e.sourceKey === sourceKey && e.kind === kind)) return
   const l = db.listings.find((x) => x.id === o.listingId)!
+  // feeGroups.ts: an order's trip pays once, at its largest package (private.trip_paid, trip_size). Not a buyer's return.
+  const forOrder = sourceKey.split(':')[0] === o.id
+  if (forOrder) {
+    const paid = db.riderEarnings.flatMap((e) => {
+      const s = db.orders.find((x) => x.id === e.sourceKey.split(':')[0])
+      return s && s.id !== o.id && e.riderId === riderId && onTripWith(s, o) ? [{ feeGroup: feeGroup(s), riderId, takenAt: s.riderTakenAt ?? null, kind: e.kind, at: e.earnedAt }] : []
+    })
+    if (tripAlreadyPaid(paid, { feeGroup: feeGroup(o), riderId, takenAt: o.riderTakenAt ?? null, kind, at: iso(now) })) return
+  }
   const [a, b] = [from ?? to ?? DEFAULT_AREA, to ?? from ?? DEFAULT_AREA]
-  const amountKobo = kind === 'failed_attempt' ? db.riderPayRates.attemptKobo : tripPay(db.riderPayRates, a, b, packageSizeOf(l))
+  const amountKobo = kind === 'failed_attempt' ? db.riderPayRates.attemptKobo : tripPay(db.riderPayRates, a, b, forOrder ? tripSize(db, o) : packageSizeOf(l))
   if (amountKobo <= 0) return
   db.riderEarnings.push({
     id: uid('R'), riderId, sourceKey, kind, amountKobo, productCode: l.productCode, listingTitle: l.title, fromArea: kind === 'failed_attempt' ? null : a, toArea: kind === 'failed_attempt' ? null : b,
@@ -1054,19 +1064,31 @@ const buyerArea = (o: MockOrder) => (o.delivery.location ? nearestArea(o.deliver
 const pointArea = (o: MockOrder) => (o.pickupPoint ? nearestArea(o.pickupPoint.location, DELIVERY_AREAS) : null)
 
 /** Where a job goes from and to, and what it pays, as private.earn will work it out (jobPool.ts). */
-function poolPay(db: Db, o: MockOrder, fromArea: string | null, toArea: string | null, postedAt: string | null) {
+function poolPay(db: Db, o: MockOrder, fromArea: string | null, toArea: string | null, postedAt: string | null, paySize?: PackageSize) {
   const size = packageSizeOf(db.listings.find((l) => l.id === o.listingId)!)
-  return { fromArea, toArea, size, payKobo: tripPay(db.riderPayRates, fromArea ?? toArea ?? DEFAULT_AREA, toArea ?? fromArea ?? DEFAULT_AREA, size), postedAt }
+  return { fromArea, toArea, size, payKobo: tripPay(db.riderPayRates, fromArea ?? toArea ?? DEFAULT_AREA, toArea ?? fromArea ?? DEFAULT_AREA, paySize ?? size), postedAt }
 }
 function poolFields(db: Db, o: MockOrder) {
-  if (o.returnState === 'returning') return poolPay(db, o, o.atCounterAt ? pointArea(o) : buyerArea(o), sellerArea(db, o), o.cancelledAt ?? o.dispatchedAt)
-  return poolPay(db, o, o.handledBy === 'drawmart' ? null : sellerArea(db, o), o.fulfilment === 'pickup' ? pointArea(o) : buyerArea(o), o.dispatchedAt)
+  // What the trip pays, once for its fee group.
+  if (o.returnState === 'returning') return poolPay(db, o, o.atCounterAt ? pointArea(o) : buyerArea(o), sellerArea(db, o), o.cancelledAt ?? o.dispatchedAt, tripSize(db, o))
+  return poolPay(db, o, o.handledBy === 'drawmart' ? null : sellerArea(db, o), o.fulfilment === 'pickup' ? pointArea(o) : buyerArea(o), o.dispatchedAt, tripSize(db, o))
 }
 
 /** Everything a rider is holding: deliveries, refused items going back, and returns (private.rider_jobs_held). */
 function riderJobsHeld(db: Db, riderId: string): number {
-  return db.orders.filter((o) => (o.riderId === riderId && ((o.status === 'dispatched' && !o.atCounterAt) || o.returnState === 'returning')) || (o.claim && (o.claim.status === 'awaiting_pickup' || o.claim.status === 'returning') && db.claimDetails[o.claim.id]?.riderId === riderId)).length
+  // Orders sharing one delivery fee are one job.
+  const orders = new Set(db.orders.filter((o) => o.riderId === riderId && ((o.status === 'dispatched' && !o.atCounterAt) || o.returnState === 'returning')).map(feeGroup))
+  return orders.size + db.orders.filter((o) => o.claim && (o.claim.status === 'awaiting_pickup' || o.claim.status === 'returning') && db.claimDetails[o.claim.id]?.riderId === riderId).length
 }
+
+/** feeGroups.ts: orders sharing one delivery fee (private.fee_group). */
+const feeGroup = (o: MockOrder) => feeGroupOf({ id: o.id, checkoutId: o.checkoutId ?? null, merchantId: o.merchantId, isPrize: o.isPrize })
+/** On one trip with o: taken with it, or in the pool, the ready ones that would be (private.on_trip_with). */
+const onTripWith = (s: MockOrder, o: MockOrder) =>
+  s.id === o.id ||
+  (feeGroup(s) === feeGroup(o) &&
+    (o.riderId ? s.riderId === o.riderId && s.riderTakenAt === o.riderTakenAt : !s.riderId && s.status === 'dispatched' && !s.atCounterAt && o.status === 'dispatched' && !o.atCounterAt))
+const tripSize = (db: Db, o: MockOrder) => largestSize(db.orders.filter((s) => onTripWith(s, o)).map((s) => packageSizeOf(db.listings.find((l) => l.id === s.listingId)!)))
 
 /** payouts.ts payoutsFor decides; this records it. A line only ever moves forward. */
 function syncPayouts(db: Db, now: number) {
@@ -1246,6 +1268,11 @@ const riderTrusted = (db: Db, id: string) => {
 }
 /** riderApplications.ts newRiderLimitError, for this rider and order. */
 const riderLimit = (db: Db, id: string, o: MockOrder) => newRiderLimitError({ completed: riderCompleted(db, id), trusted: riderTrusted(db, id), orderKobo: o.priceKobo, isPrize: o.isPrize })
+/** The same, for everything that comes with it (private.group_limit). */
+const groupLimit = (db: Db, id: string, o: MockOrder) => {
+  const trip = db.orders.filter((s) => onTripWith(s, o))
+  return newRiderLimitError({ completed: riderCompleted(db, id), trusted: riderTrusted(db, id), orderKobo: trip.reduce((n, s) => n + s.priceKobo, 0), isPrize: trip.some((s) => s.isPrize) })
+}
 
 /** Open from collection until it's delivered, handed in, or goes back (private.delivery_chat_open). */
 const chatOpen = (o: MockOrder) => o.status === 'dispatched' && o.fulfilment === 'delivery' && !!o.riderId && !!o.collectedAt && !o.atCounterAt
@@ -1449,13 +1476,20 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     const full = takeJobError(riderJobsHeld(db, me))
     if (full) throw new ApiError('invalid_input', full)
     const limited = db.orders.find((x) => x.id === orderId)
-    const limit = limited && riderLimit(db, me, limited)
+    const limit = limited && groupLimit(db, me, limited)
     if (limit) throw new ApiError('invalid_input', limit)
     const o = db.orders.find((x) => x.id === orderId && !x.riderId && ((x.status === 'dispatched' && !x.atCounterAt) || waitingAtCounter(x)))
     if (!o) throw new ApiError('invalid_input', 'Another rider has taken this delivery.')
-    o.riderId = me
-    o.riderTakenAt = iso(now())
-    if (o.isPrize) o.collectedAt = iso(now())
+    takeGroup(db, me, o)
+  }
+  /** private.take_group: the order and every one ready on the same fee, in the same place. */
+  function takeGroup(db: Db, riderId: string, o: MockOrder) {
+    const at = iso(now())
+    const same = (x: MockOrder) => (waitingAtCounter(o) ? waitingAtCounter(x) : x.status === 'dispatched' && !x.atCounterAt)
+    for (const x of db.orders.filter((x) => x.id === o.id || (feeGroup(x) === feeGroup(o) && !x.riderId && same(x)))) {
+      Object.assign(x, { riderId, riderTakenAt: at })
+      if (x.isPrize) x.collectedAt = at
+    }
   }
   /** Admins, or nobody signed in (the demo). */
   function requireAdmin() {
@@ -2035,6 +2069,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
               id: o.id, quantity: o.quantity, confirmPhoto: o.confirmPhoto, collected: !!o.collectedAt, returning: o.returnState === 'returning', productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, fulfilment: o.fulfilment, status: o.status,
               dispatchedAt: o.dispatchedAt, deliveredAt: o.deliveredAt, mine: !!o.riderId,
               collectKey: waitingAtCounter(o) ? `point:${o.pickupPoint?.id}` : o.handledBy === 'drawmart' ? 'drawmart' : `shop:${o.merchantId}`,
+              feeGroup: feeGroup(o),
               collectBy: o.riderId === me && o.status === 'dispatched' && !o.collectedAt && o.riderTakenAt ? collectBy(o.riderTakenAt) : null,
               atCounterAt: o.status === 'dispatched' || o.status === 'delivered' ? o.atCounterAt : null, waitingAtCounter: waitingAtCounter(o),
               arrivedAt: o.arrivedAt ?? null, failedAttempts: o.failedAttempts, awaitingBuyer: o.status === 'dispatched' && o.failedAttempts === 1 && !o.redeliveryChoice,
@@ -2055,10 +2090,11 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
       tx((db) => {
         const me = rider()
         if (orderIds.length < 2 || new Set(orderIds).size !== orderIds.length) throw new ApiError('invalid_input', 'Choose two or more different jobs.')
-        const room = tripRoomError(riderJobsHeld(db, me), orderIds.length)
+        const groups = new Set(db.orders.filter((x) => orderIds.includes(x.id)).map(feeGroup))
+        const room = tripRoomError(riderJobsHeld(db, me), groups.size)
         if (room) throw new ApiError('invalid_input', room)
         // All or none, like take_deliveries: a failure part-way leaves the stored data as it was.
-        for (const id of orderIds) takeOne(db, me, id)
+        for (const id of orderIds) if (db.orders.find((x) => x.id === id)?.riderId !== me) takeOne(db, me, id)
       }),
 
     releaseDelivery: (orderId) =>
@@ -2066,15 +2102,15 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         const me = rider()
         const back = db.orders.find((x) => x.id === orderId && x.riderId === me && waitingAtCounter(x))
         if (back) {
-          Object.assign(back, { riderId: null, riderTakenAt: null })
+          for (const x of db.orders.filter((x) => feeGroup(x) === feeGroup(back) && x.riderId === me && waitingAtCounter(x))) Object.assign(x, { riderId: null, riderTakenAt: null })
           return
         }
         const o = db.orders.find((x) => x.id === orderId && x.status === 'dispatched' && x.riderId === me && !x.atCounterAt)
         if (!o) throw new ApiError('invalid_input', 'Only deliveries you’re carrying can be handed back.')
-        o.riderId = null
-        o.riderTakenAt = null
-        o.collectedAt = null
-        o.collectionPhotos = null
+        // The whole group goes back together.
+        for (const x of db.orders.filter((x) => feeGroup(x) === feeGroup(o) && x.riderId === me && x.status === 'dispatched' && !x.atCounterAt)) {
+          Object.assign(x, { riderId: null, riderTakenAt: null, collectedAt: null, collectionPhotos: null })
+        }
         alertNewJob(db, o, me, now())
       }),
 
@@ -2236,12 +2272,11 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           kind === 'delivery'
             ? db.orders.find((x) => x.id === id && !x.riderId && ((x.status === 'dispatched' && !x.atCounterAt) || waitingAtCounter(x)))
             : db.orders.find((x) => x.claim?.id === id && x.claim.status === 'awaiting_pickup' && !db.claimDetails[id]?.riderId)
-        const limit = o && riderLimit(db, riderId, o)
+        const limit = o && (kind === 'delivery' ? groupLimit(db, riderId, o) : riderLimit(db, riderId, o))
         if (limit) throw new ApiError('invalid_input', `This rider is new. ${limit}`)
         if (!o) throw new ApiError('invalid_input', `Only ${kind === 'delivery' ? 'jobs' : 'returns'} waiting in the pool can be assigned. A rider may have just taken it.`)
         if (kind === 'delivery') {
-          Object.assign(o, { riderId, riderTakenAt: iso(now()) })
-          if (o.isPrize) o.collectedAt = iso(now())
+          takeGroup(db, riderId, o)
         } else {
           Object.assign(db.claimDetails[id], { riderId, takenAt: iso(now()) })
         }
@@ -2255,7 +2290,8 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           const o = db.orders.find((x) => x.id === id && x.riderId && ((x.status === 'dispatched' && !x.atCounterAt && !x.collectedAt) || waitingAtCounter(x)))
           if (!o?.riderId) throw new ApiError('invalid_input', 'Only jobs the rider hasn’t collected yet can be taken back.')
           const was = o.riderId
-          Object.assign(o, { riderId: null, riderTakenAt: null, collectionPhotos: null })
+          const trip = db.orders.filter((x) => onTripWith(x, o) && ((x.status === 'dispatched' && !x.atCounterAt && !x.collectedAt) || waitingAtCounter(x)))
+          for (const x of trip) Object.assign(x, { riderId: null, riderTakenAt: null, collectionPhotos: null })
           notify(db, was, 'rider_job_taken_back', o.listingId, iso(now()))
           alertNewJob(db, o, was, now())
         } else {
@@ -3555,6 +3591,13 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
         if (o.handledBy === 'store' && !db.shopPickups[o.merchantId]) throw new ApiError('invalid_input', 'Add where riders collect from first.')
         o.status = 'dispatched'
         o.dispatchedAt = iso(now())
+        // feeGroups.ts: joins the rider taking the rest of its group, if they haven't collected yet (private.join_rider_on_ready).
+        const s = o.isPrize ? undefined : db.orders.filter((x) => x.id !== o.id && feeGroup(x) === feeGroup(o) && x.status === 'dispatched' && x.riderId && !x.atCounterAt).sort((a, b) => (a.riderTakenAt ?? '').localeCompare(b.riderTakenAt ?? ''))[0]
+        if (s?.riderId && !db.orders.some((x) => onTripWith(x, s) && x.collectedAt)) {
+          Object.assign(o, { riderId: s.riderId, riderTakenAt: s.riderTakenAt })
+          notify(db, s.riderId, 'rider_job_added', o.listingId, iso(now()))
+          return
+        }
         alertNewJob(db, o, null, now())
       }),
 

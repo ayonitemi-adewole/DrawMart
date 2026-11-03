@@ -18,6 +18,8 @@ function describe(n: NotificationView, store: boolean): { icon: IconComponent; t
       return { icon: TruckIcon, title: 'You’re approved to ride', body: 'Add your photo and bank account, then take your first job.', to: '/delivery' }
     case 'rider_job_assigned':
       return { icon: TruckIcon, title: `A job for you: ${n.listingTitle}`, body: 'DrawMart gave you this job. Collect it within the time shown.', to: '/delivery?tab=mine' }
+    case 'rider_job_added':
+      return { icon: TruckIcon, title: `One more for the same buyer: ${n.listingTitle}`, body: 'It’s from the same seller and order. Collect it with the rest: the trip pays once.', to: '/delivery?tab=mine' }
     case 'rider_job_taken_back':
       return { icon: XIcon, title: `Taken back: ${n.listingTitle}`, body: 'DrawMart moved this job. You don’t need to collect it.', to: '/delivery?tab=mine' }
     case 'rider_paid':

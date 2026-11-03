@@ -343,6 +343,8 @@ export interface DeliveryJob {
   mine: boolean
   /** Where it's collected, so jobs from one place can go on one trip (trips.ts): 'shop:<id>', 'point:<id>' or 'drawmart'. */
   collectKey: string
+  /** Orders sharing one delivery fee travel together and pay once (feeGroups.ts). payKobo is for the whole trip. */
+  feeGroup: string
   /** Areas only, never an address (jobPool.ts). Null where it isn't known, e.g. DrawMart's escrow. */
   fromArea: string | null
   toArea: string | null

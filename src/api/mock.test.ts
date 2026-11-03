@@ -1398,12 +1398,56 @@ describe('mock api', () => {
 
       await expect(api.takeDeliveries([ids[0]])).rejects.toThrow('two or more')
       await api.takeDelivery(ids[0])
-      await expect(api.takeDeliveries([ids[1], ids[0]])).rejects.toThrow('Another rider')
-      expect((await api.listDeliveryJobs()).find((j) => j.id === ids[1])?.mine).toBe(false) // none taken
-      await expect(api.takeDeliveries(ids.slice(1, 6))).rejects.toThrow('That’s 5 jobs, and you have room for 4 more.')
-      await api.takeDeliveries(ids.slice(1, 5))
+      // One already yours is skipped.
+      await api.takeDeliveries([ids[0], ids[1]])
+      await expect(api.takeDeliveries(ids.slice(2, 6))).rejects.toThrow('That’s 4 jobs, and you have room for 3 more.')
+      expect((await api.listDeliveryJobs()).find((j) => j.id === ids[2])?.mine).toBe(false) // none taken
+      await api.takeDeliveries(ids.slice(2, 5))
       const mine = (await api.listDeliveryJobs()).filter((j) => j.mine).map((j) => j.id)
       expect(mine.sort()).toEqual(ids.slice(0, 5).sort())
+    })
+  })
+
+  describe('pay per delivery fee', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('keeps one seller’s orders in one checkout on one trip, paid once at the largest package', async () => {
+      const c = { t: Date.parse('2026-11-03T10:00:00+01:00') }
+      const api = make(() => c.t)
+      await as(api, 'store')
+      const caseP = await api.createProduct({ title: 'Fee case', description: '', category: 'Phones', priceKobo: k(3_000), stock: 5 })
+      const sofa = await api.createProduct({ title: 'Fee sofa', description: '', category: 'Home', priceKobo: k(4_000), stock: 5 })
+      await as(api, 'admin')
+      for (const p of [caseP, sofa]) await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const [one, two] = await api.checkout({ listingIds: [caseP.id, sofa.id], fulfilment: 'delivery', delivery, pickupPointId: null })
+      await as(api, 'store')
+      for (const o of [one, two]) await api.sellerConfirmOrder(o.id, '/assets/c.jpg')
+      await api.dispatchOrder(one.id)
+
+      await as(api, 'rider')
+      await api.takeDelivery(one.id)
+      await as(api, 'store')
+      await api.dispatchOrder(two.id)
+      await as(api, 'rider')
+      const mine = (await api.listDeliveryJobs()).filter((j) => j.mine)
+      expect(mine.map((j) => j.id).sort()).toEqual([one.id, two.id].sort())
+      expect(mine[0].feeGroup).toBe(mine[1].feeGroup)
+      expect((await api.listNotifications()).some((n) => n.kind === 'rider_job_added')).toBe(true)
+
+      // Handed back together.
+      await api.releaseDelivery(one.id)
+      expect((await api.listDeliveryJobs()).filter((j) => j.mine)).toEqual([])
+      await api.takeDelivery(two.id)
+      for (const o of [one, two]) await api.passCollection(o.id, ['/assets/a.jpg'])
+      for (const o of [one, two]) await api.confirmDelivery(o.id, o.deliveryPin!)
+      const deliveries = (await api.listMyEarnings()).filter((l) => l.kind === 'delivery' && [caseP.title, sofa.title].includes(l.listingTitle))
+      expect(deliveries).toHaveLength(1)
+      await as(api, 'admin')
+      const rates = await api.getRiderPayRates()
+      expect(deliveries[0].amountKobo).toBe(tripPay(rates, deliveries[0].fromArea!, deliveries[0].toArea!, 'large'))
     })
   })
 

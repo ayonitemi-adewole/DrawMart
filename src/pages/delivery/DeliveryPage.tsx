@@ -24,6 +24,7 @@ import { RouteStops, TripList } from './Trips'
 import { directionsUrl } from '@/domain/location'
 import { matchesProductSearch } from '@/domain/productCode'
 import { takeJobError } from '@/domain/riderLimits'
+import { mergeFeeGroups } from '@/domain/feeGroups'
 import { dateTime, timeOfDay } from '@/lib/time'
 
 const RouteMap = lazy(() => import('@/components/RouteMap'))
@@ -55,7 +56,8 @@ export function DeliveryPage() {
   const [search, setSearch] = useState('')
   const jobs = q.data ?? []
   const mineCount = jobs.filter((j) => inTab(j, 'mine')).length
-  const held = mineCount + (returns.data ?? []).filter((r) => r.mine).length
+  // Orders sharing one delivery fee count as one job.
+  const held = new Set(jobs.filter((j) => inTab(j, 'mine')).map((j) => j.feeGroup)).size + (returns.data ?? []).filter((r) => r.mine).length
   // The server has the final say: admins can change the limit.
   const full = takeJobError(held)
   const tab = TABS.find((t) => t === params.get('tab')) ?? (q.data && !mineCount ? 'available' : 'mine')
@@ -63,6 +65,8 @@ export function DeliveryPage() {
   const matching = jobs.filter((j) => inTab(j, tab) && matchesProductSearch(search, j.productCode, j.listingTitle, j.collectFrom.name, destination(j)))
   // Only the pool is filtered and sorted: your own jobs are always all there.
   const shown = tab === 'available' ? pool.view.apply(matching) : matching
+  // In the pool, orders sharing one delivery fee are one job: one card, one pay.
+  const cards = tab === 'available' ? mergeFeeGroups(shown) : shown.map((j) => ({ lead: j, jobs: [j] }))
 
   return (
     <div className="flex flex-col gap-6">
@@ -78,7 +82,7 @@ export function DeliveryPage() {
         className="w-full sm:w-auto sm:self-start"
         options={[
           { value: 'mine', label: 'Yours', count: mineCount },
-          { value: 'available', label: 'To take', count: jobs.filter((j) => inTab(j, 'available')).length },
+          { value: 'available', label: 'To take', count: mergeFeeGroups(jobs.filter((j) => inTab(j, 'available'))).length },
           { value: 'returns', label: 'Returns', count: returns.data?.length ?? 0 },
           { value: 'done', label: 'Done' },
         ]}
@@ -103,10 +107,10 @@ export function DeliveryPage() {
         />
       ) : (
         <>
-          {tab === 'available' ? <TripList jobs={shown} held={held} /> : tab === 'mine' ? <RouteStops jobs={shown} /> : null}
+          {tab === 'available' ? <TripList groups={cards} held={held} /> : tab === 'mine' ? <RouteStops jobs={shown} /> : null}
           <div className="grid gap-3 lg:grid-cols-2">
-            {shown.map((j) => (
-              <JobCard key={j.id} job={j} tab={tab} />
+            {cards.map((g) => (
+              <JobCard key={g.lead.id} job={g.lead} items={g.jobs} tab={tab} />
             ))}
           </div>
         </>
@@ -115,7 +119,8 @@ export function DeliveryPage() {
   )
 }
 
-function JobCard({ job: j, tab }: { job: DeliveryJob; tab: Tab }) {
+/** `items`: in the pool, every order that comes with this one on its delivery fee. */
+function JobCard({ job: j, items = [j], tab }: { job: DeliveryJob; items?: DeliveryJob[]; tab: Tab }) {
   const { take } = useDeliveryActions()
   const navigate = useNavigate()
   const toast = useToast()
@@ -125,6 +130,16 @@ function JobCard({ job: j, tab }: { job: DeliveryJob; tab: Tab }) {
       <div className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
         <strong className="leading-tight">{j.listingTitle}{j.quantity > 1 ? ` × ${j.quantity}` : ''}</strong>
         <ProductId code={j.productCode} />
+        {items.length > 1 ? (
+          <span className="flex flex-col gap-0.5 text-xs">
+            <span className="font-bold">+ {items.length - 1} more for the same buyer, on one trip:</span>
+            {items.slice(1).map((x) => (
+              <span key={x.id} className="text-muted">
+                {x.listingTitle}{x.quantity > 1 ? ` × ${x.quantity}` : ''} · {x.productCode}
+              </span>
+            ))}
+          </span>
+        ) : null}
         <span className="text-xs text-subtle">{route(j)}</span>
         {tab === 'mine' && j.collectBy ? <CollectByLine at={j.collectBy} /> : null}
         {tab === 'available' || tab === 'mine' ? <JobFacts job={j} /> : null}
@@ -151,7 +166,7 @@ function JobCard({ job: j, tab }: { job: DeliveryJob; tab: Tab }) {
             disabled={take.isPending || j.locked}
             onClick={() => take.mutate(j.id, { onSuccess: () => navigate(`/delivery/${j.id}`), onError: (e) => toast(errorMessage(e), 'error') })}
           >
-            <TruckIcon size={16} /> Take this delivery
+            <TruckIcon size={16} /> {items.length > 1 ? `Take all ${items.length}` : 'Take this delivery'}
           </Button>
         </>
       ) : null}

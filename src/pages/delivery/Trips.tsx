@@ -13,8 +13,10 @@ import { planStops, poolTrips, tripRoomError, type StopJob, type Trip } from '@/
 const collectName = (j: DeliveryJob) => (j.waitingAtCounter ? (j.pickupPoint?.name ?? 'Pickup location') : j.collectFrom.name)
 
 /** Jobs in the pool that can go on one trip, in the pool's own order. */
-export function TripList({ jobs, held }: { jobs: DeliveryJob[]; held: number }) {
-  const trips = poolTrips(jobs)
+export function TripList({ groups, held }: { groups: { lead: DeliveryJob; jobs: DeliveryJob[] }[]; held: number }) {
+  // Each group is one job already, carried by its first order.
+  const items = new Map(groups.map((g) => [g.lead.id, g.jobs]))
+  const trips = poolTrips(groups.map((g) => g.lead))
   if (!trips.length) return null
   return (
     <section className="flex flex-col gap-3" aria-labelledby="trips-title">
@@ -24,18 +26,20 @@ export function TripList({ jobs, held }: { jobs: DeliveryJob[]; held: number }) 
       </div>
       <div className="grid gap-3 lg:grid-cols-2">
         {trips.map((t) => (
-          <TripCard key={t.key} trip={t} held={held} />
+          <TripCard key={t.key} trip={t} items={items} held={held} />
         ))}
       </div>
     </section>
   )
 }
 
-function TripCard({ trip: t, held }: { trip: Trip<DeliveryJob>; held: number }) {
+function TripCard({ trip: t, items, held }: { trip: Trip<DeliveryJob>; items: Map<string, DeliveryJob[]>; held: number }) {
   const { takeTrip } = useDeliveryActions()
   const navigate = useNavigate()
   const toast = useToast()
+  // The server takes each group with its first order; the rider sees every item.
   const ids = t.jobs.map((j) => j.id)
+  const all = t.jobs.flatMap((lead) => items.get(lead.id) ?? [lead])
   const noRoom = tripRoomError(held, ids.length)
   const first = t.jobs[0]
   return (
@@ -43,14 +47,14 @@ function TripCard({ trip: t, held }: { trip: Trip<DeliveryJob>; held: number }) 
       <div className="flex flex-col gap-0.5">
         <strong className="flex items-center gap-2 leading-tight">
           {t.kind === 'same_pickup' ? <StoreIcon size={16} className="shrink-0 text-brand" /> : <MapPinIcon size={16} className="shrink-0 text-brand" />}
-          {t.kind === 'same_pickup' ? `${t.jobs.length} from ${collectName(first)}` : `${t.jobs.length} going ${areaName(first.fromArea)} → ${areaName(first.toArea)}`}
+          {t.kind === 'same_pickup' ? `${all.length} from ${collectName(first)}` : `${all.length} going ${areaName(first.fromArea)} → ${areaName(first.toArea)}`}
         </strong>
         <span className="flex items-center gap-1 text-sm font-bold">
           <NairaIcon size={14} className="text-brand" /> Pays {formatNaira(t.payKobo)} in all
         </span>
       </div>
       <ul className="flex flex-col gap-1.5 text-sm">
-        {t.jobs.map((j) => (
+        {all.map((j) => (
           <li key={j.id} className="flex flex-col">
             <span className="truncate">
               {j.listingTitle}
@@ -69,14 +73,14 @@ function TripCard({ trip: t, held }: { trip: Trip<DeliveryJob>; held: number }) 
         onClick={() =>
           takeTrip.mutate(ids, {
             onSuccess: () => {
-              toast(`Taken: ${ids.length} jobs. Your route is under Yours.`)
+              toast(`Taken: ${all.length} items. Your route is under Yours.`)
               navigate('/delivery?tab=mine')
             },
             onError: (e) => toast(errorMessage(e), 'error'),
           })
         }
       >
-        <TruckIcon size={16} /> Take all {ids.length}
+        <TruckIcon size={16} /> Take all {all.length}
       </Button>
     </Card>
   )
