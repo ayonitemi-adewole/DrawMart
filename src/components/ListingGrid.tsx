@@ -7,7 +7,7 @@ import { ListingCard } from "./ListingCard";
 /** The listing grid used on full lists (/browse): 1 to 5 cards a row by screen width. */
 export function ListingGrid({ listings }: { listings: ListingView[] }) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+    <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
       {listings.map((l, i) => (
         <ListingCard
           key={l.id}

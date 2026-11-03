@@ -97,7 +97,7 @@ export function BuyNowPanel({ listing: l }: { listing: ListingView }) {
             </Link>
           ) : (
             <Button size="lg" loading={add.isPending} onClick={() => add.mutate({ listingId: l.id, quantity }, { onSuccess: () => toast('Added to your cart.'), onError: (e) => toast(errorMessage(e), 'error') })}>
-              <CartIcon size={18} /> Add to cart
+              <CartIcon size={18} /> Add {quantity > 1 ? `${quantity} ` : ''}to cart
             </Button>
           )}
           {ownItem ? null : (
