@@ -509,6 +509,7 @@ export function useDeliveryActions() {
   const invalidate = useInvalidateAll()
   return {
     take: useMutation({ mutationFn: (orderId: string) => api.takeDelivery(orderId), onSettled: invalidate }),
+    takeTrip: useMutation({ mutationFn: (orderIds: string[]) => api.takeDeliveries(orderIds), onSettled: invalidate }),
     release: useMutation({ mutationFn: (orderId: string) => api.releaseDelivery(orderId), onSettled: invalidate }),
     confirm: useMutation({ mutationFn: ({ id, pin }: { id: string; pin: string }) => api.confirmDelivery(id, pin), onSettled: invalidate }),
     arrived: useMutation({ mutationFn: (orderId: string) => api.markArrived(orderId), onSettled: invalidate }),

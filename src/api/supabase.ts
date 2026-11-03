@@ -1489,6 +1489,7 @@ export function createSupabaseApi(client: SupabaseClient, opts: SupabaseApiOptio
     setRiderAreas: (areas) => rpc('set_rider_areas', { p_areas: areas }),
     listDeliveryJobs: () => rpc<DeliveryJob[]>('delivery_jobs'),
     takeDelivery: (orderId) => rpc('take_delivery', { p_order_id: orderId }),
+    takeDeliveries: (orderIds) => rpc('take_deliveries', { p_order_ids: orderIds }),
     releaseDelivery: (orderId) => rpc('release_delivery', { p_order_id: orderId }),
     confirmDelivery: (orderId, pin) => rpc<PinResult>('confirm_delivery', { p_order_id: orderId, p_pin: pin }),
     getRiderLevel: () => rpc<RiderLevel>('my_rider_level'),

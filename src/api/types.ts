@@ -341,6 +341,8 @@ export interface DeliveryJob {
   deliveredAt: string | null
   /** This rider has taken it. The rest are in the pool for anyone to take. */
   mine: boolean
+  /** Where it's collected, so jobs from one place can go on one trip (trips.ts): 'shop:<id>', 'point:<id>' or 'drawmart'. */
+  collectKey: string
   /** Areas only, never an address (jobPool.ts). Null where it isn't known, e.g. DrawMart's escrow. */
   fromArea: string | null
   toArea: string | null
@@ -1161,6 +1163,8 @@ export interface DrawMartApi {
   /** Orders ready to be taken, and this rider's own. */
   listDeliveryJobs(): Promise<DeliveryJob[]>
   takeDelivery(orderId: string): Promise<void>
+  /** Several on one trip: all or none, within the job limit (trips.ts). */
+  takeDeliveries(orderIds: string[]): Promise<void>
   /** Back in the pool. */
   releaseDelivery(orderId: string): Promise<void>
   /** The only way an order becomes delivered. A wrong PIN isn't an error: see the result. */

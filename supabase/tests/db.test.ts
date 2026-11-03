@@ -2567,6 +2567,32 @@ describe('cart and checkout', () => {
       expect((await admin<{ reason: string }>(`select reason from private.job_releases where order_id = $1`, [ids[5]])).map((r) => r.reason)).toEqual(['handed_back'])
     })
 
+    it('takes several jobs on one trip, all or none, within the limit', async () => {
+      const tripper = await newUser('trip-rider@example.com', { role: 'delivery' })
+      const ids: string[] = []
+      for (let i = 0; i < 4; i++) ids.push((await readyOrder(`trip${i}@example.com`)).id)
+      const pool = (await asUser<{ j: { id: string; collectKey: string }[] }>(tripper, `select public.delivery_jobs() j`))[0].j
+      const [{ shop }] = await admin<{ shop: string }>(`select merchant_id shop from public.orders where id = $1`, [ids[0]])
+      for (const id of ids) expect(pool.find((j) => j.id === id)?.collectKey).toBe(`shop:${shop}`)
+
+      const takeAll = (who: string, list: string[]) => asUser(who, `select public.take_deliveries($1)`, [list])
+      await expectFail(takeAll(store, ids.slice(0, 2)), 'forbidden')
+      await expectFail(takeAll(tripper, [ids[0]]), 'invalid_input')
+      await expectFail(takeAll(tripper, [ids[0], ids[0]]), 'invalid_input')
+      // One already gone: none are taken.
+      await asUser(otherRider, `select public.take_delivery($1)`, [ids[3]])
+      await expectFail(takeAll(tripper, [ids[2], ids[3]]), 'invalid_input')
+      expect(await admin(`select rider_id from public.orders where id = $1`, [ids[2]])).toEqual([{ rider_id: null }])
+
+      await admin(`update public.app_settings set rider_max_jobs = 2`)
+      await asUser(tripper, `select public.take_delivery($1)`, [ids[2]])
+      expect((await expectFail(takeAll(tripper, ids.slice(0, 2)), 'invalid_input')).detail).toBe('That’s 2 jobs, and you have room for 1 more.')
+      await admin(`update public.app_settings set rider_max_jobs = 5`)
+      await takeAll(tripper, ids.slice(0, 2))
+      expect(await admin(`select count(*)::int n from public.orders where rider_id = $1 and id = any($2)`, [tripper, ids])).toEqual([{ n: 3 }])
+      await asUser(otherRider, `select public.release_delivery($1)`, [ids[3]])
+    })
+
     it('alerts riders to jobs in their areas, a few an hour, without details on the lock screen', async () => {
       const near = await newUser('near-rider@example.com', { role: 'delivery' })
       const far = await newUser('far-rider@example.com', { role: 'delivery' })

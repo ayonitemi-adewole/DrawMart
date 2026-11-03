@@ -69,6 +69,7 @@ import {
 import { checkPin, isDeliveryPin, newDeliveryPin, type PinState } from '@/domain/delivery'
 import { COLLECT_WARNING_MINUTES, MAX_RIDER_JOBS, collectBy, collectionOverdue, takeJobError } from '@/domain/riderLimits'
 import { DEFAULT_STUCK_LIMITS, assignJobError, claimStage, dispatchStuck, orderStage } from '@/domain/dispatch'
+import { tripRoomError } from '@/domain/trips'
 import { riderAreasError, riderJobAlertAllowed } from '@/domain/riderAlerts'
 import { counterCodeError, counterReminderDue, counterReturnDue } from '@/domain/counter'
 import { NEW_RIDER_JOBS, NEW_RIDER_MAX_KOBO, RIDER_APPLICATION_ERROR_TEXT, newRiderLimitError, riderAccountBlocker, validateRiderApplication } from '@/domain/riderApplications'
@@ -1442,6 +1443,20 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
     if (o.failedAttempts === 1 && o.redeliveryChoice !== 'redeliver') throw new ApiError('invalid_input', 'The buyer hasn’t chosen a new time yet.')
     return o
   }
+  /** take_delivery: within the job limit and the new-rider limits. */
+  function takeOne(db: Db, me: string, orderId: string) {
+    if (counterPoint()) throw new ApiError('forbidden', 'Counter staff don’t take deliveries.')
+    const full = takeJobError(riderJobsHeld(db, me))
+    if (full) throw new ApiError('invalid_input', full)
+    const limited = db.orders.find((x) => x.id === orderId)
+    const limit = limited && riderLimit(db, me, limited)
+    if (limit) throw new ApiError('invalid_input', limit)
+    const o = db.orders.find((x) => x.id === orderId && !x.riderId && ((x.status === 'dispatched' && !x.atCounterAt) || waitingAtCounter(x)))
+    if (!o) throw new ApiError('invalid_input', 'Another rider has taken this delivery.')
+    o.riderId = me
+    o.riderTakenAt = iso(now())
+    if (o.isPrize) o.collectedAt = iso(now())
+  }
   /** Admins, or nobody signed in (the demo). */
   function requireAdmin() {
     const role = readSession()?.role
@@ -2019,6 +2034,7 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
             return {
               id: o.id, quantity: o.quantity, confirmPhoto: o.confirmPhoto, collected: !!o.collectedAt, returning: o.returnState === 'returning', productCode: l.productCode, listingTitle: l.title, listingImage: l.images[0] ?? null, category: l.category, fulfilment: o.fulfilment, status: o.status,
               dispatchedAt: o.dispatchedAt, deliveredAt: o.deliveredAt, mine: !!o.riderId,
+              collectKey: waitingAtCounter(o) ? `point:${o.pickupPoint?.id}` : o.handledBy === 'drawmart' ? 'drawmart' : `shop:${o.merchantId}`,
               collectBy: o.riderId === me && o.status === 'dispatched' && !o.collectedAt && o.riderTakenAt ? collectBy(o.riderTakenAt) : null,
               atCounterAt: o.status === 'dispatched' || o.status === 'delivered' ? o.atCounterAt : null, waitingAtCounter: waitingAtCounter(o),
               arrivedAt: o.arrivedAt ?? null, failedAttempts: o.failedAttempts, awaitingBuyer: o.status === 'dispatched' && o.failedAttempts === 1 && !o.redeliveryChoice,
@@ -2033,20 +2049,16 @@ export function createMockApi(opts: MockOptions = {}): DrawMartApi {
           })
       }),
 
-    takeDelivery: (orderId) =>
+    takeDelivery: (orderId) => tx((db) => takeOne(db, rider(), orderId)),
+
+    takeDeliveries: (orderIds) =>
       tx((db) => {
         const me = rider()
-        if (counterPoint()) throw new ApiError('forbidden', 'Counter staff don’t take deliveries.')
-        const full = takeJobError(riderJobsHeld(db, me))
-        if (full) throw new ApiError('invalid_input', full)
-        const limited = db.orders.find((x) => x.id === orderId)
-        const limit = limited && riderLimit(db, me, limited)
-        if (limit) throw new ApiError('invalid_input', limit)
-        const o = db.orders.find((x) => x.id === orderId && !x.riderId && ((x.status === 'dispatched' && !x.atCounterAt) || waitingAtCounter(x)))
-        if (!o) throw new ApiError('invalid_input', 'Another rider has taken this delivery.')
-        o.riderId = me
-        o.riderTakenAt = iso(now())
-        if (o.isPrize) o.collectedAt = iso(now())
+        if (orderIds.length < 2 || new Set(orderIds).size !== orderIds.length) throw new ApiError('invalid_input', 'Choose two or more different jobs.')
+        const room = tripRoomError(riderJobsHeld(db, me), orderIds.length)
+        if (room) throw new ApiError('invalid_input', room)
+        // All or none, like take_deliveries: a failure part-way leaves the stored data as it was.
+        for (const id of orderIds) takeOne(db, me, id)
       }),
 
     releaseDelivery: (orderId) =>

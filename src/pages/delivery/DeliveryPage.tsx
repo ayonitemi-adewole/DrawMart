@@ -20,6 +20,7 @@ import { JobFacts, PoolControls, usePoolView } from './PoolControls'
 import { DeliveryChatSheet } from '@/components/DeliveryChat'
 import { firstName } from '@/domain/deliveryChat'
 import { ReturnJobList } from './ReturnJobs'
+import { RouteStops, TripList } from './Trips'
 import { directionsUrl } from '@/domain/location'
 import { matchesProductSearch } from '@/domain/productCode'
 import { takeJobError } from '@/domain/riderLimits'
@@ -54,8 +55,9 @@ export function DeliveryPage() {
   const [search, setSearch] = useState('')
   const jobs = q.data ?? []
   const mineCount = jobs.filter((j) => inTab(j, 'mine')).length
+  const held = mineCount + (returns.data ?? []).filter((r) => r.mine).length
   // The server has the final say: admins can change the limit.
-  const full = takeJobError(mineCount + (returns.data ?? []).filter((r) => r.mine).length)
+  const full = takeJobError(held)
   const tab = TABS.find((t) => t === params.get('tab')) ?? (q.data && !mineCount ? 'available' : 'mine')
   const pool = usePoolView()
   const matching = jobs.filter((j) => inTab(j, tab) && matchesProductSearch(search, j.productCode, j.listingTitle, j.collectFrom.name, destination(j)))
@@ -100,11 +102,14 @@ export function DeliveryPage() {
           body={tab === 'mine' ? 'Orders you take show up here, with the address and map.' : tab === 'available' ? 'Orders appear here once the seller has them ready.' : 'Deliveries you complete are listed here.'}
         />
       ) : (
-        <div className="grid gap-3 lg:grid-cols-2">
-          {shown.map((j) => (
-            <JobCard key={j.id} job={j} tab={tab} />
-          ))}
-        </div>
+        <>
+          {tab === 'available' ? <TripList jobs={shown} held={held} /> : tab === 'mine' ? <RouteStops jobs={shown} /> : null}
+          <div className="grid gap-3 lg:grid-cols-2">
+            {shown.map((j) => (
+              <JobCard key={j.id} job={j} tab={tab} />
+            ))}
+          </div>
+        </>
       )}
     </div>
   )

@@ -1,5 +1,6 @@
 import type { NewProductInput } from './types'
 import { redeliveryWindows } from '@/domain/deliveryAttempts'
+import { poolTrips } from '@/domain/trips'
 import { areaPairPay, tripPay } from '@/domain/riderPay'
 import { RIDER_QUIZ, type RiderApplicationInput } from '@/domain/riderApplications'
 import { APOLOGY_CREDIT_KOBO, FAILURE_CHARGE_KOBO } from '@/domain/deliveryChecks'
@@ -1367,6 +1368,42 @@ describe('mock api', () => {
       await api.confirmDelivery(o.id, o.deliveryPin!)
       await as(api, 'admin')
       expect(await job()).toBeUndefined()
+    })
+  })
+
+  describe('trips', () => {
+    const delivery = { address: '15 Awolowo Road, Ikoyi', location: { lat: 6.45, lng: 3.43 }, contactPhone: '0803 123 4567' }
+    const as = (api: ReturnType<typeof make>, who: string) => api.auth.signInWithPassword(`${who}@drawmart.test`, 'drawmart-demo')
+
+    it('offers one seller’s jobs together and takes them all or none', async () => {
+      const api = make()
+      await as(api, 'store')
+      const p = await api.createProduct({ title: 'Trip lamp', description: '', category: 'Home', priceKobo: k(5_000), stock: 6 })
+      await api.approveListing(p.id)
+      await as(api, 'funke')
+      await api.topUp(k(100_000))
+      const ids: string[] = []
+      for (let i = 0; i < 6; i++) ids.push((await api.checkout({ listingIds: [p.id], fulfilment: 'delivery', delivery, pickupPointId: null }))[0].id)
+      await as(api, 'store')
+      for (const id of ids) {
+        await api.sellerConfirmOrder(id, '/assets/c.jpg')
+        await api.dispatchOrder(id)
+      }
+
+      await as(api, 'rider')
+      const pool = (await api.listDeliveryJobs()).filter((j) => ids.includes(j.id))
+      expect(new Set(pool.map((j) => j.collectKey))).toEqual(new Set(['shop:m-ikeja']))
+      const [trip] = poolTrips(pool)
+      expect(trip.jobs).toHaveLength(5)
+
+      await expect(api.takeDeliveries([ids[0]])).rejects.toThrow('two or more')
+      await api.takeDelivery(ids[0])
+      await expect(api.takeDeliveries([ids[1], ids[0]])).rejects.toThrow('Another rider')
+      expect((await api.listDeliveryJobs()).find((j) => j.id === ids[1])?.mine).toBe(false) // none taken
+      await expect(api.takeDeliveries(ids.slice(1, 6))).rejects.toThrow('That’s 5 jobs, and you have room for 4 more.')
+      await api.takeDeliveries(ids.slice(1, 5))
+      const mine = (await api.listDeliveryJobs()).filter((j) => j.mine).map((j) => j.id)
+      expect(mine.sort()).toEqual(ids.slice(0, 5).sort())
     })
   })
 
