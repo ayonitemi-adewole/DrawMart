@@ -2,6 +2,7 @@ import { Link } from 'react-router'
 import { ProductId } from '@/components/ProductId'
 import { useCart, useRemoveFromCart, useSetCartQuantity } from '@/api/hooks'
 import { QuantityPicker } from '@/components/QuantityPicker'
+import { CartSuggestions } from '@/components/RelatedListings'
 import { maxOrderQuantity } from '@/domain/orders'
 import { CartIcon, TrophyIcon, XIcon } from '@/components/icons'
 import { useToast } from '@/components/toast'
@@ -90,6 +91,7 @@ export function CartPage() {
           <CartSummary lines={q.data} />
         </div>
       )}
+      {q.data?.length ? <CartSuggestions cart={q.data.map((line) => line.listing)} /> : null}
     </div>
   )
 }
